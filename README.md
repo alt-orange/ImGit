@@ -20,11 +20,11 @@ C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 ---
 
-**[<kbd> <br> Download <br> </kbd>][DOWNLOAD]** 
-**[<kbd> <br> Install <br> </kbd>][INSTALL]** 
-**[<kbd> <br> Porting <br> </kbd>][PORTING]** 
-**[<kbd> <br> Contribute <br> </kbd>][CONTRIBUTING]** 
-**[<kbd> <br> Donate <br> </kbd>][SPONSOR]** 
+[![Download](https://img.shields.io/badge/Download-F28C28?style=for-the-badge&logo=github&logoColor=white)][DOWNLOAD]
+[![Install](https://img.shields.io/badge/Install-F28C28?style=for-the-badge&logo=cmake&logoColor=white)][INSTALL]
+[![Porting](https://img.shields.io/badge/Porting-F28C28?style=for-the-badge&logo=linux&logoColor=white)][PORTING]
+[![Contribute](https://img.shields.io/badge/Contribute-F28C28?style=for-the-badge&logo=git&logoColor=white)][CONTRIBUTING]
+[![Donate](https://img.shields.io/badge/Donate-F28C28?style=for-the-badge&logo=buymeacoffee&logoColor=white)][SPONSOR]
 
 ---
 
