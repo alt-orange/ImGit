@@ -367,11 +367,11 @@ namespace imgit::ui
                                                          });
                                              }));
             add("Stash: Apply", next(Stage::STASH_APPLY));
-            add("Stash: Create",
-                [&app]
-                {
-                    app.dialog.open(app::Dialog::Kind::STASH);
-                });
+            add("Stash: Create", with_repo(
+                                         [](app::RepoState& r)
+                                         {
+                                             r.composer_stash = true;
+                                         }));
             add("Stash: Pop", next(Stage::STASH_POP));
             add("Switch Theme", next(Stage::SWITCH_THEME));
             add("Switch to Profile", next(Stage::SWITCH_PROFILE));

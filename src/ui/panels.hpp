@@ -88,6 +88,8 @@ namespace imgit::ui
                           bool checkout);
     void create_tag_at(app::Application& app, app::RepoState& state, const std::string& name, const git::Sha& sha,
                        const std::string& message);
+    // Stashes every change with `message` (empty for git's default); false when it failed.
+    bool stash_changes(app::Application& app, app::RepoState& state, const std::string& message);
     void jump_to_commit(app::RepoState& state, const char* sha);
 
     // Whether a ref dragged in the graph can be dropped on another.

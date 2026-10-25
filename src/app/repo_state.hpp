@@ -163,6 +163,10 @@ namespace imgit::app
         bool amend = false;
         bool push_after_commit = false;
         bool commit_options_open = false;
+        // The composer's Stash tab (GitKraken's): its own message, stashing every change.
+        bool composer_stash = false;
+        std::string stash_summary;
+        std::string stash_description;
         // The commit view's message editor (clicking HEAD's message): its own copy of the message.
         bool amending_message = false;
         bool amend_focus_requested = false;
