@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <imgui_stdlib.h>
 #include <optional>
 #include <string>
 
@@ -30,8 +31,6 @@ namespace imgit::ui
                 return "Create Branch";
             case app::Dialog::Kind::CREATE_TAG:
                 return "Create Tag";
-            case app::Dialog::Kind::RENAME_BRANCH:
-                return "Rename Branch";
             case app::Dialog::Kind::DELETE_BRANCH:
                 return "Delete Branch";
             case app::Dialog::Kind::DELETE_TAG:
@@ -839,6 +838,137 @@ namespace imgit::ui
             return result;
         }
 
+        // The rename prompt for a local branch, in the prompt bar: "Rename 'name' to:", the name field (230x34, the
+        // current name in it, focused with the caret at the end), Submit and Cancel. Returns 1 to rename, -1 to
+        // cancel, 0 while open.
+        int draw_rename_prompt(app::Dialog& d)
+        {
+            const theme::Palette& p = theme::palette();
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const ImVec2 min(viewport->WorkPos.x,
+                             viewport->WorkPos.y + px(theme::TABS_BAR_HEIGHT)); // under the menu bar, if any
+            const ImVec2 size(viewport->Size.x, px(theme::TOOLBAR_HEIGHT));
+            ImGui::SetNextWindowPos(min);
+            ImGui::SetNextWindowSize(size);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+            ImGui::Begin("##rename_prompt", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
+                                 | ImGuiWindowFlags_NoBackground);
+            ImGui::PopStyleVar(3);
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+            if (d.just_opened)
+            {
+                ImGui::SetWindowFocus();
+            }
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImVec2 max(min.x + size.x, min.y + size.y);
+            draw->AddRectFilled(min, max, theme::u32(p.toolbar_bg1));
+            draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(p.accent, 0.2f)));
+            const ImU32 text = IM_COL32(255, 255, 255, 230);
+            const ImU32 field_bg = IM_COL32(0, 0, 0, 51);
+            const ImU32 field_border = IM_COL32(255, 255, 255, 51);
+            const auto text_at =
+                    [&](ImFont* font, float font_size, float x, float box_top, ImU32 color, const char* label)
+            {
+                const float ascent = font_size * 2189.f / 2048.f * dpi_scale();
+                draw_text(draw, font, font_size,
+                          ImVec2(x, std::round(box_top + std::round(ascent)) - std::ceil(ascent)), color, label);
+            };
+
+            const std::string message = "Rename '" + d.ref_name + "' to:";
+            const float field_w = px(230.f);
+            const float message_w = text_size(fonts().regular, 14.f, message.c_str()).x;
+            const float submit_w = text_size(fonts().bold, 12.f, "Submit").x + px(12.f);
+            const float cancel_w = text_size(fonts().bold, 12.f, "Cancel").x + px(12.f);
+            const float total =
+                    message_w + px(10.f) + field_w + px(12.f) + submit_w + px(12.f) + cancel_w + px(8.f);
+            float x = std::round(min.x + std::max(px(10.f), (size.x - total) / 2.f));
+            text_at(fonts().regular, 14.f, x, min.y + px(14.f), text, message.c_str());
+            x += message_w + px(10.f);
+
+            // The name field; keyboard focus would select the name, so the caret goes to its end instead.
+            const ImVec2 imin(std::round(x), min.y + px(7.f));
+            const ImVec2 imax(imin.x + field_w, imin.y + px(34.f));
+            draw->AddRectFilled(imin, imax, field_bg, px(4.f));
+            ImGui::SetCursorScreenPos(imin);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(px(12.f), (px(34.f) - text_size(fonts().regular, 14.f, "A").y) / 2.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.f, 0.f, 0.f, 0.f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.f, 0.f, 0.f, 0.f));
+            push_font(fonts().regular, 14.f);
+            static bool caret_to_end = false;
+            if (d.just_opened)
+            {
+                ImGui::SetKeyboardFocusHere();
+                caret_to_end = true;
+                d.just_opened = false;
+            }
+            ImGui::SetNextItemWidth(field_w);
+            const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+            const bool entered = ImGui::InputText("##rename_branch", &d.text_a, flags,
+                                                  [](ImGuiInputTextCallbackData* data)
+                                                  {
+                                                      if (caret_to_end)
+                                                      {
+                                                          data->CursorPos = data->SelectionStart = data->SelectionEnd =
+                                                                  data->BufTextLen;
+                                                          caret_to_end = false;
+                                                      }
+                                                      return 0;
+                                                  });
+            text_field_menu(d.text_a);
+            const bool active = ImGui::IsItemActive();
+            ImGui::PopFont();
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar(2);
+            draw->AddRect(imin, imax, active ? theme::u32(p.accent) : field_border, px(4.f), 0, 1.f);
+            x = imax.x + px(12.f);
+
+            const bool complete = !d.text_a.empty();
+            int result = 0;
+            const auto button = [&](const char* id, const char* label, float w, bool primary)
+            {
+                const ImVec2 bmin(x, min.y + px(13.f));
+                const ImVec2 bmax(x + w, bmin.y + px(22.f));
+                ImGui::SetCursorScreenPos(bmin);
+                const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, bmax.y - bmin.y));
+                const bool hovered = ImGui::IsItemHovered();
+                if (primary)
+                {
+                    const float alpha = !complete ? 0.1f : (hovered ? 0.3f : 0.2f);
+                    draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.green, alpha)), px(2.f));
+                    draw->AddRect(bmin, bmax, theme::u32(theme::with_alpha(p.green, complete ? 1.f : 0.5f)), px(2.f),
+                                  0, 1.f);
+                }
+                else
+                {
+                    if (hovered)
+                    {
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                    }
+                    draw->AddRect(bmin, bmax, IM_COL32(255, 255, 255, 191), px(2.f), 0, 1.f);
+                }
+                const ImU32 label_color = primary && !complete ? IM_COL32(255, 255, 255, 115) : text;
+                text_at(fonts().bold, 12.f, bmin.x + px(6.f), bmin.y + px(2.f), label_color, label);
+                x += w + px(12.f);
+                return clicked;
+            };
+            if ((button("##rename_submit", "Submit", submit_w, true) || entered) && complete)
+            {
+                result = 1;
+            }
+            if (button("##rename_cancel", "Cancel", cancel_w, false) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            {
+                result = -1;
+            }
+            ImGui::End();
+            return result;
+        }
+
         // The tab the dialog was opened for: the one with its working directory (the active tab until it is
         // recorded), nullptr once that tab is closed.
         app::RepoState* dialog_state(app::Application& app, const app::Dialog& d)
@@ -947,6 +1077,43 @@ namespace imgit::ui
                 const std::string target = request.text_b.empty() ? request.ref_name : request.text_b;
                 app.run_git_cli(*state, "Push",
                                 {"push", "--set-upstream", request.text_a, request.ref_name + ":" + target});
+            }
+            return;
+        }
+        // Renaming a branch asks for the new name in the prompt bar.
+        if (d.kind == app::Dialog::Kind::RENAME_BRANCH)
+        {
+            const int answer = draw_rename_prompt(d);
+            if (answer == 0)
+            {
+                return;
+            }
+            const app::Dialog request = d;
+            d.close();
+            if (answer < 0 || request.text_a == request.ref_name)
+            {
+                return;
+            }
+            git::Repository* repo = &state->repo;
+            const std::string from = request.ref_name;
+            const std::string to = request.text_a;
+            if (app.run(
+                        *state, "Rename branch",
+                        [&]
+                        {
+                            return state->repo.rename_branch(from, to);
+                        },
+                        "Renamed " + from + " to " + to))
+            {
+                state->push_undo({"rename " + from,
+                                  [repo, from, to]
+                                  {
+                                      return repo->rename_branch(to, from);
+                                  },
+                                  [repo, from, to]
+                                  {
+                                      return repo->rename_branch(from, to);
+                                  }});
             }
             return;
         }
@@ -1318,40 +1485,6 @@ namespace imgit::ui
             if (buttons("Create Tag", !d.text_a.empty() && (!d.flag || !d.text_b.empty()), false, false) || submitted)
             {
                 create_tag_at(app, *state, d.text_a, d.sha, d.flag ? d.text_b : "");
-                ImGui::CloseCurrentPopup();
-            }
-            break;
-        }
-        case app::Dialog::Kind::RENAME_BRANCH:
-        {
-            secondary_text(("Rename " + d.ref_name).c_str());
-            if (ImGui::IsWindowAppearing())
-            {
-                ImGui::SetKeyboardFocusHere();
-            }
-            const bool submitted = input_text("##new_name", d.text_a, "New name", ImGuiInputTextFlags_EnterReturnsTrue);
-            if (buttons("Rename", !d.text_a.empty() && d.text_a != d.ref_name, false, false) || submitted)
-            {
-                const std::string from = d.ref_name;
-                const std::string to = d.text_a;
-                if (app.run(
-                            *state, "Rename branch",
-                            [&]
-                            {
-                                return state->repo.rename_branch(from, to);
-                            },
-                            "Renamed " + from + " to " + to))
-                {
-                    state->push_undo({"rename " + from,
-                                      [repo, from, to]
-                                      {
-                                          return repo->rename_branch(to, from);
-                                      },
-                                      [repo, from, to]
-                                      {
-                                          return repo->rename_branch(from, to);
-                                      }});
-                }
                 ImGui::CloseCurrentPopup();
             }
             break;

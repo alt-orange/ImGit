@@ -92,7 +92,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Feature | Status | Notes |
 |---|---|---|
 | Checkout branch / remote branch / tag / commit | ✅ | |
-| Create / rename / delete branch, set upstream | ✅ | Pushing a branch without an upstream asks in the prompt bar (remote select, branch name) |
+| Create / rename / delete branch, set upstream | ✅ | Renaming asks for the new name in the prompt bar; pushing a branch without an upstream asks there too (remote select, branch name) |
 | Text field right-click menu | ✅ | Cut / Copy / Paste / Select All; no spelling suggestions |
 | Create (annotated) tag, delete tag, push tag | ✅ | |
 | Stage / unstage / discard files or all, commit, amend, push after commit | ✅ | |
