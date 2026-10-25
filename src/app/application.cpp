@@ -1730,9 +1730,9 @@ namespace imgit::app
             for (const ui::MenuItem& item : items)
             {
                 platform::AppMenuItem out;
-                out.type = item.type == ui::MenuItem::Type::SEPARATOR ? platform::AppMenuItem::Type::SEPARATOR
+                out.type = item.type == ui::MenuItem::Type::SEPARATOR  ? platform::AppMenuItem::Type::SEPARATOR
                            : item.type == ui::MenuItem::Type::CHECKBOX ? platform::AppMenuItem::Type::CHECKBOX
-                                                                        : platform::AppMenuItem::Type::NORMAL;
+                                                                       : platform::AppMenuItem::Type::NORMAL;
                 out.label = ui::strip_mnemonic(item.label);
                 out.accelerator = item.accelerator;
                 out.enabled = item.enabled && usable;
