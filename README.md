@@ -22,7 +22,7 @@ C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 - **Merge tool** — resolve conflicts three ways: take a side, take single lines, or edit the result by hand.
 - **Built in** — a real terminal (PowerShell on Windows, your login shell elsewhere), a command palette (`Ctrl+P`),
   profiles with their own settings and commit author, and a sign-in prompt for HTTPS remotes.
-- **Themes** — five dark themes, orange-accented ImGit Dark by default.
+- **Themes** — six dark themes, orange-accented ImGit Dark by default.
 
 ## Tour
 
@@ -51,7 +51,8 @@ the arrows, or double-click the output to edit it. Save writes the file and mark
 
 ### Themes
 
-ImGit Dark, Ocean, Midnight Teal, Amethyst and Rose: pick one in Preferences → UI Customization or with `Ctrl+P` →
+ImGit Dark, Ocean, Midnight Teal, Amethyst, Rose and Claude Code (the warm greys and terracotta accent of Claude Code
+Desktop): pick one in Preferences → UI Customization or with `Ctrl+P` →
 *Switch Theme*. The graph's lanes start at each theme's accent colour.
 
 ![Ocean, Midnight Teal, Amethyst and Rose](docs/images/themes.png)

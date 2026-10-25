@@ -108,10 +108,12 @@ namespace imgit::theme
                 {"Midnight Teal", 0x121518, 0x1FB5A3, 0x4FD8C8, 0x86E0D5, 0x167F73, 0x4FD8C8, 4},
                 {"Amethyst", 0x1D1B24, 0x9B6BFF, 0xC59BFF, 0xC6AEF7, 0x6B46B5, 0xC59BFF, 7},
                 {"Rose", 0x211C1F, 0xE5486C, 0xFF8FA8, 0xF7A8B9, 0xAD3450, 0xFF8FA8, 9},
+                // Claude Code Desktop's dark look: near-neutral warm greys and its terracotta accent.
+                {"Claude Code", 0x171716, 0xD97757, 0xE8956F, 0xF0B296, 0xB85E3C, 0xE8956F, 0},
         };
 
         constexpr const char* THEME_NAMES[] = {THEMES[0].name, THEMES[1].name, THEMES[2].name, THEMES[3].name,
-                                               THEMES[4].name};
+                                               THEMES[4].name, THEMES[5].name};
         static_assert(std::size(THEME_NAMES) == std::size(THEMES));
 
         Palette build_palette(const ThemeSpec& theme) noexcept
