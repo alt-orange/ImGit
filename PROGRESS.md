@@ -62,7 +62,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Highlight rows when hovering a branch label | ✅ | Rows whose own or child refs miss the hovered group fade after 1s; Ctrl dims around the selected commit's branch |
 | Commit message + dimmed description | ✅ | |
 | Columns: BRANCH / TAG, GRAPH, COMMIT MESSAGE, AUTHOR, DATE / TIME, SHA, CHANGES with gear settings | ✅ | CHANGES only shows the WIP row's counts (no per-commit stats) |
-| Column drag-reorder and resize | 🟡 | Resize (preferred widths, the last zone fills, handles in the header and over the rows, widths saved); no drag-reorder. A GRAPH zone narrower than its lanes scrolls them (Shift + wheel, horizontal wheel, scrollbar) under shadowed gutters, nodes pinned and fading at the edges, single-column mode below one lane |
+| Column drag-reorder and resize | 🟡 | Resize (preferred widths, the last zone fills, handles in the header and over the rows, widths saved); drag a header cell to reorder the columns (the cell follows the mouse, the columns swap as it passes their centres, the order saved; "Reset columns" restores the default). A GRAPH zone narrower than its lanes scrolls them (Shift + wheel, horizontal wheel, scrollbar) under shadowed gutters, nodes pinned and fading at the edges, single-column mode below one lane |
 | Commit search (Ctrl+F) with n of m navigation | ✅ | Floating bar over the graph |
 | Multi-select (Ctrl / Shift), keyboard j / k / arrows / Home / End | ✅ | |
 | Lazy loading / "Show more commits" | ✅ | |

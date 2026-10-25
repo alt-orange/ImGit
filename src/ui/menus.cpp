@@ -2298,6 +2298,7 @@ namespace imgit::ui
                           app.settings.show_date = false;
                           app.settings.show_sha = false;
                           app.settings.compact_graph = false;
+                          app.settings.graph_column_order.clear();
                           app.settings.save(app.config_path("settings.txt"));
                       }),
                  item("Reset columns to compact layout",
@@ -2307,6 +2308,7 @@ namespace imgit::ui
                           app.settings.show_date = false;
                           app.settings.show_sha = false;
                           app.settings.compact_graph = true;
+                          app.settings.graph_column_order.clear();
                           app.settings.save(app.config_path("settings.txt"));
                       })},
         });

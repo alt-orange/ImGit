@@ -6,6 +6,7 @@
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cfloat>
 #include <chrono>
@@ -114,6 +115,73 @@ namespace imgit::ui
                 return "datetime";
             case ZoneType::SHA:
                 return "sha";
+            }
+            return "";
+        }
+
+        constexpr std::array<ZoneType, 7> ALL_ZONES = {ZoneType::REF,     ZoneType::GRAPH,    ZoneType::MESSAGE,
+                                                       ZoneType::AUTHOR,  ZoneType::CHANGES,  ZoneType::DATETIME,
+                                                       ZoneType::SHA};
+
+        // Every zone in the user's order: the saved keys first, then the rest in the default order.
+        std::vector<ZoneType> zone_order(const app::Settings& settings)
+        {
+            std::vector<ZoneType> order;
+            for (const std::string& key : settings.graph_column_order)
+            {
+                for (const ZoneType type : ALL_ZONES)
+                {
+                    if (key == zone_key(type) && std::find(order.begin(), order.end(), type) == order.end())
+                    {
+                        order.push_back(type);
+                    }
+                }
+            }
+            for (const ZoneType type : ALL_ZONES)
+            {
+                if (std::find(order.begin(), order.end(), type) == order.end())
+                {
+                    order.push_back(type);
+                }
+            }
+            return order;
+        }
+
+        bool zone_shown(const app::Settings& settings, ZoneType type)
+        {
+            switch (type)
+            {
+            case ZoneType::AUTHOR:
+                return settings.show_author;
+            case ZoneType::CHANGES:
+                return settings.show_changes;
+            case ZoneType::DATETIME:
+                return settings.show_date;
+            case ZoneType::SHA:
+                return settings.show_sha;
+            default:
+                return true;
+            }
+        }
+
+        const char* zone_label(ZoneType type)
+        {
+            switch (type)
+            {
+            case ZoneType::REF:
+                return "BRANCH / TAG";
+            case ZoneType::GRAPH:
+                return "GRAPH";
+            case ZoneType::MESSAGE:
+                return "COMMIT MESSAGE";
+            case ZoneType::AUTHOR:
+                return "AUTHOR";
+            case ZoneType::CHANGES:
+                return "CHANGES";
+            case ZoneType::DATETIME:
+                return "COMMIT DATE / TIME";
+            case ZoneType::SHA:
+                return "SHA";
             }
             return "";
         }
@@ -277,22 +345,13 @@ namespace imgit::ui
         // highest lane in use.
         void update_zones(const app::Settings& settings, float width, int max_columns)
         {
-            std::vector<ZoneType> shown = {ZoneType::REF, ZoneType::GRAPH, ZoneType::MESSAGE};
-            if (settings.show_author)
+            std::vector<ZoneType> shown;
+            for (const ZoneType type : zone_order(settings))
             {
-                shown.push_back(ZoneType::AUTHOR);
-            }
-            if (settings.show_changes)
-            {
-                shown.push_back(ZoneType::CHANGES);
-            }
-            if (settings.show_date)
-            {
-                shown.push_back(ZoneType::DATETIME);
-            }
-            if (settings.show_sha)
-            {
-                shown.push_back(ZoneType::SHA);
+                if (zone_shown(settings, type))
+                {
+                    shown.push_back(type);
+                }
             }
             // getCommitZoneContentWidth: the lanes plus the gutters and paddings on both sides.
             const float content = static_cast<float>(std::max(max_columns, 1)) * theme::COMMIT_COLUMN_WIDTH
@@ -335,11 +394,18 @@ namespace imgit::ui
             {
                 // updateCommitZoneContentWidthFromChange: the graph zone never outgrows its lanes.
                 g_zones.content = content;
-                GraphZone& graph = g_zones.zones[1];
-                graph.maximum = graph_maximum;
-                if (graph_maximum > 0.f && graph.current > graph_maximum)
+                for (int i = 0; i < static_cast<int>(g_zones.zones.size()); ++i)
                 {
-                    graph.current = clamp_zone(g_zones.zones, 1, graph_maximum);
+                    GraphZone& graph = g_zones.zones[static_cast<std::size_t>(i)];
+                    if (graph.type != ZoneType::GRAPH)
+                    {
+                        continue;
+                    }
+                    graph.maximum = graph_maximum;
+                    if (graph_maximum > 0.f && graph.current > graph_maximum)
+                    {
+                        graph.current = clamp_zone(g_zones.zones, i, graph_maximum);
+                    }
                 }
             }
             // ensureZoneWidthsMatchGraphWidth
@@ -450,6 +516,123 @@ namespace imgit::ui
                 }
             }
         }
+
+        // A zone's placed edge and width (device px), by type.
+        float* zone_x_of(Zones& z, ZoneType type)
+        {
+            switch (type)
+            {
+            case ZoneType::REF:
+                return &z.ref_x;
+            case ZoneType::GRAPH:
+                return &z.graph_x;
+            case ZoneType::MESSAGE:
+                return &z.message_x;
+            case ZoneType::AUTHOR:
+                return &z.author_x;
+            case ZoneType::CHANGES:
+                return &z.changes_x;
+            case ZoneType::DATETIME:
+                return &z.date_x;
+            case ZoneType::SHA:
+                return &z.sha_x;
+            }
+            return &z.ref_x;
+        }
+
+        float* zone_w_of(Zones& z, ZoneType type)
+        {
+            switch (type)
+            {
+            case ZoneType::REF:
+                return &z.ref_w;
+            case ZoneType::GRAPH:
+                return &z.graph_w;
+            case ZoneType::MESSAGE:
+                return &z.message_w;
+            case ZoneType::AUTHOR:
+                return &z.author_w;
+            case ZoneType::CHANGES:
+                return &z.changes_w;
+            case ZoneType::DATETIME:
+                return &z.date_w;
+            case ZoneType::SHA:
+                return &z.sha_w;
+            }
+            return &z.ref_w;
+        }
+
+        int zone_index(ZoneType type)
+        {
+            for (int i = 0; i < static_cast<int>(g_zones.zones.size()); ++i)
+            {
+                if (g_zones.zones[static_cast<std::size_t>(i)].type == type)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        // Moves the shown zone `from` to `to`, its widths with it; the zone now last gets the scrollbar's room and
+        // the one it replaces its limits back, and the zones fit the graph again.
+        void move_zone(app::Application& app, int from, int to)
+        {
+            std::vector<GraphZone>& zones = g_zones.zones;
+            if (from == to || from < 0 || to < 0 || from >= static_cast<int>(zones.size())
+                || to >= static_cast<int>(zones.size()))
+            {
+                return;
+            }
+            const GraphZone moved = zones[static_cast<std::size_t>(from)];
+            zones.erase(zones.begin() + from);
+            zones.insert(zones.begin() + to, moved);
+            for (int i = 0; i < static_cast<int>(zones.size()); ++i)
+            {
+                GraphZone& zone = zones[static_cast<std::size_t>(i)];
+                const bool last = i + 1 == static_cast<int>(zones.size());
+                zone.minimum = zone_minimum(zone.type) + (last ? SCROLLBAR_THICKNESS : 0.f);
+                zone.current = clamp_zone(zones, i, zone.current);
+            }
+            if (zones_total(zones) > g_zones.width)
+            {
+                shrink_zones(zones, g_zones.width);
+            }
+            if (zones_total(zones) < g_zones.width)
+            {
+                expand_zones(zones, g_zones.width);
+            }
+            // The saved order: the shown zones as they are now, the hidden ones after them.
+            std::vector<std::string> order;
+            for (const GraphZone& zone : zones)
+            {
+                order.emplace_back(zone_key(zone.type));
+            }
+            for (const ZoneType type : zone_order(app.settings))
+            {
+                const std::string key = zone_key(type);
+                if (std::find(order.begin(), order.end(), key) == order.end())
+                {
+                    order.push_back(key);
+                }
+            }
+            app.settings.graph_column_order = order;
+        }
+
+        // A header cell held and moved 4px becomes a column drag: the cell follows the mouse as a floating copy
+        // and the zone swaps places with its neighbour once the cell's centre passes that neighbour's; the order
+        // is saved on release.
+        struct ZoneMove
+        {
+            ZoneType type = ZoneType::REF;
+            bool pressed = false;
+            bool active = false;
+            float press_x = 0.f;
+            float grab = 0.f; // the press, from the cell's left edge
+            float width = 0.f; // the cell
+        };
+
+        ZoneMove g_zone_move;
 
         float g_graph_scroll = 0.f; // the graph zone's scrollLeft, CSS px
 
@@ -1519,22 +1702,12 @@ namespace imgit::ui
         Zones z = place_zones(zones_x);
         {
             const float last_end = origin.x + size.x - scrollbar - gear_w;
-            float* last_w = &z.message_w;
-            float last_x = z.message_x;
-            const std::pair<float*, float> trailing[] = {
-                    {&z.author_w, z.author_x}, {&z.changes_w, z.changes_x}, {&z.date_w, z.date_x}, {&z.sha_w, z.sha_x}};
-            for (const auto& [w, x] : trailing)
-            {
-                if (*w > 0.f)
-                {
-                    last_w = w;
-                    last_x = x;
-                }
-            }
+            const ZoneType last_type = g_zones.zones.back().type;
+            float* last_w = zone_w_of(z, last_type);
+            const float last_x = *zone_x_of(z, last_type);
             // A narrow graph squeezes the last zone to its minimum, which already holds the scrollbar; there the
             // settings button only covers its header, and the zone keeps its content width (the author's avatar).
-            const float content_minimum =
-                    px(last_w == &z.author_w ? zone_minimum(ZoneType::AUTHOR) : zone_minimum(ZoneType::MESSAGE));
+            const float content_minimum = px(zone_minimum(last_type));
             *last_w = std::max(last_end - last_x, std::min(*last_w, content_minimum));
         }
         const float header_y = origin.y;
@@ -1542,13 +1715,15 @@ namespace imgit::ui
         // Header (.panel-bg0 .graph-header)
         draw->AddRectFilled(ImVec2(origin.x, header_y), ImVec2(origin.x + size.x, header_y + header_h),
                             theme::u32(p.panel_bg0));
-        header_cell(draw, z.ref_x, z.ref_w, header_y, header_h, "BRANCH / TAG", false);
-        header_cell(draw, z.graph_x, z.graph_w, header_y, header_h, "GRAPH", true);
-        header_cell(draw, z.message_x, z.message_w, header_y, header_h, "COMMIT MESSAGE", true);
-        header_cell(draw, z.author_x, z.author_w, header_y, header_h, z.author_w > px(60.f) ? "AUTHOR" : "", true);
-        header_cell(draw, z.changes_x, z.changes_w, header_y, header_h, "CHANGES", true);
-        header_cell(draw, z.date_x, z.date_w, header_y, header_h, "COMMIT DATE / TIME", true);
-        header_cell(draw, z.sha_x, z.sha_w, header_y, header_h, "SHA", true);
+        const auto header_label = [&](ZoneType type)
+        {
+            return type == ZoneType::AUTHOR && z.author_w <= px(60.f) ? "" : zone_label(type);
+        };
+        for (std::size_t i = 0; i < g_zones.zones.size(); ++i)
+        {
+            const ZoneType type = g_zones.zones[i].type;
+            header_cell(draw, *zone_x_of(z, type), *zone_w_of(z, type), header_y, header_h, header_label(type), i > 0);
+        }
         zone_handles(zones_x, header_y, header_y + header_h, true);
         {
             // .columns-settings: far:cog (12px, text-disabled) 9px from the right edge; it opens the same native
@@ -1566,6 +1741,107 @@ namespace imgit::ui
             if (gear)
             {
                 popup_menu(graph_header_menu(app));
+            }
+        }
+        // The header cells, after the resize handles and the gear so those win the hover: pressing one and
+        // moving 4px drags the column.
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            for (std::size_t i = 0; i < g_zones.zones.size(); ++i)
+            {
+                const ZoneType type = g_zones.zones[i].type;
+                const float x = *zone_x_of(z, type);
+                const float w = *zone_w_of(z, type);
+                if (w <= 0.f)
+                {
+                    continue;
+                }
+                ImGui::SetCursorScreenPos(ImVec2(x, header_y));
+                ImGui::InvisibleButton((std::string("##zone_header_") + zone_key(type)).c_str(), ImVec2(w, header_h));
+                if (ImGui::IsItemActivated() && !g_zone_move.pressed)
+                {
+                    g_zone_move = {type, true, false, mouse.x, mouse.x - x, w};
+                }
+            }
+            if (g_zone_move.pressed && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                if (g_zone_move.active)
+                {
+                    app.settings.save(app.config_path("settings.txt"));
+                }
+                g_zone_move = {};
+            }
+            if (g_zone_move.pressed && !g_zone_move.active && std::abs(mouse.x - g_zone_move.press_x) >= px(4.f))
+            {
+                g_zone_move.active = true;
+            }
+            if (g_zone_move.active)
+            {
+                set_drag_cursor(DragCursor::MOVE);
+                // The floating cell's centre against the neighbours': past one, the zones swap and the layout is
+                // placed again for the rows below.
+                const float centre = mouse.x - g_zone_move.grab + g_zone_move.width / 2.f;
+                bool moved = false;
+                for (int guard = 0; guard < static_cast<int>(g_zones.zones.size()); ++guard)
+                {
+                    const int index = zone_index(g_zone_move.type);
+                    if (index < 0)
+                    {
+                        break;
+                    }
+                    Zones placed = place_zones(zones_x);
+                    int to = index;
+                    if (index > 0)
+                    {
+                        const ZoneType left = g_zones.zones[static_cast<std::size_t>(index - 1)].type;
+                        if (centre < *zone_x_of(placed, left) + *zone_w_of(placed, left) / 2.f)
+                        {
+                            to = index - 1;
+                        }
+                    }
+                    if (to == index && index + 1 < static_cast<int>(g_zones.zones.size()))
+                    {
+                        const ZoneType right = g_zones.zones[static_cast<std::size_t>(index + 1)].type;
+                        if (centre > *zone_x_of(placed, right) + *zone_w_of(placed, right) / 2.f)
+                        {
+                            to = index + 1;
+                        }
+                    }
+                    if (to == index)
+                    {
+                        break;
+                    }
+                    move_zone(app, index, to);
+                    moved = true;
+                }
+                if (moved)
+                {
+                    // Placed again, with the last zone's trailing room as above.
+                    z = place_zones(zones_x);
+                    const float last_end = origin.x + size.x - scrollbar - gear_w;
+                    const ZoneType last_type = g_zones.zones.back().type;
+                    float* last_w = zone_w_of(z, last_type);
+                    const float last_x = *zone_x_of(z, last_type);
+                    *last_w = std::max(last_end - last_x, std::min(*last_w, px(zone_minimum(last_type))));
+                    draw->AddRectFilled(ImVec2(origin.x, header_y), ImVec2(origin.x + size.x, header_y + header_h),
+                                        theme::u32(p.panel_bg0));
+                    for (std::size_t i = 0; i < g_zones.zones.size(); ++i)
+                    {
+                        const ZoneType type = g_zones.zones[i].type;
+                        header_cell(draw, *zone_x_of(z, type), *zone_w_of(z, type), header_y, header_h,
+                                    header_label(type), i > 0);
+                    }
+                    draw_fa_icon(draw, "far:cog", ImVec2(origin.x + size.x - px(9.f), header_y + px(12.17f)),
+                                 px(12.f), theme::u32(p.text_disabled));
+                }
+                // The dragged cell, over everything: the header's background and label following the mouse.
+                ImDrawList* front = ImGui::GetForegroundDrawList();
+                const float fx = std::round(mouse.x - g_zone_move.grab);
+                front->AddRectFilled(ImVec2(fx, header_y), ImVec2(fx + g_zone_move.width, header_y + header_h),
+                                     theme::u32(theme::with_alpha(p.panel_bg2, 0.95f)), px(2.f));
+                front->AddRect(ImVec2(fx, header_y), ImVec2(fx + g_zone_move.width, header_y + header_h),
+                               theme::u32(p.section_border), px(2.f), 0, 1.f);
+                header_cell(front, fx, g_zone_move.width, header_y, header_h, header_label(g_zone_move.type), false);
             }
         }
 
@@ -1817,9 +2093,8 @@ namespace imgit::ui
         };
         std::vector<TimelineMarker> timeline;
         {
-            const std::int64_t now =
-                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
-                            .count();
+            const auto since_epoch = std::chrono::system_clock::now().time_since_epoch();
+            const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(since_epoch).count();
             int reached = 0;
             for (int i = 0; i < row_count; ++i)
             {
@@ -1883,29 +2158,44 @@ namespace imgit::ui
                                      && mouse.x < origin.x + size.x - scrollbar && mouse.y >= y0
                                      && mouse.y < y0 + row_h;
                 // The ref zone does not hover the row (ImGit tracks row hover in the graph / message zones).
-                const bool row_hovered = hovered && mouse.x >= z.graph_x - px(3.f);
+                const bool over_ref_zone = mouse.x >= z.ref_x - px(3.f) && mouse.x < z.ref_x + z.ref_w - px(3.f);
+                const bool row_hovered = hovered && !over_ref_zone;
                 const bool single_selected = selected && state.selected.size() == 1;
                 if (hovered)
                 {
                     state.hovered_sha = commit.sha;
                 }
                 ImGui::PushID(i);
-                // The zones after the graph get the row background over the inner 22px (GRAPH_ROW_INNER_HEIGHT).
+                // The zones but the ref and graph ones get the row background over the inner 22px
+                // (GRAPH_ROW_INNER_HEIGHT); the last one carries it to the panel's edge.
                 const float inner_top = y0 + px(theme::COMMIT_ZONE_MARGIN);
                 const float inner_bottom = inner_top + px(theme::GRAPH_ROW_INNER_HEIGHT);
-                const ImVec2 row_bg_min(z.message_x, inner_top);
-                const ImVec2 row_bg_max(origin.x + size.x, inner_bottom);
+                const auto fill_row = [&](ImU32 color)
+                {
+                    for (std::size_t zi = 0; zi < g_zones.zones.size(); ++zi)
+                    {
+                        const ZoneType type = g_zones.zones[zi].type;
+                        if (type == ZoneType::REF || type == ZoneType::GRAPH)
+                        {
+                            continue;
+                        }
+                        const float x = *zone_x_of(z, type);
+                        const bool last = zi + 1 == g_zones.zones.size();
+                        const float right = last ? origin.x + size.x : x + *zone_w_of(z, type);
+                        rows_draw->AddRectFilled(ImVec2(x, inner_top), ImVec2(right, inner_bottom), color);
+                    }
+                };
                 if (selected)
                 {
-                    rows_draw->AddRectFilled(row_bg_min, row_bg_max, theme::u32(p.selected_row));
+                    fill_row(theme::u32(p.selected_row));
                 }
                 else if (row_hovered)
                 {
-                    rows_draw->AddRectFilled(row_bg_min, row_bg_max, theme::u32(p.hover_row));
+                    fill_row(theme::u32(p.hover_row));
                 }
                 if (searching && !dimmed && !selected)
                 {
-                    rows_draw->AddRectFilled(row_bg_min, row_bg_max, theme::u32(theme::with_alpha(p.accent, 0.08f)));
+                    fill_row(theme::u32(theme::with_alpha(p.accent, 0.08f)));
                 }
 
                 // Ref zone: the first ref group and a "+N" count; hovering the zone lists every group (drawn after
@@ -1942,18 +2232,35 @@ namespace imgit::ui
                                                       {
                                                           return g.current;
                                                       });
-                    float node_left = node_x(z, row.column) - px(theme::COMMIT_NODE_DIAMETER) / 2.f;
+                    float node_edge = node_x(z, row.column);
+                    float node_half = px(theme::COMMIT_NODE_DIAMETER) / 2.f;
                     if (commit.type == git::NodeType::MERGE)
                     {
-                        node_left += px(theme::COMMIT_NODE_DIAMETER - theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f;
+                        node_half = px(theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f;
                     }
+                    // From the zone to the node's near edge, whichever side of the graph the zone is on.
+                    const bool ref_left = z.ref_x < z.graph_x;
+                    node_edge += ref_left ? -node_half : node_half;
                     const float line_y = inner_top + px(head_row ? 10.f : 11.f);
-                    ref_line = RefLine{ImVec2(z.ref_x, line_y), ImVec2(node_left, line_y + px(head_row ? 2.f : 1.f)),
+                    const float line_min_x = ref_left ? z.ref_x : node_edge;
+                    const float line_max_x = ref_left ? node_edge : z.ref_x;
+                    ref_line = RefLine{ImVec2(line_min_x, line_y),
+                                       ImVec2(line_max_x, line_y + px(head_row ? 2.f : 1.f)),
                                        theme::u32(theme::with_alpha(lane_color, head_row ? alpha : 0.25f * alpha))};
-                    // Up to the graph zone now; over it after the gutters, which it crosses (.ref-line is z4).
-                    rows_draw->AddRectFilled(ref_line->min,
-                                             ImVec2(std::min(ref_line->max.x, lanes_x(z)), ref_line->max.y),
-                                             ref_line->color);
+                    // Outside the graph zone now; over it after the gutters, which it crosses (.ref-line is z4).
+                    const float body_left = lanes_x(z);
+                    const float body_right = body_left + z.graph_w;
+                    if (line_min_x < body_left)
+                    {
+                        rows_draw->AddRectFilled(ref_line->min,
+                                                 ImVec2(std::min(line_max_x, body_left), ref_line->max.y),
+                                                 ref_line->color);
+                    }
+                    if (line_max_x > body_right)
+                    {
+                        rows_draw->AddRectFilled(ImVec2(std::max(line_min_x, body_right), line_y), ref_line->max,
+                                                 ref_line->color);
+                    }
                 }
                 if (creating)
                 {
@@ -2051,11 +2358,12 @@ namespace imgit::ui
                     zone_popover_ghost = ghost;
                 }
 
-                // Graph zone: the commit's background streak from its node to the message (.commit-bg-color, lane
-                // colour at 10%, 50% when selected) ending in the 2px .color-strip.
+                // Graph zone: the commit's background streak from its node to the zone's end (.commit-bg-color,
+                // lane colour at 10%, 50% when selected) ending in the 2px .color-strip.
                 {
                     const float node_center = column_x(z, row.column);
-                    const float strip_x = z.message_x - px(2.f);
+                    const float graph_end = z.graph_x + z.graph_w;
+                    const float strip_x = graph_end - px(2.f);
                     // A lane scrolled past the zone's end has no streak in it.
                     if (node_center < strip_x)
                     {
@@ -2065,7 +2373,7 @@ namespace imgit::ui
                     }
                     if (!is_wip)
                     {
-                        rows_draw->AddRectFilled(ImVec2(strip_x, inner_top), ImVec2(z.message_x, inner_bottom),
+                        rows_draw->AddRectFilled(ImVec2(strip_x, inner_top), ImVec2(graph_end, inner_bottom),
                                                  theme::u32(theme::with_alpha(lane_color, alpha)));
                     }
                 }
@@ -2098,9 +2406,11 @@ namespace imgit::ui
                                       0.4f * (1.f - std::max(l.factor, l.slide_out)));
                     }
                 }
-                if (ref_line && ref_line->max.x > body_x)
+                if (ref_line && ref_line->max.x > body_x && ref_line->min.x < body_x + z.graph_w)
                 {
-                    rows_draw->AddRectFilled(ImVec2(body_x, ref_line->min.y), ref_line->max, ref_line->color);
+                    rows_draw->AddRectFilled(ImVec2(std::max(body_x, ref_line->min.x), ref_line->min.y),
+                                             ImVec2(std::min(body_x + z.graph_w, ref_line->max.x), ref_line->max.y),
+                                             ref_line->color);
                 }
                 const int node_start = rows_draw->VtxBuffer.Size;
                 draw_node(rows_draw, z, commit, row, y0, is_head && !is_wip, alpha);
@@ -2219,8 +2529,10 @@ namespace imgit::ui
                 }
 
                 // The row itself, last: pills submitted above keep the hover when the mouse is on them.
-                ImGui::SetCursorScreenPos(ImVec2(z.graph_x - px(3.f), y0));
-                ImGui::InvisibleButton("##row", ImVec2(origin.x + size.x - scrollbar - (z.graph_x - px(3.f)), row_h));
+                const float row_button_x =
+                        (g_zones.zones.front().type == ZoneType::REF ? z.ref_x + z.ref_w : zones_x) - px(3.f);
+                ImGui::SetCursorScreenPos(ImVec2(row_button_x, y0));
+                ImGui::InvisibleButton("##row", ImVec2(origin.x + size.x - scrollbar - row_button_x, row_h));
                 if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
                 {
                     const ImGuiIO& io = ImGui::GetIO();

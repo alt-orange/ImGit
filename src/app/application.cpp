@@ -205,6 +205,19 @@ namespace imgit::app
                     }
                 }
             }
+            else if (key == "graph_column_order")
+            {
+                graph_column_order.clear();
+                std::stringstream stream(value);
+                std::string column;
+                while (std::getline(stream, column, ','))
+                {
+                    if (!column.empty())
+                    {
+                        graph_column_order.push_back(column);
+                    }
+                }
+            }
             else if (key == "hidden_left_sections")
             {
                 hidden_left_sections.clear();
@@ -242,6 +255,14 @@ namespace imgit::app
         for (const auto& [zone, width] : graph_column_widths)
         {
             file << separator << zone << ':' << width;
+            separator = ",";
+        }
+        file << '\n';
+        file << "graph_column_order=";
+        separator = "";
+        for (const std::string& zone : graph_column_order)
+        {
+            file << separator << zone;
             separator = ",";
         }
         file << '\n';
