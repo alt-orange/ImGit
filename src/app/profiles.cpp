@@ -4,9 +4,39 @@
 #include <fstream>
 #include <map>
 #include <random>
+#include <system_error>
 
 namespace imgit::app
 {
+    bool write_text_file(const std::filesystem::path& path, const std::string& text)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        const std::filesystem::path temporary = path.string() + ".tmp";
+        {
+            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+            if (!file)
+            {
+                return false;
+            }
+            file.write(text.data(), static_cast<std::streamsize>(text.size()));
+            file.flush();
+            if (!file)
+            {
+                std::filesystem::remove(temporary, ec);
+                return false;
+            }
+        }
+        // rename replaces an existing file on POSIX and on Windows (MoveFileEx with REPLACE_EXISTING).
+        std::filesystem::rename(temporary, path, ec);
+        if (ec)
+        {
+            std::filesystem::remove(temporary, ec);
+            return false;
+        }
+        return true;
+    }
+
     namespace
     {
         constexpr const char* PROFILE_FILE = "profile.txt";
@@ -74,7 +104,8 @@ namespace imgit::app
         std::filesystem::create_directories(m_root / "profiles", ec);
         for (const auto& entry : std::filesystem::directory_iterator(m_root / "profiles", ec))
         {
-            if (!entry.is_directory())
+            std::error_code entry_ec;
+            if (!entry.is_directory(entry_ec))
             {
                 continue;
             }
@@ -215,16 +246,15 @@ namespace imgit::app
 
     void Profiles::save(const Profile& profile) const
     {
-        std::ofstream file(directory(profile.guid) / PROFILE_FILE);
-        file << "name=" << one_line(profile.name) << '\n'
-             << "user_name=" << one_line(profile.user_name) << '\n'
-             << "user_email=" << one_line(profile.user_email) << '\n';
+        (void)write_text_file(directory(profile.guid) / PROFILE_FILE,
+                              "name=" + one_line(profile.name) + "\nuser_name=" + one_line(profile.user_name)
+                                      + "\nuser_email=" + one_line(profile.user_email) + "\n");
     }
 
     void Profiles::save_config() const
     {
-        std::ofstream file(m_root / CONFIG_FILE);
-        file << "profile_guid=" << m_current << '\n' << "keep_git_config=" << (m_keep_git_config ? 1 : 0) << '\n';
+        (void)write_text_file(m_root / CONFIG_FILE, "profile_guid=" + m_current + "\nkeep_git_config="
+                                                            + (m_keep_git_config ? "1" : "0") + "\n");
     }
 
     void Profiles::sort()

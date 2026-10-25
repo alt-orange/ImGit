@@ -81,7 +81,8 @@ namespace imgit::ui
     void text_field_menu(const std::string& value);
 
     // Shared actions with undo entries.
-    void checkout_ref(app::Application& app, app::RepoState& state, const git::Ref& ref);
+    // Checks the ref out; false when the checkout failed (true when it is HEAD already, or a stash).
+    bool checkout_ref(app::Application& app, app::RepoState& state, const git::Ref& ref);
     // Create a branch / lightweight or annotated tag at `sha` with an undo entry.
     void create_branch_at(app::Application& app, app::RepoState& state, const std::string& name, const git::Sha& sha,
                           bool checkout);

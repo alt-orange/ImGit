@@ -324,6 +324,7 @@ namespace imgit::ui
         {
             popover_search(crumb_search);
             popover_header("Recently opened", "far:clock");
+            std::string to_open; // opened after the loop: open_repository rewrites the recent list it walks
             for (const std::string& path : app.recent_repos)
             {
                 if (path == state.repo.workdir())
@@ -343,11 +344,14 @@ namespace imgit::ui
                 ImGui::PushID(path.c_str());
                 if (popover_row(name.c_str()))
                 {
-                    const std::string open = path;
-                    close_popover();
-                    app.open_repository(open);
+                    to_open = path;
                 }
                 ImGui::PopID();
+                if (!to_open.empty())
+                {
+                    close_popover();
+                    break;
+                }
             }
             if (popover_link_row("View all repositories"))
             {
@@ -355,6 +359,10 @@ namespace imgit::ui
                 app.repo_management_open = true;
             }
             end_popover();
+            if (!to_open.empty())
+            {
+                app.open_repository(to_open);
+            }
         }
         {
             const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -500,23 +508,40 @@ namespace imgit::ui
                          "Stash all changes")
                     .clicked)
         {
+            git::Sha stash_sha;
             if (app.run(
                         state, "Stash",
                         [&]
                         {
-                            return state.repo.stash_push("");
+                            git::Result<git::Sha> pushed = state.repo.stash_push("");
+                            if (pushed)
+                            {
+                                stash_sha = *pushed;
+                            }
+                            return pushed;
                         },
                         "Changes stashed"))
             {
+                // The undo finds the stash by its commit: one pushed since shifts the indexes.
                 git::Repository* repo = &state.repo;
                 state.push_undo({"stash",
-                                 [repo]
+                                 [repo, stash_sha]() -> git::Result<void>
                                  {
-                                     return repo->stash_pop(0);
+                                     const int index = repo->stash_index_of(stash_sha);
+                                     if (index < 0)
+                                     {
+                                         return std::unexpected(git::Error{"the stash is gone"});
+                                     }
+                                     return repo->stash_pop(index);
                                  },
-                                 [repo]
+                                 [repo]() -> git::Result<void>
                                  {
-                                     return repo->stash_push("");
+                                     const git::Result<git::Sha> pushed = repo->stash_push("");
+                                     if (!pushed)
+                                     {
+                                         return std::unexpected(pushed.error());
+                                     }
+                                     return {};
                                  }});
             }
         }

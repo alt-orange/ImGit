@@ -41,6 +41,9 @@ namespace imgit::app
         bool silent = false; // auto-fetch: no toast on success
         std::vector<std::string> args; // run again after the credentials prompt
         std::optional<git::cli::Credential> attempt; // the credential entered for this run, kept when it works
+        // Commands run one after another once this one succeeds (push a tag to every remote); the toast comes
+        // with the last.
+        std::vector<std::vector<std::string>> queued;
     };
 
     // The Undo / Redo: each entry knows how to reverse (and, when cheap, repeat) one action.
@@ -92,6 +95,11 @@ namespace imgit::app
     {
     public:
         explicit RepoState(git::Repository repository);
+        // Hands any background job still running (status read, git command) to a detached waiter, so closing the
+        // tab never blocks the UI thread on it.
+        ~RepoState();
+        RepoState(const RepoState&) = delete;
+        RepoState& operator=(const RepoState&) = delete;
 
         git::Repository repo;
         git::History history;
@@ -112,7 +120,8 @@ namespace imgit::app
 
         // Graph selection (ordered by click) and keyboard focus.
         std::vector<git::Sha> selected;
-        git::Sha focused;
+        git::Sha focused; // the anchor of a Shift range
+        git::Sha range_cursor; // the moving end of a Shift+arrow range, "" when none
         std::optional<std::size_t> scroll_to_row;
         git::Sha hovered_sha; // row under the mouse this frame
 
@@ -121,6 +130,7 @@ namespace imgit::app
         std::string search_text;
         std::vector<std::size_t> search_matches;
         int search_index = -1;
+        git::Sha search_match_sha; // the match selected, kept across refreshes
         bool search_focus_requested = false;
 
         // Detail panel caches
@@ -140,8 +150,7 @@ namespace imgit::app
         };
         DiffMode diff_mode = DiffMode::INLINE;
         bool file_view = false;
-        bool diff_whitespace = false;
-        bool diff_wrap = false;
+        bool diff_whitespace = true; // show changes in whitespace only (off: GIT_DIFF_IGNORE_WHITESPACE)
         bool left_open_in_diff = false; // the left panel collapses while a file is open
         std::string diff_error;
         bool tree_view = true; // Path | Tree toggle

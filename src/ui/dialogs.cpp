@@ -818,6 +818,57 @@ namespace imgit::ui
             ImGui::End();
             return result;
         }
+
+        // The tab the dialog was opened for: the one with its working directory (the active tab until it is
+        // recorded), nullptr once that tab is closed.
+        app::RepoState* dialog_state(app::Application& app, const app::Dialog& d)
+        {
+            if (d.workdir.empty())
+            {
+                return app.active();
+            }
+            for (const std::unique_ptr<app::RepoState>& tab : app.tabs)
+            {
+                if (tab->repo.workdir() == d.workdir)
+                {
+                    return tab.get();
+                }
+            }
+            return nullptr;
+        }
+
+        // Undo for a history rewrite: a hard reset to the previous tip, with the uncommitted changes present at
+        // undo time stashed around it so they survive (as menus.cpp's tip_restore_entry does). Built before the
+        // rewrite, while the history still holds the tip.
+        app::UndoEntry tip_restore_entry(app::RepoState& state, const std::string& label)
+        {
+            git::Repository* repo = &state.repo;
+            const git::Sha sha = state.history.head_sha;
+            return {label,
+                    [repo, sha]() -> git::Result<void>
+                    {
+                        if (sha.empty())
+                        {
+                            return std::unexpected(git::Error{"nothing to restore"});
+                        }
+                        bool stashed = false;
+                        if (repo->load_status().value_or(git::WorkDirStatus{}).count() > 0)
+                        {
+                            if (auto pushed = repo->stash_push("ImGit: auto stash before undo"); pushed)
+                            {
+                                stashed = true;
+                            }
+                        }
+                        auto result = repo->reset(sha, git::ResetMode::HARD);
+                        if (stashed)
+                        {
+                            (void)repo->stash_pop(0);
+                        }
+                        return result;
+                    },
+                    {},
+                    git::ResetMode::HARD};
+        }
     } // namespace
 
     void draw_dialogs(app::Application& app)
@@ -840,15 +891,30 @@ namespace imgit::ui
         {
             return;
         }
+        // The dialog acts on the tab it was opened for (the active one on its first frame), whichever tab is
+        // active when it is answered, and closes when that tab is gone.
+        if (d.workdir.empty())
+        {
+            if (const app::RepoState* active = app.active(); active != nullptr)
+            {
+                d.workdir = active->repo.workdir();
+            }
+        }
+        app::RepoState* state = dialog_state(app, d);
+        const bool needs_repo = d.kind != app::Dialog::Kind::CLONE_REPO && d.kind != app::Dialog::Kind::INIT_REPO
+                                && d.kind != app::Dialog::Kind::PREFERENCES
+                                && d.kind != app::Dialog::Kind::KEYBOARD_SHORTCUTS && d.kind != app::Dialog::Kind::ABOUT
+                                && d.kind != app::Dialog::Kind::CONFIRM;
+        // A confirmation's action may be repository-free, but one opened from a tab must not outlive it (its
+        // action may refer to that tab).
+        if (state == nullptr && (needs_repo || (d.kind == app::Dialog::Kind::CONFIRM && !d.workdir.empty())))
+        {
+            d.close();
+            return;
+        }
         // Pushing a branch without an upstream asks for the remote branch in the prompt bar.
         if (d.kind == app::Dialog::Kind::PUSH_NEW_BRANCH)
         {
-            app::RepoState* state = app.active();
-            if (state == nullptr)
-            {
-                d.close();
-                return;
-            }
             const int answer = draw_push_prompt(d, state->history.remotes);
             if (answer == 0)
             {
@@ -869,12 +935,6 @@ namespace imgit::ui
             || d.kind == app::Dialog::Kind::DELETE_BRANCH || d.kind == app::Dialog::Kind::DELETE_TAG
             || d.kind == app::Dialog::Kind::DELETE_STASH)
         {
-            app::RepoState* state = app.active();
-            if (d.kind != app::Dialog::Kind::CONFIRM && state == nullptr)
-            {
-                d.close();
-                return;
-            }
             std::string message;
             std::string label = "Delete";
             bool danger = true;
@@ -1019,7 +1079,13 @@ namespace imgit::ui
             }
             default:
             {
-                const int index = request.stash_index;
+                // The stash is found again by its commit: one pushed since the prompt opened shifts the indexes.
+                const int index = state->repo.stash_index_of(request.sha);
+                if (index < 0)
+                {
+                    app.toasts.push(app::ToastKind::ERROR, "Delete stash failed", "The stash is gone.");
+                    break;
+                }
                 app.run(
                         *state, "Delete stash",
                         [&]
@@ -1035,13 +1101,8 @@ namespace imgit::ui
         // Resets run straight away.
         if (d.kind == app::Dialog::Kind::RESET)
         {
-            app::RepoState* state = app.active();
             const app::Dialog request = d;
             d.close();
-            if (state == nullptr)
-            {
-                return;
-            }
             git::Repository* repo = &state->repo;
             const char* mode = request.reset_mode == git::ResetMode::SOFT
                                        ? "Soft"
@@ -1072,21 +1133,19 @@ namespace imgit::ui
             return;
         }
         // Branches and lightweight tags are named inline in the graph, like the ref zone input.
-        if (app::RepoState* inline_state = app.active();
-            inline_state != nullptr
+        if (state != nullptr
             && (d.kind == app::Dialog::Kind::CREATE_BRANCH || (d.kind == app::Dialog::Kind::CREATE_TAG && !d.flag)))
         {
-            const git::Sha sha = d.sha.empty() ? inline_state->history.head_sha : d.sha;
-            if (const auto row = inline_state->history.row_by_sha.find(sha);
-                row != inline_state->history.row_by_sha.end())
+            const git::Sha sha = d.sha.empty() ? state->history.head_sha : d.sha;
+            if (const auto row = state->history.row_by_sha.find(sha); row != state->history.row_by_sha.end())
             {
                 app::RepoState::InlineRef inline_ref;
                 inline_ref.sha = sha;
                 inline_ref.tag = d.kind == app::Dialog::Kind::CREATE_TAG;
                 inline_ref.checkout = d.kind == app::Dialog::Kind::CREATE_BRANCH && d.flag;
-                inline_state->inline_ref = inline_ref;
-                inline_state->select_only(sha);
-                inline_state->scroll_to_row = row->second;
+                state->inline_ref = inline_ref;
+                state->select_only(sha);
+                state->scroll_to_row = row->second;
                 d.close();
                 return;
             }
@@ -1122,15 +1181,6 @@ namespace imgit::ui
             return;
         }
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(8.f), px(6.f)));
-        app::RepoState* state = app.active();
-        const bool needs_repo = d.kind != app::Dialog::Kind::CLONE_REPO && d.kind != app::Dialog::Kind::INIT_REPO
-                                && d.kind != app::Dialog::Kind::PREFERENCES
-                                && d.kind != app::Dialog::Kind::KEYBOARD_SHORTCUTS && d.kind != app::Dialog::Kind::ABOUT
-                                && d.kind != app::Dialog::Kind::CONFIRM;
-        if (needs_repo && state == nullptr)
-        {
-            ImGui::CloseCurrentPopup();
-        }
         git::Repository* repo = state != nullptr ? &state->repo : nullptr;
 
         switch (d.kind)
@@ -1246,22 +1296,39 @@ namespace imgit::ui
             if (buttons("Stash", true, false, false) || submitted)
             {
                 const std::string message = d.text_a;
+                git::Sha stash_sha;
                 if (app.run(
                             *state, "Stash",
                             [&]
                             {
-                                return state->repo.stash_push(message);
+                                git::Result<git::Sha> pushed = state->repo.stash_push(message);
+                                if (pushed)
+                                {
+                                    stash_sha = *pushed;
+                                }
+                                return pushed;
                             },
                             "Changes stashed"))
                 {
+                    // The undo finds the stash by its commit: one pushed since shifts the indexes.
                     state->push_undo({"stash",
-                                      [repo]
+                                      [repo, stash_sha]() -> git::Result<void>
                                       {
-                                          return repo->stash_pop(0);
+                                          const int index = repo->stash_index_of(stash_sha);
+                                          if (index < 0)
+                                          {
+                                              return std::unexpected(git::Error{"the stash is gone"});
+                                          }
+                                          return repo->stash_pop(index);
                                       },
-                                      [repo, message]
+                                      [repo, message]() -> git::Result<void>
                                       {
-                                          return repo->stash_push(message);
+                                          const git::Result<git::Sha> pushed = repo->stash_push(message);
+                                          if (!pushed)
+                                          {
+                                              return std::unexpected(pushed.error());
+                                          }
+                                          return {};
                                       }});
                 }
                 ImGui::CloseCurrentPopup();
@@ -1406,14 +1473,22 @@ namespace imgit::ui
             ImGui::TextWrapped("Delete %s? Its changes will be lost.", d.ref_name.c_str());
             if (buttons("Delete", true, true, true))
             {
-                const int index = d.stash_index;
-                app.run(
-                        *state, "Delete stash",
-                        [&]
-                        {
-                            return state->repo.stash_drop(index);
-                        },
-                        "Stash deleted");
+                // The stash is found again by its commit: one pushed since the dialog opened shifts the indexes.
+                const int index = state->repo.stash_index_of(d.sha);
+                if (index < 0)
+                {
+                    app.toasts.push(app::ToastKind::ERROR, "Delete stash failed", "The stash is gone.");
+                }
+                else
+                {
+                    app.run(
+                            *state, "Delete stash",
+                            [&]
+                            {
+                                return state->repo.stash_drop(index);
+                            },
+                            "Stash deleted");
+                }
                 ImGui::CloseCurrentPopup();
             }
             break;
@@ -1586,7 +1661,7 @@ namespace imgit::ui
             {
                 const git::Sha sha = d.sha;
                 const std::string message = d.text_a;
-                const git::Sha previous = state->history.head_sha;
+                app::UndoEntry undo = tip_restore_entry(*state, "edit commit message");
                 bool ok;
                 if (sha == state->history.head_sha)
                 {
@@ -1618,12 +1693,7 @@ namespace imgit::ui
                 }
                 if (ok)
                 {
-                    state->push_undo({"edit commit message",
-                                      [repo, previous]
-                                      {
-                                          return repo->reset(previous, git::ResetMode::HARD);
-                                      },
-                                      {}});
+                    state->push_undo(std::move(undo));
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -1658,7 +1728,7 @@ namespace imgit::ui
                             steps.push_back({c->sha, git::RebaseAction::PICK, ""});
                         }
                     }
-                    const git::Sha previous = state->history.head_sha;
+                    app::UndoEntry undo = tip_restore_entry(*state, "squash");
                     if (app.run(
                                 *state, "Squash",
                                 [&]
@@ -1667,12 +1737,7 @@ namespace imgit::ui
                                 },
                                 "Squashed " + std::to_string(d.shas.size()) + " commits"))
                     {
-                        state->push_undo({"squash",
-                                          [repo, previous]
-                                          {
-                                              return repo->reset(previous, git::ResetMode::HARD);
-                                          },
-                                          {}});
+                        state->push_undo(std::move(undo));
                     }
                 }
                 ImGui::CloseCurrentPopup();

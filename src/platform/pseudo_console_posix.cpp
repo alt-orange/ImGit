@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -60,6 +61,7 @@ namespace imgit::platform
         int master = -1; // our side of the pseudo terminal
         pid_t pid = 0;
         mutable bool reaped = false;
+        mutable std::chrono::steady_clock::time_point reaped_at{};
         std::thread reader;
         std::mutex mutex;
         std::string pending;
@@ -84,8 +86,23 @@ namespace imgit::platform
             }
             if (pid > 0 && !reaped)
             {
+                // This runs on the UI thread: a shell that ignores SIGHUP gets about half a second, then SIGKILL.
                 int status = 0;
-                waitpid(pid, &status, 0);
+                bool ended = false;
+                for (int i = 0; i < 50 && !ended; ++i)
+                {
+                    const pid_t waited = waitpid(pid, &status, WNOHANG);
+                    ended = waited == pid || (waited < 0 && errno != EINTR);
+                    if (!ended)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                }
+                if (!ended)
+                {
+                    kill(-pid, SIGKILL);
+                    waitpid(pid, &status, 0);
+                }
             }
         }
     };
@@ -232,8 +249,14 @@ namespace imgit::platform
                 return false;
             }
             m_impl->reaped = true;
+            m_impl->reaped_at = std::chrono::steady_clock::now();
         }
-        if (!m_impl->drained.load())
+        // The reader only ends (EIO) once the last process holding the terminal is gone, which a background job
+        // the shell left behind (`sleep 1000 &` then `exit`) may never be: shortly after the shell itself has been
+        // reaped, its output counts as complete.
+        const bool settled = m_impl->drained.load()
+                             || std::chrono::steady_clock::now() - m_impl->reaped_at > std::chrono::milliseconds(300);
+        if (!settled)
         {
             return false;
         }

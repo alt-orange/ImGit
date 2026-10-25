@@ -90,6 +90,7 @@ namespace imgit::git
         using RemoteHandle = Handle<git_remote, git_remote_free>;
         using AnnotatedCommitHandle = Handle<git_annotated_commit, git_annotated_commit_free>;
         using ConfigHandle = Handle<git_config, git_config_free>;
+        using TreeEntryHandle = Handle<git_tree_entry, git_tree_entry_free>;
 
         std::unexpected<Error> last_error(const char* fallback)
         {
@@ -320,6 +321,34 @@ namespace imgit::git
             git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
             opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_RECREATE_MISSING;
             return opts;
+        }
+
+        // Ends the operation a commit just completed, as git's own `commit` does. git_repository_state_cleanup would
+        // also delete the rebase-merge / rebase-apply / sequencer directories, which destroys an in-progress rebase
+        // or a multi-commit cherry-pick / revert: a rebase keeps its state (git rebase --continue goes on once the
+        // index is clean), a sequence only loses the head file of the step just committed.
+        void finish_operation_state(git_repository* repo)
+        {
+            const int state = git_repository_state(repo);
+            switch (state)
+            {
+            case GIT_REPOSITORY_STATE_MERGE:
+            case GIT_REPOSITORY_STATE_CHERRYPICK:
+            case GIT_REPOSITORY_STATE_REVERT:
+                git_repository_state_cleanup(repo);
+                break;
+            case GIT_REPOSITORY_STATE_CHERRYPICK_SEQUENCE:
+            case GIT_REPOSITORY_STATE_REVERT_SEQUENCE:
+            {
+                const char* head_file =
+                        state == GIT_REPOSITORY_STATE_CHERRYPICK_SEQUENCE ? "CHERRY_PICK_HEAD" : "REVERT_HEAD";
+                std::error_code ec;
+                std::filesystem::remove(std::filesystem::path(git_repository_path(repo)) / head_file, ec);
+                break;
+            }
+            default:
+                break;
+            }
         }
     } // namespace
 
@@ -722,7 +751,8 @@ namespace imgit::git
             {
                 input += ref->target + "\n";
             }
-            if (history.detached && !history.head_sha.empty())
+            // The checked-out commit is always a row, even when its branch is hidden or another ref is soloed.
+            if (!history.head_sha.empty())
             {
                 input += history.head_sha + "\n";
             }
@@ -1053,7 +1083,8 @@ namespace imgit::git
         return changes;
     }
 
-    Result<FileDiff> Repository::commit_file_diff(const Sha& sha, const std::string& path, int context_lines) const
+    Result<FileDiff> Repository::commit_file_diff(const Sha& sha, const std::string& path, int context_lines,
+                                                  bool ignore_whitespace) const
     {
         auto commit = lookup_commit(m_repo.get(), sha);
         if (!commit)
@@ -1078,6 +1109,10 @@ namespace imgit::git
         opts.pathspec.strings = c_paths.data();
         opts.pathspec.count = c_paths.size();
         opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+        if (ignore_whitespace)
+        {
+            opts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
+        }
         opts.context_lines = static_cast<std::uint32_t>(context_lines);
         DiffHandle diff;
         IMGIT_TRY(git_diff_tree_to_tree(diff.out(), m_repo.get(), parent_tree, *tree, &opts), "could not diff file");
@@ -1089,6 +1124,10 @@ namespace imgit::git
         // An added file may really be the new side of a rename: re-run over the whole tree with similarity
         // detection and pick the delta that ends at `path`.
         git_diff_options all = GIT_DIFF_OPTIONS_INIT;
+        if (ignore_whitespace)
+        {
+            all.flags |= GIT_DIFF_IGNORE_WHITESPACE;
+        }
         all.context_lines = static_cast<std::uint32_t>(context_lines);
         DiffHandle full;
         IMGIT_TRY(git_diff_tree_to_tree(full.out(), m_repo.get(), parent_tree, *tree, &all), "could not diff file");
@@ -1105,7 +1144,8 @@ namespace imgit::git
         return diff_to_file_diff(diff, 0, path);
     }
 
-    Result<FileDiff> Repository::workdir_file_diff(const std::string& path, bool staged, int context_lines) const
+    Result<FileDiff> Repository::workdir_file_diff(const std::string& path, bool staged, int context_lines,
+                                                   bool ignore_whitespace) const
     {
         git_repository* repo = m_repo.get();
         IndexHandle index;
@@ -1117,6 +1157,10 @@ namespace imgit::git
         opts.pathspec.count = c_paths.size();
         opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH | GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_SHOW_UNTRACKED_CONTENT
                       | GIT_DIFF_RECURSE_UNTRACKED_DIRS;
+        if (ignore_whitespace)
+        {
+            opts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
+        }
         opts.context_lines = static_cast<std::uint32_t>(context_lines);
         DiffHandle diff;
         if (staged)
@@ -1172,7 +1216,14 @@ namespace imgit::git
         for (const std::string& path : paths)
         {
             const std::filesystem::path on_disk = std::filesystem::path(m_workdir) / path;
-            if (std::filesystem::exists(on_disk))
+            // symlink_status: a dangling symlink is still a file to stage, and nothing throws.
+            std::error_code ec;
+            const std::filesystem::file_type type = std::filesystem::symlink_status(on_disk, ec).type();
+            if (ec)
+            {
+                return std::unexpected(Error{path + ": " + ec.message()});
+            }
+            if (type != std::filesystem::file_type::not_found)
             {
                 IMGIT_TRY(git_index_add_bypath(index, path.c_str()), "could not stage file");
             }
@@ -1203,12 +1254,10 @@ namespace imgit::git
         {
             return std::unexpected(head.error());
         }
-        auto c_paths = c_strings(paths);
-        git_strarray pathspec{c_paths.data(), c_paths.size()};
+        IndexHandle index;
+        IMGIT_TRY(git_repository_index(index.out(), repo), "could not read index");
         if (head->get() == nullptr)
         {
-            IndexHandle index;
-            IMGIT_TRY(git_repository_index(index.out(), repo), "could not read index");
             for (const std::string& path : paths)
             {
                 git_index_remove_bypath(index, path.c_str());
@@ -1216,7 +1265,37 @@ namespace imgit::git
             IMGIT_TRY(git_index_write(index), "could not write index");
             return {};
         }
-        IMGIT_TRY(git_reset_default(repo, reinterpret_cast<git_object*>(head->get()), &pathspec), "could not unstage");
+        // Each path back to HEAD's entry, or out of the index when HEAD does not have it. By exact path:
+        // git_reset_default reads the paths as wildmatch patterns ([ ] * ?).
+        auto tree = commit_tree(*head);
+        if (!tree)
+        {
+            return std::unexpected(tree.error());
+        }
+        for (const std::string& path : paths)
+        {
+            if (const int rc = git_index_conflict_remove(index, path.c_str()); rc < 0 && rc != GIT_ENOTFOUND)
+            {
+                return last_error("could not unstage");
+            }
+            TreeEntryHandle entry;
+            const int found = git_tree_entry_bypath(entry.out(), *tree, path.c_str());
+            if (found == GIT_ENOTFOUND)
+            {
+                if (const int rc = git_index_remove_bypath(index, path.c_str()); rc < 0 && rc != GIT_ENOTFOUND)
+                {
+                    return last_error("could not unstage");
+                }
+                continue;
+            }
+            IMGIT_TRY(found, "could not unstage");
+            git_index_entry head_entry = {};
+            head_entry.mode = static_cast<std::uint32_t>(git_tree_entry_filemode(entry));
+            head_entry.id = *git_tree_entry_id(entry);
+            head_entry.path = path.c_str();
+            IMGIT_TRY(git_index_add(index, &head_entry), "could not unstage");
+        }
+        IMGIT_TRY(git_index_write(index), "could not write index");
         return {};
     }
 
@@ -1245,6 +1324,8 @@ namespace imgit::git
 
     Result<void> Repository::discard(const std::vector<FileChange>& changes) const
     {
+        IndexHandle index;
+        IMGIT_TRY(git_repository_index(index.out(), m_repo.get()), "could not read index");
         std::vector<std::string> tracked;
         for (const FileChange& change : changes)
         {
@@ -1252,6 +1333,14 @@ namespace imgit::git
             {
                 std::error_code ec;
                 std::filesystem::remove_all(std::filesystem::path(m_workdir) / change.path, ec);
+            }
+            else if (!change.old_path.empty() && change.old_path != change.path
+                     && git_index_get_bypath(index, change.path.c_str(), 0) == nullptr)
+            {
+                // An unstaged rename: the new name is not in the index, so it goes and the old name comes back.
+                std::error_code ec;
+                std::filesystem::remove(std::filesystem::path(m_workdir) / change.path, ec);
+                tracked.push_back(change.old_path);
             }
             else
             {
@@ -1264,7 +1353,9 @@ namespace imgit::git
         }
         auto c_paths = c_strings(tracked);
         git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
-        opts.checkout_strategy = GIT_CHECKOUT_FORCE | GIT_CHECKOUT_RECREATE_MISSING;
+        // The paths are literal, not patterns: [ ] * ? may be part of a file name.
+        opts.checkout_strategy =
+                GIT_CHECKOUT_FORCE | GIT_CHECKOUT_RECREATE_MISSING | GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH;
         opts.paths.strings = c_paths.data();
         opts.paths.count = c_paths.size();
         IMGIT_TRY(git_checkout_index(m_repo.get(), nullptr, &opts), "could not discard changes");
@@ -1287,7 +1378,7 @@ namespace imgit::git
     }
 
     Result<Sha> Repository::commit_index(const std::string& message, const std::vector<Sha>& parents,
-                                         const Author* author) const
+                                         const git_signature* author) const
     {
         git_repository* repo = m_repo.get();
         IndexHandle index;
@@ -1301,12 +1392,6 @@ namespace imgit::git
         if (!committer)
         {
             return std::unexpected(committer.error());
-        }
-        SignatureHandle author_sig;
-        if (author != nullptr)
-        {
-            IMGIT_TRY(git_signature_now(author_sig.out(), author->name.c_str(), author->email.c_str()),
-                      "could not create signature");
         }
 
         std::vector<CommitHandle> parent_handles(parents.size());
@@ -1324,7 +1409,7 @@ namespace imgit::git
         }
 
         git_oid commit_oid;
-        IMGIT_TRY(git_commit_create(&commit_oid, repo, "HEAD", author != nullptr ? author_sig.get() : committer->get(),
+        IMGIT_TRY(git_commit_create(&commit_oid, repo, "HEAD", author != nullptr ? author : committer->get(),
                                     committer->get(), nullptr, message.c_str(), tree, parent_ptrs.size(),
                                     parent_ptrs.data()),
                   "could not create commit");
@@ -1378,9 +1463,9 @@ namespace imgit::git
             git_repository_mergehead_foreach(repo, callback, &parents);
         }
         auto sha = commit_index(message, parents, nullptr);
-        if (sha && git_repository_state(repo) != GIT_REPOSITORY_STATE_NONE)
+        if (sha)
         {
-            git_repository_state_cleanup(repo);
+            finish_operation_state(repo);
         }
         return sha;
     }
@@ -1523,7 +1608,7 @@ namespace imgit::git
         return {};
     }
 
-    Result<bool> Repository::finish_sequencer_commit(const std::string& message, const Author* author) const
+    Result<bool> Repository::finish_sequencer_commit(const std::string& message, const git_signature* author) const
     {
         git_repository* repo = m_repo.get();
         IndexHandle index;
@@ -1547,7 +1632,7 @@ namespace imgit::git
         {
             return std::unexpected(sha.error());
         }
-        git_repository_state_cleanup(repo);
+        finish_operation_state(repo);
         return true;
     }
 
@@ -1561,11 +1646,9 @@ namespace imgit::git
         git_cherrypick_options opts = GIT_CHERRYPICK_OPTIONS_INIT;
         opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS;
         IMGIT_TRY(git_cherrypick(m_repo.get(), *commit, &opts), "cherry pick failed");
-        const git_signature* author = git_commit_author(*commit);
-        const Author original{author->name != nullptr ? author->name : "",
-                              author->email != nullptr ? author->email : ""};
+        // The author (with its date) belongs to `commit`, which outlives the call.
         const char* message = git_commit_message(*commit);
-        return finish_sequencer_commit(message != nullptr ? message : "", &original);
+        return finish_sequencer_commit(message != nullptr ? message : "", git_commit_author(*commit));
     }
 
     Result<bool> Repository::revert(const Sha& sha) const
@@ -1623,6 +1706,28 @@ namespace imgit::git
         git_merge_analysis_t analysis;
         git_merge_preference_t preference;
         IMGIT_TRY(git_merge_analysis(&analysis, &preference, repo, heads, 1), "merge analysis failed");
+        if ((analysis & GIT_MERGE_ANALYSIS_UNBORN) != 0)
+        {
+            // An unborn HEAD (reported with FASTFORWARD): the tree is checked out, then HEAD's branch is created at
+            // the incoming commit. git_repository_head would fail with EUNBORNBRANCH below.
+            ReferenceHandle head;
+            IMGIT_TRY(git_reference_lookup(head.out(), repo, "HEAD"), "could not read HEAD");
+            const char* branch = git_reference_symbolic_target(head);
+            if (branch == nullptr)
+            {
+                return std::unexpected(Error{"HEAD is not on a branch"});
+            }
+            const git_oid* target = git_annotated_commit_id(annotated);
+            ObjectHandle object;
+            IMGIT_TRY(git_object_lookup(object.out(), repo, target, GIT_OBJECT_COMMIT), "could not resolve commit");
+            git_checkout_options opts = safe_checkout_options();
+            IMGIT_TRY(git_checkout_tree(repo, object, &opts), "checkout failed");
+            ReferenceHandle created;
+            IMGIT_TRY(git_reference_create(created.out(), repo, branch, target, 1, "merge: fast-forward"),
+                      "could not create branch");
+            IMGIT_TRY(git_repository_set_head(repo, branch), "could not update HEAD");
+            return true;
+        }
         if ((analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE) != 0)
         {
             return true;
@@ -1679,6 +1784,39 @@ namespace imgit::git
     Result<void> Repository::abort_operation() const
     {
         git_repository* repo = m_repo.get();
+        // A rebase and a multi-commit cherry-pick / revert are git's to abort: resetting to HEAD and cleaning up
+        // would leave HEAD detached (rebase) or the sequence half done.
+        const char* verb = nullptr;
+        switch (git_repository_state(repo))
+        {
+        case GIT_REPOSITORY_STATE_REBASE:
+        case GIT_REPOSITORY_STATE_REBASE_INTERACTIVE:
+        case GIT_REPOSITORY_STATE_REBASE_MERGE:
+            verb = "rebase";
+            break;
+        case GIT_REPOSITORY_STATE_CHERRYPICK_SEQUENCE:
+            verb = "cherry-pick";
+            break;
+        case GIT_REPOSITORY_STATE_REVERT_SEQUENCE:
+            verb = "revert";
+            break;
+        default:
+            break;
+        }
+        if (verb != nullptr)
+        {
+            if (!cli::available())
+            {
+                return std::unexpected(Error{std::string("git is needed to abort a ") + verb});
+            }
+            const cli::Output output = cli::run(m_workdir, {verb, "--abort"});
+            if (output.exit_code != 0)
+            {
+                return std::unexpected(
+                        Error{output.text.empty() ? std::string("could not abort the ") + verb : output.text});
+            }
+            return {};
+        }
         auto head = head_commit(repo);
         if (!head)
         {
@@ -1780,7 +1918,7 @@ namespace imgit::git
         return hunks;
     }
 
-    Result<void> Repository::stash_push(const std::string& message) const
+    Result<Sha> Repository::stash_push(const std::string& message) const
     {
         auto sig = default_signature(m_repo.get());
         if (!sig)
@@ -1791,7 +1929,30 @@ namespace imgit::git
         IMGIT_TRY(git_stash_save(&oid, m_repo.get(), sig->get(), message.empty() ? nullptr : message.c_str(),
                                  GIT_STASH_INCLUDE_UNTRACKED),
                   "could not stash changes");
-        return {};
+        return oid_str(&oid);
+    }
+
+    int Repository::stash_index_of(const Sha& sha) const
+    {
+        struct Payload
+        {
+            const Sha* sha;
+            int index;
+        } payload{&sha, -1};
+        git_stash_foreach(
+                m_repo.get(),
+                [](std::size_t index, const char*, const git_oid* stash_id, void* data) -> int
+                {
+                    auto* p = static_cast<Payload*>(data);
+                    if (oid_str(stash_id) == *p->sha)
+                    {
+                        p->index = static_cast<int>(index);
+                        return 1; // found: stop
+                    }
+                    return 0;
+                },
+                &payload);
+        return payload.index;
     }
 
     namespace
@@ -2069,9 +2230,8 @@ namespace imgit::git
             }
             const char* original_message = git_commit_message(*commit);
             const std::string message = original_message != nullptr ? original_message : "";
+            // `commit` outlives this step, and with it the author (its date kept on the rewritten commit).
             const git_signature* author = git_commit_author(*commit);
-            const Author original_author{author->name != nullptr ? author->name : "",
-                                         author->email != nullptr ? author->email : ""};
 
             auto head = head_commit(repo);
             if (!head || head->get() == nullptr)
@@ -2118,7 +2278,7 @@ namespace imgit::git
             {
                 const std::string final_message =
                         step.action == RebaseAction::REWORD && !step.message.empty() ? step.message : message;
-                auto created = commit_index(final_message, {oid_str(git_commit_id(*head))}, &original_author);
+                auto created = commit_index(final_message, {oid_str(git_commit_id(*head))}, author);
                 if (!created)
                 {
                     return roll_back(created.error().message + ".");

@@ -80,16 +80,15 @@ namespace imgit::ui
         {
             git::Repository* repo = &state.repo;
             const git::Sha sha = state.history.head_sha;
-            const bool dirty = !state.status.empty();
             return {label,
-                    [repo, sha, mode, dirty]() -> git::Result<void>
+                    [repo, sha, mode]() -> git::Result<void>
                     {
                         if (sha.empty())
                         {
                             return std::unexpected(git::Error{"nothing to restore"});
                         }
                         bool stashed = false;
-                        if (dirty && repo->load_status().value_or(git::WorkDirStatus{}).count() > 0)
+                        if (repo->load_status().value_or(git::WorkDirStatus{}).count() > 0)
                         {
                             if (auto pushed = repo->stash_push("ImGit: auto stash before undo"); pushed)
                             {
@@ -974,13 +973,15 @@ namespace imgit::ui
                 remote_ops.push_back(item("Pull (fast-forward if possible)",
                                           [&app, &state, branch]
                                           {
+                                              // "origin/main"; an upstream without a remote part tracks a local
+                                              // branch, which counts as none here.
+                                              const auto slash = branch.upstream.find('/');
                                               if (branch.is_head)
                                               {
                                                   app.run_git_cli(state, "Pull", {"pull", "--ff"});
                                               }
-                                              else if (!branch.upstream.empty())
+                                              else if (slash != std::string::npos)
                                               {
-                                                  const auto slash = branch.upstream.find('/');
                                                   app.run_git_cli(
                                                           state, "Pull",
                                                           {"fetch", branch.upstream.substr(0, slash),
@@ -995,14 +996,14 @@ namespace imgit::ui
                 remote_ops.push_back(item("Push",
                                           [&app, &state, branch]
                                           {
-                                              if (branch.upstream.empty())
+                                              const auto slash = branch.upstream.find('/');
+                                              if (slash == std::string::npos)
                                               {
                                                   app.dialog.open(app::Dialog::Kind::PUSH_NEW_BRANCH);
                                                   app.dialog.ref_name = branch.name;
                                                   app.dialog.text_a = state.history.remotes.front().name;
                                                   return;
                                               }
-                                              const auto slash = branch.upstream.find('/');
                                               app.run_git_cli(state, "Push",
                                                               {"push", branch.upstream.substr(0, slash),
                                                                branch.name + ":" + branch.upstream.substr(slash + 1)});
@@ -1338,10 +1339,11 @@ namespace imgit::ui
                                       "Stash popped");
                           }),
                      item("Delete Stash",
-                          [&app, index, name = stash.name, stash_message = stash.message]
+                          [&app, index, sha = stash.target, name = stash.name, stash_message = stash.message]
                           {
                               app.dialog.open(app::Dialog::Kind::DELETE_STASH);
                               app.dialog.stash_index = index;
+                              app.dialog.sha = sha; // found again at confirm: a stash pushed since shifts the indexes
                               app.dialog.ref_name = name;
                               app.dialog.text_b = git::stash_summary(stash_message);
                           })},
@@ -1384,11 +1386,12 @@ namespace imgit::ui
                                         {item(fmt("Push {0} to all remotes", {name}),
                                               [&app, &state, name]
                                               {
+                                                  std::vector<std::vector<std::string>> runs;
                                                   for (const git::Remote& remote : state.history.remotes)
                                                   {
-                                                      app.run_git_cli(state, "Push tag",
-                                                                      {"push", remote.name, "refs/tags/" + name});
+                                                      runs.push_back({"push", remote.name, "refs/tags/" + name});
                                                   }
+                                                  app.run_git_cli_sequence(state, "Push tag", std::move(runs));
                                               })}})));
             }
             MenuItems merge_items = merge_and_rebase_items(app, state, tag);
@@ -1562,10 +1565,11 @@ namespace imgit::ui
         state.close_diff();
     }
 
-    void checkout_ref(app::Application& app, app::RepoState& state, const git::Ref& ref_in)
+    bool checkout_ref(app::Application& app, app::RepoState& state, const git::Ref& ref_in)
     {
         const git::Ref ref = ref_in;
         git::Repository* repo = &state.repo;
+        bool ok = true;
         switch (ref.type)
         {
         case git::RefType::LOCAL_BRANCH:
@@ -1576,13 +1580,14 @@ namespace imgit::ui
                                                          {
                                                              return repo->checkout_branch(name);
                                                          });
-                if (app.run(
-                            state, "Checkout",
-                            [&]
-                            {
-                                return state.repo.checkout_branch(ref.name);
-                            },
-                            "Checked out " + ref.name))
+                ok = app.run(
+                        state, "Checkout",
+                        [&]
+                        {
+                            return state.repo.checkout_branch(ref.name);
+                        },
+                        "Checked out " + ref.name);
+                if (ok)
                 {
                     state.push_undo(std::move(undo));
                 }
@@ -1596,13 +1601,14 @@ namespace imgit::ui
                                                      {
                                                          return repo->checkout_branch(local);
                                                      });
-            if (app.run(
-                        state, "Checkout",
-                        [&]
-                        {
-                            return state.repo.checkout_remote_branch(ref.remote, local);
-                        },
-                        "Checked out " + local))
+            ok = app.run(
+                    state, "Checkout",
+                    [&]
+                    {
+                        return state.repo.checkout_remote_branch(ref.remote, local);
+                    },
+                    "Checked out " + local);
+            if (ok)
             {
                 state.push_undo(std::move(undo));
             }
@@ -1615,13 +1621,14 @@ namespace imgit::ui
                                                      {
                                                          return repo->checkout_commit(sha);
                                                      });
-            if (app.run(
-                        state, "Checkout",
-                        [&]
-                        {
-                            return state.repo.checkout_commit(ref.target);
-                        },
-                        "Checked out " + ref.name + " (detached HEAD)"))
+            ok = app.run(
+                    state, "Checkout",
+                    [&]
+                    {
+                        return state.repo.checkout_commit(ref.target);
+                    },
+                    "Checked out " + ref.name + " (detached HEAD)");
+            if (ok)
             {
                 state.push_undo(std::move(undo));
             }
@@ -1630,6 +1637,7 @@ namespace imgit::ui
         case git::RefType::STASH:
             break;
         }
+        return ok;
     }
 
     bool can_drop_ref(const app::RepoState& state, const git::Ref& source, const git::Ref& target)
@@ -1674,9 +1682,9 @@ namespace imgit::ui
         {
             return [&app, &state, into, from, no_fast_forward]
             {
-                if (!into.is_head)
+                if (!into.is_head && !checkout_ref(app, state, into))
                 {
-                    checkout_ref(app, state, into);
+                    return;
                 }
                 merge_into_head(app, state, from.name, no_fast_forward);
             };
@@ -1734,9 +1742,9 @@ namespace imgit::ui
             merges.push_back(item(fmt("Rebase {0} onto {1}", {ours.name, onto.name}),
                                   [&app, &state, ours, onto]
                                   {
-                                      if (!ours.is_head)
+                                      if (!ours.is_head && !checkout_ref(app, state, ours))
                                       {
-                                          checkout_ref(app, state, ours);
+                                          return;
                                       }
                                       app.run_git_cli(state, "Rebase", {"rebase", onto.name});
                                   }));
@@ -1753,9 +1761,9 @@ namespace imgit::ui
                                                               "The commits to rebase include a merge commit.");
                                               return;
                                           }
-                                          if (!ours.is_head)
+                                          if (!ours.is_head && !checkout_ref(app, state, ours))
                                           {
-                                              checkout_ref(app, state, ours);
+                                              return;
                                           }
                                           state.start_rebase_plan(onto.target, onto.name, fork_point, ours.target);
                                       }));

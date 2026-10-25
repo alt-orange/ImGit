@@ -36,6 +36,8 @@ namespace imgit::app
 
     void VtScreen::reset()
     {
+        // The line ids (first_line_id) stay unique across the lines thrown away, as in clear().
+        m_dropped += m_main.size();
         m_main.clear();
         m_alt.clear();
         m_alternate = false;
@@ -198,7 +200,9 @@ namespace imgit::app
                 else if (b == '[')
                 {
                     m_params.clear();
+                    m_sub_params.clear();
                     m_param_started = false;
+                    m_next_sub_param = false;
                     m_private = 0;
                     m_state = State::CSI;
                 }
@@ -242,6 +246,7 @@ namespace imgit::app
                     if (!m_param_started)
                     {
                         m_params.push_back(-1);
+                        m_sub_params.push_back(m_next_sub_param);
                         m_param_started = true;
                     }
                     int& value = m_params.back();
@@ -252,8 +257,10 @@ namespace imgit::app
                     if (!m_param_started)
                     {
                         m_params.push_back(-1);
+                        m_sub_params.push_back(m_next_sub_param);
                     }
                     m_param_started = false;
+                    m_next_sub_param = b == ':';
                 }
                 else if (b >= 0x3C && b <= 0x3F)
                 {
@@ -658,6 +665,11 @@ namespace imgit::app
         return index < m_params.size() && m_params[index] >= 0 ? m_params[index] : fallback;
     }
 
+    bool VtScreen::sub_param(std::size_t index) const
+    {
+        return index < m_sub_params.size() && m_sub_params[index];
+    }
+
     void VtScreen::escape_dispatch(char final)
     {
         if (!m_intermediates.empty())
@@ -845,8 +857,10 @@ namespace imgit::app
             break;
         case 'r':
         {
-            const int top = std::max(1, param(0, 1)) - 1;
-            const int bottom = std::min(m_rows, param(1, m_rows)) - 1;
+            // An explicit 0 means the default for either end, as in xterm.
+            const int top = std::max(1, param(0, 0)) - 1;
+            const int requested_bottom = param(1, 0);
+            const int bottom = std::min(m_rows, requested_bottom == 0 ? m_rows : requested_bottom) - 1;
             if (top < bottom)
             {
                 m_scroll_top = top;
@@ -934,23 +948,36 @@ namespace imgit::app
         for (std::size_t i = 0; i < m_params.size(); ++i)
         {
             const int code = param(i, 0);
-            // 38;5;n / 38;2;r;g;b (and 48 for the background)
+            // 38;5;n / 38;2;r;g;b take the parameters that follow; 38:5:n / 38:2:[colour space]:r:g:b only their
+            // own sub-parameters (and 48 for the background, 58 for the underline).
             const auto extended = [&](std::uint32_t& target)
             {
-                const int kind = param(i + 1, 0);
+                std::size_t count = 0; // sub-parameters after `i`
+                while (sub_param(i + 1 + count))
+                {
+                    ++count;
+                }
+                const bool colon = count > 0;
+                const auto value = [&](std::size_t offset)
+                {
+                    return colon && offset > count ? 0 : param(i + offset, 0);
+                };
+                const int kind = value(1);
                 if (kind == 5)
                 {
-                    target = vt_color::PALETTE | static_cast<std::uint32_t>(std::clamp(param(i + 2, 0), 0, 255));
-                    i += 2;
+                    target = vt_color::PALETTE | static_cast<std::uint32_t>(std::clamp(value(2), 0, 255));
+                    i += colon ? 0 : 2;
                 }
                 else if (kind == 2)
                 {
-                    const auto channel = [&](std::size_t k)
+                    // 38:2::r:g:b carries an (empty) colour-space slot that 38:2:r:g:b and the ; form do not.
+                    const std::size_t first = colon && count >= 5 ? 3 : 2;
+                    const auto channel = [&](std::size_t offset)
                     {
-                        return static_cast<std::uint32_t>(std::clamp(param(k, 0), 0, 255));
+                        return static_cast<std::uint32_t>(std::clamp(value(offset), 0, 255));
                     };
-                    target = vt_color::RGB | (channel(i + 2) << 16) | (channel(i + 3) << 8) | channel(i + 4);
-                    i += 4;
+                    target = vt_color::RGB | (channel(first) << 16) | (channel(first + 1) << 8) | channel(first + 2);
+                    i += colon ? 0 : 4;
                 }
             };
             switch (code)
@@ -1012,6 +1039,12 @@ namespace imgit::app
             case 49:
                 m_bg = vt_color::DEFAULT;
                 break;
+            case 58: // underline colour: not drawn, but its parameters are not codes
+            {
+                std::uint32_t underline = vt_color::DEFAULT;
+                extended(underline);
+                break;
+            }
             default:
                 if (code >= 30 && code <= 37)
                 {
@@ -1030,6 +1063,11 @@ namespace imgit::app
                     m_bg = vt_color::PALETTE | static_cast<std::uint32_t>(code - 100 + 8);
                 }
                 break;
+            }
+            // A code's sub-parameters (4:3 is a curly underline) are never codes of their own.
+            while (sub_param(i + 1))
+            {
+                ++i;
             }
         }
     }

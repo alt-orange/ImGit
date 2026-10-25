@@ -21,7 +21,7 @@ namespace imgit::ui
             SEPARATOR,
         };
         Type type = Type::NORMAL;
-        std::string label; // '&' marks the mnemonic in menu bar menus
+        std::string label; // '&' marks the mnemonic in menu bar menus (context menus show it as it is)
         std::string accelerator; // right-aligned shortcut text
         bool enabled = true;
         bool checked = false;

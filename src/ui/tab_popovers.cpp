@@ -287,6 +287,10 @@ namespace imgit::ui
         if (activate != -2)
         {
             app.active_tab = activate;
+            if (activate == -1)
+            {
+                app.new_tab_open = true; // the New Tab page needs its tab in the bar
+            }
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

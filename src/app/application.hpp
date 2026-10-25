@@ -84,6 +84,9 @@ namespace imgit::app
         };
         Kind kind = Kind::NONE;
         bool just_opened = false;
+        // The repository the dialog was opened for (its working directory, set on the first frame it is drawn): the
+        // prompt bar acts on that tab, whichever one is active, and closes when it is gone.
+        std::string workdir;
         std::string text_a; // name / path / url
         std::string text_b; // message / destination
         bool flag = false; // "checkout after create", "also delete remote"...
@@ -303,6 +306,11 @@ namespace imgit::app
         // `attempt`: a credential from the credentials prompt, tried before the session's own.
         void run_git_cli(RepoState& state, std::string title, std::vector<std::string> args, bool silent = false,
                          std::optional<git::cli::Credential> attempt = std::nullopt);
+        // Runs several `git` commands one after another in the background (stopping at the first failure); the
+        // result toast reports the last.
+        void run_git_cli_sequence(RepoState& state, std::string title, std::vector<std::vector<std::string>> runs);
+        // Writes the settings, the open tabs and the recent repositories (done again at exit).
+        void save_state() const;
         // Types `line` and Enter into the repository's active terminal (opening the panel and a shell if needed).
         void run_terminal_command(RepoState* state, const std::string& line);
         // The repository's terminal tabs (the shell starts when the panel first draws it).

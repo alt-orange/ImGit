@@ -390,12 +390,24 @@ namespace imgit::ui
                     a = b;
                 }
             };
+            constexpr std::size_t npos = std::string_view::npos;
             std::size_t i = 0;
+            // An unmatched marker: the rest is plain text.
+            const auto rest = [&]
+            {
+                words(markup.substr(i), base, {});
+                i = markup.size();
+            };
             while (i < markup.size())
             {
                 if (markup.compare(i, 2, "**") == 0)
                 {
                     const std::size_t close = markup.find("**", i + 2);
+                    if (close == npos)
+                    {
+                        rest();
+                        continue;
+                    }
                     words(markup.substr(i + 2, close - i - 2), Face::SEMIBOLD, {});
                     i = close + 2;
                     continue;
@@ -403,7 +415,12 @@ namespace imgit::ui
                 if (markup[i] == '[')
                 {
                     const std::size_t middle = markup.find("](", i);
-                    const std::size_t close = markup.find(')', middle);
+                    const std::size_t close = middle == npos ? npos : markup.find(')', middle);
+                    if (close == npos)
+                    {
+                        rest();
+                        continue;
+                    }
                     const std::size_t first = atoms.size();
                     words(markup.substr(i + 1, middle - i - 1), base, markup.substr(middle + 2, close - middle - 2));
                     atoms[first].lead = 3.f;
@@ -414,6 +431,11 @@ namespace imgit::ui
                 if (markup[i] == '`')
                 {
                     const std::size_t close = markup.find('`', i + 1);
+                    if (close == npos)
+                    {
+                        rest();
+                        continue;
+                    }
                     atoms.push_back({Atom::Kind::CODE, markup.substr(i + 1, close - i - 1), Face::MONO});
                     i = close + 1;
                     continue;
@@ -421,12 +443,17 @@ namespace imgit::ui
                 if (markup[i] == '{')
                 {
                     const std::size_t close = markup.find('}', i);
+                    if (close == npos)
+                    {
+                        rest();
+                        continue;
+                    }
                     atoms.push_back({Atom::Kind::WARNING});
                     i = close + 1;
                     continue;
                 }
                 std::size_t next = markup.find_first_of("*[`{", i + 1);
-                next = next == std::string_view::npos ? markup.size() : next;
+                next = next == npos ? markup.size() : next;
                 words(markup.substr(i, next - i), base, {});
                 i = next;
             }
@@ -2633,7 +2660,13 @@ namespace imgit::ui
             title(form, "LFS");
             form.contain();
             heading(form, "Initialize LFS", Face::REGULAR);
-            paragraph(form, "LFS has not been initialized on " + context(app).repo_name);
+            // Plain text, not markup: the repository's name may hold markup characters.
+            {
+                const float line_top = form.place(0.f);
+                text(page, form.left, line_top + leading(LABEL, 20.f), LABEL,
+                     "LFS has not been initialized on " + context(app).repo_name);
+                form.advance(line_top, 20.f, 10.f);
+            }
             const float top = form.place(0.f);
             if (button(page, "##init_lfs", form.left, top, "Initialize LFS on This Repo", Tone::SUCCESS))
             {

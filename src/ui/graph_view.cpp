@@ -1572,12 +1572,15 @@ namespace imgit::ui
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_RootWindow)
             && !ImGui::GetIO().WantTextInput && row_count > 0)
         {
+            const ImGuiIO& io = ImGui::GetIO();
+            // The letters alone: Ctrl+J / Ctrl+K toggle the panels.
+            const bool plain = !io.KeyCtrl && !io.KeyAlt && !io.KeySuper;
             int move = 0;
-            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_J))
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) || (plain && ImGui::IsKeyPressed(ImGuiKey_J)))
             {
                 move = 1;
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_K))
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || (plain && ImGui::IsKeyPressed(ImGuiKey_K)))
             {
                 move = -1;
             }
@@ -1593,17 +1596,21 @@ namespace imgit::ui
             }
             if (move != 0)
             {
+                // A Shift range grows from its moving end; `focused` stays its anchor.
+                const bool range = io.KeyShift;
+                const git::Sha& from = range && state.history.row_by_sha.contains(state.range_cursor)
+                                               ? state.range_cursor
+                                               : state.focused;
                 int index = 0;
-                if (const auto row = state.history.row_by_sha.find(state.focused);
-                    row != state.history.row_by_sha.end())
+                if (const auto row = state.history.row_by_sha.find(from); row != state.history.row_by_sha.end())
                 {
                     index = std::clamp(static_cast<int>(row->second) + move, 0, row_count - 1);
                 }
                 const git::Sha target = commits[static_cast<std::size_t>(index)].sha;
-                if (ImGui::GetIO().KeyShift)
+                if (range)
                 {
                     state.select(target, false, true);
-                    state.focused = target;
+                    state.range_cursor = target;
                 }
                 else
                 {

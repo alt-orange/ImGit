@@ -123,6 +123,11 @@ namespace imgit::graph
                         reserver_by_sha[parent] = info;
                     }
                 }
+                // A root commit ends its lane: nothing below carries it on, so the column is free again.
+                if (row.parents.empty())
+                {
+                    columns_used.erase(column);
+                }
                 return column;
             }
         };
