@@ -52,6 +52,10 @@ namespace
     {
         return;
     }
+    if ((window.styleMask & NSWindowStyleMaskFullScreen) != 0)
+    {
+        return; // nothing to move or zoom
+    }
     if (event.clickCount == 2)
     {
         // System Settings > Desktop & Dock > "Double-click a window's title bar to": Fill / Zoom, Minimize, or
@@ -74,7 +78,14 @@ namespace
 
 namespace
 {
+    NSWindow* g_window = nil;
+    NSToolbar* g_toolbar = nil; // held while full screen takes it off the window
     ImGitDragView* g_drag_view = nil;
+
+    bool full_screen()
+    {
+        return g_window != nil && (g_window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    }
 } // namespace
 
 namespace imgit::platform::detail
@@ -95,16 +106,29 @@ namespace imgit::platform::detail
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
         window.styleMask |= NSWindowStyleMaskFullSizeContentView;
-        NSToolbar* toolbar = [[NSToolbar alloc] initWithIdentifier:@"imgit.titlebar"];
-        toolbar.showsBaselineSeparator = NO;
+        g_window = window;
+        g_toolbar = [[NSToolbar alloc] initWithIdentifier:@"imgit.titlebar"];
+        g_toolbar.showsBaselineSeparator = NO;
         if (@available(macOS 11.0, *))
         {
             window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
         }
-        window.toolbar = toolbar;
-#if !__has_feature(objc_arc)
-        [toolbar release]; // the window holds it
-#endif
+        window.toolbar = g_toolbar;
+        // In full screen a toolbar stays as an opaque band over the top of the content (the tabs bar); the
+        // traffic lights are hidden there anyway, so the toolbar goes while it lasts.
+        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+        [center addObserverForName:NSWindowWillEnterFullScreenNotification
+                            object:window
+                             queue:nil
+                        usingBlock:^(NSNotification*) {
+                          window.toolbar = nil;
+                        }];
+        [center addObserverForName:NSWindowDidExitFullScreenNotification
+                            object:window
+                             queue:nil
+                        usingBlock:^(NSNotification*) {
+                          window.toolbar = g_toolbar;
+                        }];
         // The drag view spans the content view and follows its size; its region starts empty.
         NSView* content = window.contentView;
         if (content != nil && g_drag_view == nil)
@@ -114,6 +138,12 @@ namespace imgit::platform::detail
             g_drag_view.region = NSZeroRect;
             [content addSubview:g_drag_view];
         }
+    }
+
+    float title_bar_inset()
+    {
+        // The lights are hidden in full screen (they only slide in with the menu bar).
+        return full_screen() ? 0.f : 72.f;
     }
 
     void set_drag_region(float min_x, float min_y, float max_x, float max_y)

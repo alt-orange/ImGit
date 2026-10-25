@@ -23,6 +23,7 @@ namespace imgit::platform
         // window_mac.mm: the dark appearance whatever the system setting, and the title bar hidden under the
         // content (the traffic lights stay, over the tabs bar).
         void configure_window(void* ns_window);
+        float title_bar_inset();
         void set_drag_region(float min_x, float min_y, float max_x, float max_y);
     } // namespace detail
 #endif
@@ -59,7 +60,8 @@ namespace imgit::platform
     float title_bar_inset()
     {
 #ifdef __APPLE__
-        return 72.f; // the three traffic lights (inset as in a toolbar window, they end near 70) and a gap
+        // The three traffic lights (inset as in a toolbar window, they end near 70) and a gap; 0 in full screen.
+        return detail::title_bar_inset();
 #else
         return 0.f;
 #endif

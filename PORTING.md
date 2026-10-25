@@ -117,7 +117,9 @@ real build. What the port consists of:
   through `platform::set_title_bar_drag_region()` each frame; a transparent `ImGitDragView` over GLFW's content
   view hit-tests that region and starts `performWindowDragWithEvent:` from the press itself, or zooms / minimises
   on a double-click per `AppleActionOnDoubleClick`. (Handing AppKit a later "current event" from the ImGui frame
-  instead did nothing once the window had been tiled or zoomed.) The presses there never reach ImGui.
+  instead did nothing once the window had been tiled or zoomed.) The presses there never reach ImGui. In full
+  screen the toolbar is taken off the window (`NSWindowWillEnterFullScreenNotification`; macOS would keep it as
+  an opaque band over the tabs bar) and the inset is 0, the lights being hidden there.
 - **Menu bar.** `platform/app_menu.hpp`: on macOS (`app_menu_mac.mm`) the File / Edit / View / Help menus are
   NSMenus between the application menu and the Window menu GLFW creates, and the app draws no bar of its own
   (`has_native_menu_bar()`; the prompt bars and the minimum window height follow the viewport's work area).
