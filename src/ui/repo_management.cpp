@@ -5,6 +5,7 @@
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <future>
@@ -313,9 +314,13 @@ namespace imgit::ui
             std::sort(all.begin(), all.end(),
                       [](const std::string& a, const std::string& b)
                       {
+                          const auto lower = [](char c)
+                          {
+                              return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                          };
                           std::string la = repo_name(a), lb = repo_name(b);
-                          std::transform(la.begin(), la.end(), la.begin(), ::tolower);
-                          std::transform(lb.begin(), lb.end(), lb.begin(), ::tolower);
+                          std::transform(la.begin(), la.end(), la.begin(), lower);
+                          std::transform(lb.begin(), lb.end(), lb.begin(), lower);
                           return la < lb;
                       });
         }

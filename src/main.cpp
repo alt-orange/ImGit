@@ -691,8 +691,10 @@ int main(int argc, char** argv)
         {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         };
-        app.relaunch = [window]
+        app.relaunch = [&app, window]
         {
+            // Written now, not at exit: the new instance reads these files as soon as it starts.
+            app.save_state();
             imgit::platform::spawn_detached({imgit::platform::executable_path()});
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         };
@@ -707,7 +709,11 @@ int main(int argc, char** argv)
             glfwGetWindowPos(window, &saved[0], &saved[1]);
             glfwGetWindowSize(window, &saved[2], &saved[3]);
             GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            const GLFWvidmode* mode = monitor != nullptr ? glfwGetVideoMode(monitor) : nullptr;
+            if (mode == nullptr)
+            {
+                return; // no monitor to go full screen on (disconnected meanwhile)
+            }
             glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
         };
         imgit::ui::set_avatar_cache_directory(app.app_path("gravatars"));

@@ -260,8 +260,8 @@ namespace imgit::ui
             // The close cross (zmdi-close, 20px) 10px from the right.
             const ImVec2 cmin(origin.x + size.x - px(30.f), origin.y + px(7.5f));
             ImGui::SetCursorScreenPos(cmin);
-            if (ImGui::InvisibleButton("##close_diff", ImVec2(px(20.f), px(20.f)))
-                || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            // Escape closes it from the application's shortcuts, with their guards.
+            if (ImGui::InvisibleButton("##close_diff", ImVec2(px(20.f), px(20.f))))
             {
                 state.close_diff();
                 ImGui::EndChild();
@@ -397,7 +397,6 @@ namespace imgit::ui
                     {"##inline", nullptr, "far:list", "Inline View", 0.f},
                     {"##split", nullptr, "far:columns", "Split View", 0.f},
                     {"##whitespace", nullptr, "far:paragraph", "Show whitespace", 10.f},
-                    {"##wrap", nullptr, "fas:align-left", "Word wrap", 0.f},
             };
             float total = 0.f;
             for (const Button& button : buttons)
@@ -426,10 +425,6 @@ namespace imgit::ui
                 {
                     checked = state.diff_whitespace;
                 }
-                else if (id == "##wrap")
-                {
-                    checked = state.diff_wrap;
-                }
                 if (toggle_button(button.id, button.label, button.icon, ImVec2(x, bar_y), checked, button.tip))
                 {
                     if (id == "##hunk" || id == "##inline" || id == "##split")
@@ -443,10 +438,7 @@ namespace imgit::ui
                     else if (id == "##whitespace")
                     {
                         state.diff_whitespace = !state.diff_whitespace;
-                    }
-                    else if (id == "##wrap")
-                    {
-                        state.diff_wrap = !state.diff_wrap;
+                        state.reload_diff();
                     }
                     else if (id == "##prev")
                     {

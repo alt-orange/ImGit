@@ -2,6 +2,8 @@
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <chrono>
+#include <future>
+#include <thread>
 #include <unordered_map>
 
 namespace imgit::app
@@ -23,11 +25,49 @@ namespace imgit::app
             }
             return snapshot;
         }
+
+        // Whether two working directory listings show the same files in the same state.
+        bool same_changes(const std::vector<git::FileChange>& a, const std::vector<git::FileChange>& b)
+        {
+            return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                              [](const git::FileChange& x, const git::FileChange& y)
+                              {
+                                  return x.path == y.path && x.old_path == y.old_path && x.status == y.status
+                                         && x.additions == y.additions && x.deletions == y.deletions
+                                         && x.has_stats == y.has_stats;
+                              });
+        }
+
+        // A std::async future blocks its destructor until the task ends: a detached thread waits for it instead, so
+        // closing a tab during a slow status read or git command never stalls the UI thread.
+        template<class T>
+        void park(std::future<T>&& future)
+        {
+            if (!future.valid() || future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            {
+                return;
+            }
+            std::thread(
+                    [job = std::move(future)]() mutable
+                    {
+                        job.wait();
+                    })
+                    .detach();
+        }
     } // namespace
 
     RepoState::RepoState(git::Repository repository): repo(std::move(repository))
     {
         refresh();
+    }
+
+    RepoState::~RepoState()
+    {
+        park(std::move(m_status_job));
+        if (async)
+        {
+            park(std::move(async->future));
+        }
     }
 
     void RepoState::refresh()
@@ -133,7 +173,9 @@ namespace imgit::app
         }
         const bool had_wip = history.row_by_sha.contains(WIP_SHA);
         const bool has_wip = !snapshot.status->empty();
-        const bool changed = snapshot.status->count() != status.count();
+        const bool changed = !same_changes(snapshot.status->staged, status.staged)
+                             || !same_changes(snapshot.status->unstaged, status.unstaged)
+                             || !same_changes(snapshot.status->conflicted, status.conflicted);
         status = std::move(*snapshot.status);
         operation_state = snapshot.operation_state;
         if (had_wip != has_wip)
@@ -325,16 +367,17 @@ namespace imgit::app
         // The inline / split / file views show the whole file; the hunk view 3 lines of context.
         const int context = diff_mode == DiffMode::HUNK && !file_view ? 3 : 1 << 24;
         git::Result<git::FileDiff> loaded = std::unexpected(git::Error{});
+        const bool ignore_whitespace = !diff_whitespace;
         switch (diff_target->source)
         {
         case DiffTarget::Source::COMMIT:
-            loaded = repo.commit_file_diff(diff_target->sha, diff_target->path, context);
+            loaded = repo.commit_file_diff(diff_target->sha, diff_target->path, context, ignore_whitespace);
             break;
         case DiffTarget::Source::STAGED:
-            loaded = repo.workdir_file_diff(diff_target->path, true, context);
+            loaded = repo.workdir_file_diff(diff_target->path, true, context, ignore_whitespace);
             break;
         case DiffTarget::Source::UNSTAGED:
-            loaded = repo.workdir_file_diff(diff_target->path, false, context);
+            loaded = repo.workdir_file_diff(diff_target->path, false, context, ignore_whitespace);
             break;
         }
         if (!loaded)
@@ -352,6 +395,7 @@ namespace imgit::app
         if (!search_open || search_text.empty())
         {
             search_index = -1;
+            search_match_sha.clear();
             return;
         }
         for (std::size_t i = 0; i < history.commits.size(); ++i)
@@ -364,11 +408,30 @@ namespace imgit::app
                 search_matches.push_back(i);
             }
         }
-        search_index = search_matches.empty() ? -1 : 0;
-        if (search_index >= 0)
+        // The match the user is on survives a refresh (or a narrowing of the text): only a new match set moves
+        // the selection, to its first match.
+        search_index = -1;
+        if (!search_match_sha.empty())
         {
-            select_only(history.commits[search_matches[0]].sha);
-            scroll_to_row = search_matches[0];
+            for (std::size_t i = 0; i < search_matches.size(); ++i)
+            {
+                if (history.commits[search_matches[i]].sha == search_match_sha)
+                {
+                    search_index = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        if (search_index < 0)
+        {
+            search_match_sha.clear();
+            if (!search_matches.empty())
+            {
+                search_index = 0;
+                search_match_sha = history.commits[search_matches[0]].sha;
+                select_only(search_match_sha);
+                scroll_to_row = search_matches[0];
+            }
         }
     }
 
@@ -381,7 +444,8 @@ namespace imgit::app
         const int count = static_cast<int>(search_matches.size());
         search_index = ((search_index + direction) % count + count) % count;
         const std::size_t row = search_matches[static_cast<std::size_t>(search_index)];
-        select_only(history.commits[row].sha);
+        search_match_sha = history.commits[row].sha;
+        select_only(search_match_sha);
         scroll_to_row = row;
     }
 
@@ -430,6 +494,7 @@ namespace imgit::app
                 selected.push_back(sha);
             }
             focused = sha;
+            range_cursor.clear();
             return;
         }
         select_only(sha);
@@ -440,6 +505,7 @@ namespace imgit::app
         selected.assign(1, sha);
         m_selected_set = {sha};
         focused = sha;
+        range_cursor.clear();
     }
 
     bool RepoState::is_selected(const git::Sha& sha) const

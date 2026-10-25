@@ -123,7 +123,8 @@ namespace imgit::platform
         InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
         std::vector<unsigned char> list(list_size);
         startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list.data());
-        bool launched = InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &list_size)
+        const bool initialised = InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &list_size) != FALSE;
+        bool launched = initialised
                         && UpdateProcThreadAttribute(startup.lpAttributeList, 0, ATTRIBUTE_PSEUDOCONSOLE, impl->console,
                                                      sizeof(impl->console), nullptr, nullptr);
         if (launched)
@@ -136,7 +137,10 @@ namespace imgit::platform
                                       &impl->process)
                        != FALSE;
         }
-        DeleteProcThreadAttributeList(startup.lpAttributeList);
+        if (initialised)
+        {
+            DeleteProcThreadAttributeList(startup.lpAttributeList);
+        }
         // The console holds its own references to the pipe ends it was given.
         CloseHandle(console_input);
         CloseHandle(console_output);

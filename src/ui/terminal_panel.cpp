@@ -343,13 +343,17 @@ namespace imgit::ui
                 }
                 out += key_sequence(key, ctrl, shift, alt, session.screen.application_cursor_keys());
             }
-            if (!ctrl)
+            // Typed characters. Ctrl alone makes control sequences (above), not text, but Ctrl+Alt is AltGr on
+            // Windows, whose characters (@ { } [ ] \ | ~ on German, French or Nordic layouts) must reach the
+            // shell. Alt alone is Meta: ESC before an ASCII character; anything else (an Option-typed character
+            // on macOS) goes through as typed.
+            if (!ctrl || alt)
             {
                 for (const ImWchar ch : io.InputQueueCharacters)
                 {
                     if (ch >= 0x20 && ch != 0x7F)
                     {
-                        if (alt)
+                        if (alt && !ctrl && ch < 0x80)
                         {
                             out += '\x1b';
                         }

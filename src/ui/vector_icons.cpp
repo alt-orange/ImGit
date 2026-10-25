@@ -78,7 +78,8 @@ namespace imgit::ui
                         break;
                     }
                     const char c = m_data[m_pos];
-                    if (std::isalpha(static_cast<unsigned char>(c)) != 0)
+                    const bool letter = std::isalpha(static_cast<unsigned char>(c)) != 0;
+                    if (letter)
                     {
                         command = c;
                         ++m_pos;
@@ -87,9 +88,14 @@ namespace imgit::ui
                     {
                         break; // malformed
                     }
+                    const std::size_t before = m_pos;
                     if (!run(command))
                     {
                         break;
+                    }
+                    if (!letter && m_pos == before)
+                    {
+                        break; // a number after a command that takes none (Z): malformed, do not spin on it
                     }
                     // An implicit repeat of M is L.
                     if (command == 'M')

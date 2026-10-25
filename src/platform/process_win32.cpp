@@ -2,6 +2,7 @@
 #include "platform/win32_util.hpp"
 #include <array>
 #include <cwctype>
+#include <vector>
 
 namespace imgit::platform
 {
@@ -90,20 +91,44 @@ namespace imgit::platform
             SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0);
         }
 
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdOutput = write_pipe;
-        si.hStdError = write_pipe;
-        si.hStdInput = input_read;
+        STARTUPINFOEXW si{};
+        si.StartupInfo.cb = sizeof(si);
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdOutput = write_pipe;
+        si.StartupInfo.hStdError = write_pipe;
+        si.StartupInfo.hStdInput = input_read;
         PROCESS_INFORMATION pi{};
 
-        std::wstring command = win32::command_line(args);
-        const std::wstring directory = win32::widen(workdir);
-        std::wstring block = environment.empty() ? std::wstring() : environment_block(environment);
-        const BOOL ok = CreateProcessW(
-                nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-                block.empty() ? nullptr : block.data(), directory.empty() ? nullptr : directory.c_str(), &si, &pi);
+        // The child inherits only its own pipe ends. With bInheritHandles alone it would get every inheritable
+        // handle of this process, among them the pipes of a run_process on another thread (auto-fetch next to a
+        // user's fetch), whose read loop would then not see EOF until this child's tree has exited.
+        HANDLE inherited[2] = {write_pipe, input_read};
+        const SIZE_T inherited_count = input_read != nullptr ? 2 : 1;
+        SIZE_T list_size = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
+        std::vector<unsigned char> list(list_size);
+        si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list.data());
+        const bool initialised = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &list_size) != FALSE;
+        BOOL ok = FALSE;
+        if (initialised)
+        {
+            ok = UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                           inherited_count * sizeof(HANDLE), nullptr, nullptr);
+        }
+        if (ok)
+        {
+            std::wstring command = win32::command_line(args);
+            const std::wstring directory = win32::widen(workdir);
+            std::wstring block = environment.empty() ? std::wstring() : environment_block(environment);
+            ok = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
+                                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                                block.empty() ? nullptr : block.data(), directory.empty() ? nullptr : directory.c_str(),
+                                &si.StartupInfo, &pi);
+        }
+        if (initialised)
+        {
+            DeleteProcThreadAttributeList(si.lpAttributeList);
+        }
         CloseHandle(write_pipe);
         if (input_read != nullptr)
         {

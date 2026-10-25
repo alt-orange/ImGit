@@ -107,13 +107,19 @@ namespace imgit::git::cli
             }
         }
         command.insert(command.end(), args.begin(), args.end());
+        // git runs the askpass program through a shell, so a path with a space (C:\Program Files\...) is quoted.
+        std::string askpass = platform::executable_path();
+        if (!askpass.empty())
+        {
+            askpass = "\"" + askpass + "\"";
+        }
         // Never block on a terminal prompt or a credential helper's window: git asks ImGit (its credentials
         // prompt), and the helpers still answer with what they have stored.
         const platform::ProcessOutput process =
                 platform::run_process(workdir, command, input,
                                       {{"GIT_TERMINAL_PROMPT", "0"},
                                        {"GCM_INTERACTIVE", "never"},
-                                       {"GIT_ASKPASS", platform::executable_path()},
+                                       {"GIT_ASKPASS", askpass},
                                        {ASKPASS_MARKER, "1"},
                                        {CREDENTIALS_VARIABLE, encode(credentials)}});
         Output output{process.exit_code, process.text};

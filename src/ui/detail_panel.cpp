@@ -1263,7 +1263,8 @@ namespace imgit::ui
             const float panel_h = origin.y + size.y - header_top - px(36.f);
             const float max_h = panel_h - px(143.f + 50.f + 20.f) - (editing ? px(52.f) : 0.f);
             const float min_h = px(120.f);
-            float message_h = std::min(std::max(std::min(px(app.settings.commit_message_height), max_h), min_h), max_h);
+            // A short window may leave less than the minimum: the box keeps the minimum rather than going negative.
+            float message_h = std::clamp(px(app.settings.commit_message_height), min_h, std::max(min_h, max_h));
             {
                 const float cx = std::round(origin.x + width / 2.f);
                 const ImVec2 hmin(cx - px(50.f), box_top + message_h - px(9.f));
@@ -1303,7 +1304,7 @@ namespace imgit::ui
             else
             {
                 const ImVec2 bmin(left, box_top);
-                const ImVec2 bmax(right, box_top + message_h - px(17.f));
+                const ImVec2 bmax(right, std::max(bmin.y + 1.f, box_top + message_h - px(17.f)));
                 bool hovered = false;
                 if (amendable)
                 {

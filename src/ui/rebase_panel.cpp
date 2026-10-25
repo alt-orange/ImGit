@@ -91,6 +91,7 @@ namespace imgit::ui
         // The reword editor's summary / description, split from and joined into the step's message.
         struct RewordFields
         {
+            const app::RepoState* state = nullptr; // the tab the fields belong to: another tab's plan is not written
             int step = -1;
             std::string summary;
             std::string description;
@@ -101,6 +102,7 @@ namespace imgit::ui
         {
             app::RebasePlan& plan = state.rebase;
             plan.editing = step;
+            g_reword.state = &state;
             g_reword.step = step;
             const git::RebaseStep& s = plan.steps[static_cast<std::size_t>(step)];
             std::string message = s.message;
@@ -172,8 +174,9 @@ namespace imgit::ui
                                 IM_COL32(0, 0, 0, 70), px(2.f));
             draw->AddRectFilled(pos, max, theme::u32(p.panel_bg1), px(2.f));
 
-            const bool appearing = g_reword.step != step || ImGui::IsWindowAppearing();
-            if (g_reword.step != step)
+            const bool other = g_reword.state != &state || g_reword.step != step;
+            const bool appearing = other || ImGui::IsWindowAppearing();
+            if (other)
             {
                 open_reword(state, step);
             }
@@ -291,6 +294,7 @@ namespace imgit::ui
         const float rows_right = list_origin.x + ImGui::GetContentRegionAvail().x - px(PADDING);
         static int menu_step = -1;
         static ImVec2 menu_pos;
+        bool open_menu = false; // opened after the rows, at the ID stack level the popup is begun at
         ImVec2 editor_pos(-1.f, -1.f);
         for (int display = 0; display < count; ++display)
         {
@@ -335,7 +339,7 @@ namespace imgit::ui
                 select_step(state, i);
                 menu_step = i;
                 menu_pos = ImVec2(smin.x, smax.y + px(2.f));
-                ImGui::OpenPopup("##rebase_action_menu");
+                open_menu = true;
             }
             const ImVec4 border = step.action == git::RebaseAction::PICK ? p.green : (drop ? p.red : p.orange);
             rows->AddRectFilled(smin, smax, theme::u32(p.input_bg), px(4.f));
@@ -402,6 +406,10 @@ namespace imgit::ui
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, px(2.f)));
         ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, px(2.f));
         ImGui::PushStyleColor(ImGuiCol_PopupBg, p.panel_bg1);
+        if (open_menu)
+        {
+            ImGui::OpenPopup("##rebase_action_menu");
+        }
         if (ImGui::BeginPopup("##rebase_action_menu"))
         {
             for (int a = 0; a < 4; ++a)
@@ -436,20 +444,23 @@ namespace imgit::ui
             && !ImGui::IsPopupOpen("##rebase_action_menu"))
         {
             const int s = plan.selected;
-            const bool ctrl = ImGui::GetIO().KeyCtrl;
-            if (ImGui::IsKeyPressed(ImGuiKey_P))
+            const ImGuiIO& io = ImGui::GetIO();
+            const bool ctrl = io.KeyCtrl;
+            // The letters alone: Ctrl+P is the command palette, Ctrl+S / Ctrl+R / Ctrl+D other shortcuts.
+            const bool plain = !io.KeyCtrl && !io.KeyAlt && !io.KeySuper;
+            if (plain && ImGui::IsKeyPressed(ImGuiKey_P))
             {
                 set_action(state, s, git::RebaseAction::PICK);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_S))
+            if (plain && ImGui::IsKeyPressed(ImGuiKey_S))
             {
                 set_action(state, s, git::RebaseAction::SQUASH);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_R))
+            if (plain && ImGui::IsKeyPressed(ImGuiKey_R))
             {
                 set_action(state, s, git::RebaseAction::REWORD);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_D))
+            if (plain && ImGui::IsKeyPressed(ImGuiKey_D))
             {
                 set_action(state, s, git::RebaseAction::DROP);
             }

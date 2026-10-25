@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +43,14 @@ namespace imgit::app
                 std::filesystem::rename(legacy, directory, ec);
             }
             return directory;
+        }
+
+        // A float from a settings value; `fallback` for anything that is not a finite number (a hand-edited "nan"
+        // would otherwise poison the layout).
+        float finite_or(const std::string& value, float fallback)
+        {
+            const float parsed = static_cast<float>(std::atof(value.c_str()));
+            return std::isfinite(parsed) ? parsed : fallback;
         }
 
         std::string trim(std::string text)
@@ -151,7 +160,7 @@ namespace imgit::app
             }
             else if (key == "zoom")
             {
-                zoom = std::clamp(static_cast<float>(std::atof(value.c_str())), 0.5f, 2.f);
+                zoom = std::clamp(finite_or(value, zoom), 0.5f, 2.f);
             }
             else if (key == "theme")
             {
@@ -167,19 +176,19 @@ namespace imgit::app
             }
             else if (key == "left_panel_width")
             {
-                left_panel_width = static_cast<float>(std::atof(value.c_str()));
+                left_panel_width = finite_or(value, left_panel_width);
             }
             else if (key == "detail_panel_width")
             {
-                detail_panel_width = static_cast<float>(std::atof(value.c_str()));
+                detail_panel_width = finite_or(value, detail_panel_width);
             }
             else if (key == "terminal_height")
             {
-                terminal_height = static_cast<float>(std::atof(value.c_str()));
+                terminal_height = finite_or(value, terminal_height);
             }
             else if (key == "commit_message_height")
             {
-                commit_message_height = static_cast<float>(std::atof(value.c_str()));
+                commit_message_height = finite_or(value, commit_message_height);
             }
             else if (key == "graph_column_widths")
             {
@@ -190,8 +199,7 @@ namespace imgit::app
                 {
                     if (const auto colon = column.find(':'); colon != std::string::npos)
                     {
-                        graph_column_widths[column.substr(0, colon)] =
-                                static_cast<float>(std::atof(column.c_str() + colon + 1));
+                        graph_column_widths[column.substr(0, colon)] = finite_or(column.substr(colon + 1), 0.f);
                     }
                 }
             }
@@ -213,7 +221,7 @@ namespace imgit::app
 
     void Settings::save(const std::string& path) const
     {
-        std::ofstream file(path);
+        std::ostringstream file;
         std::string hidden_sections;
         for (const std::string& section : hidden_left_sections)
         {
@@ -221,16 +229,20 @@ namespace imgit::app
         }
         file << "hidden_left_sections=" << hidden_sections << '\n';
         file << "pull_mode=" << pull_mode << '\n';
-        std::string columns;
-        for (const auto& [zone, width] : graph_column_widths)
-        {
-            columns += (columns.empty() ? "" : ",") + zone + ":" + std::to_string(width);
-        }
         file << "left_panel_width=" << left_panel_width << '\n'
              << "detail_panel_width=" << detail_panel_width << '\n'
              << "terminal_height=" << terminal_height << '\n'
              << "commit_message_height=" << commit_message_height << '\n'
-             << "graph_column_widths=" << columns << '\n';
+             << "graph_column_widths=";
+        // Through the stream, not std::to_string: the latter follows the C locale, and a decimal comma would split
+        // the list.
+        const char* separator = "";
+        for (const auto& [zone, width] : graph_column_widths)
+        {
+            file << separator << zone << ':' << width;
+            separator = ",";
+        }
+        file << '\n';
         file << "auto_fetch_minutes=" << auto_fetch_minutes << '\n'
              << "initial_commits=" << initial_commits << '\n'
              << "show_toolbar_labels=" << show_toolbar_labels << '\n'
@@ -248,6 +260,7 @@ namespace imgit::app
              << "zoom=" << zoom << '\n'
              << "theme=" << theme << '\n'
              << "default_branch=" << default_branch << '\n';
+        (void)write_text_file(path, file.str());
     }
 
     Application::Application()
@@ -262,11 +275,17 @@ namespace imgit::app
 
     Application::~Application()
     {
+        save_state();
+    }
+
+    void Application::save_state() const
+    {
         settings.save(config_path("settings.txt"));
         if (settings.remember_tabs)
         {
             save_tabs();
         }
+        save_recent();
     }
 
     std::string Application::config_path(const char* file) const
@@ -447,7 +466,13 @@ namespace imgit::app
         {
             return;
         }
-        closed_tabs.push_back(tabs[static_cast<std::size_t>(index)]->repo.workdir());
+        const std::string workdir = tabs[static_cast<std::size_t>(index)]->repo.workdir();
+        closed_tabs.push_back(workdir);
+        // A dialog opened for this repository (its on_confirm may hold the tab) goes with it.
+        if (dialog.kind != Dialog::Kind::NONE && dialog.workdir == workdir)
+        {
+            dialog.close();
+        }
         tabs.erase(tabs.begin() + index);
         // New Tab (-1) stays where it is; a repository tab right of the closed one keeps
         // showing the same repository.
@@ -556,6 +581,27 @@ namespace imgit::app
                                      silent, std::move(args), std::move(attempt)};
     }
 
+    void Application::run_git_cli_sequence(RepoState& state, std::string title,
+                                           std::vector<std::vector<std::string>> runs)
+    {
+        if (runs.empty())
+        {
+            return;
+        }
+        if (state.async)
+        {
+            toasts.push(ToastKind::INFO, "Please wait", state.async->title + " is still running");
+            return;
+        }
+        std::vector<std::string> first = std::move(runs.front());
+        runs.erase(runs.begin());
+        run_git_cli(state, std::move(title), std::move(first));
+        if (state.async)
+        {
+            state.async->queued = std::move(runs);
+        }
+    }
+
     void Application::start_clone(std::string parent, std::string url, std::string destination,
                                   std::optional<git::cli::Credential> attempt)
     {
@@ -651,9 +697,11 @@ namespace imgit::app
 
     void Application::kill_terminals(RepoState* state)
     {
-        const auto kill = [this, state]
+        // By working directory: the confirmation outlives this frame, and the tab may be gone by then.
+        const auto kill = [this, workdir = state != nullptr ? state->repo.workdir()
+                                                            : std::filesystem::current_path().string()]
         {
-            terminal_tabs(state).sessions.clear();
+            terminal.repos[workdir].sessions.clear();
             show_terminal_panel = false;
         };
         const std::size_t count = terminal_tabs(state).sessions.size();
@@ -684,8 +732,15 @@ namespace imgit::app
         terminal.minimized = false;
         TerminalSession* session = active_terminal(state);
         session->scroll = 0;
-        // Before the shell has started the keystrokes wait in the console's input pipe.
-        session->pending_input += line + "\r";
+        if (session->started)
+        {
+            session->console.write(line + "\r");
+        }
+        else
+        {
+            // Before the shell has started the keystrokes wait in the console's input pipe.
+            session->pending_input += line + "\r";
+        }
     }
 
     void Application::undo(RepoState& state)
@@ -776,10 +831,24 @@ namespace imgit::app
             const bool silent = tab->async->silent;
             std::vector<std::string> args = std::move(tab->async->args);
             const std::optional<git::cli::Credential> attempt = std::move(tab->async->attempt);
+            std::vector<std::vector<std::string>> queued = std::move(tab->async->queued);
             tab->async.reset();
             if (output.exit_code == 0 && attempt)
             {
                 keep_credential(*attempt);
+            }
+            // The next command of a sequence; the toast waits for the last one.
+            if (output.exit_code == 0 && !queued.empty())
+            {
+                std::vector<std::string> next = std::move(queued.front());
+                queued.erase(queued.begin());
+                run_git_cli(*tab, title, std::move(next), silent, attempt);
+                if (tab->async)
+                {
+                    tab->async->queued = std::move(queued);
+                }
+                tab->refresh();
+                continue;
             }
             // Refused for want of credentials: ImGit asks for them and runs the command again.
             if (output.exit_code != 0 && !silent
@@ -840,7 +909,10 @@ namespace imgit::app
                                     upstream.empty() ? "No merge necessary."
                                                      : "No merge necessary. Branch " + upstream + " was not moved.");
                     }
-                    toasts.push(ToastKind::SUCCESS, "Pulled Successfully");
+                    else
+                    {
+                        toasts.push(ToastKind::SUCCESS, "Pulled Successfully");
+                    }
                 }
                 else if (title == "Push")
                 {
@@ -1331,8 +1403,8 @@ namespace imgit::app
 
     ui::MenuItems Application::bar_menu(int index)
     {
-        // The application menu, with its labels and accelerators.
-        RepoState* state = active();
+        // The application menu, with its labels and accelerators. The items outlive this frame (the menu stays open),
+        // so they look the active tab up when clicked instead of keeping a pointer to it.
         const auto item =
                 [](const char* label, const char* accelerator, std::function<void()> click, bool enabled = true)
         {
@@ -1406,25 +1478,25 @@ namespace imgit::app
                               repo_management_open = true;
                           }),
                      item("Open Repo in External &Editor", "Ctrl+Shift+E",
-                          [state]
+                          [this]
                           {
-                              if (state != nullptr)
+                              if (const RepoState* state = active(); state != nullptr)
                               {
                                   platform::shell::open_in_editor(state->repo.workdir());
                               }
                           })},
                     {item("Open External &Terminal", "Alt+T",
-                          [state]
+                          [this]
                           {
-                              if (state != nullptr)
+                              if (const RepoState* state = active(); state != nullptr)
                               {
                                   platform::shell::open_external_terminal(state->repo.workdir());
                               }
                           }),
                      item("Open in File Manager", "Alt+O",
-                          [state]
+                          [this]
                           {
-                              if (state != nullptr)
+                              if (const RepoState* state = active(); state != nullptr)
                               {
                                   platform::shell::open_in_file_manager(state->repo.workdir());
                               }
@@ -1452,17 +1524,17 @@ namespace imgit::app
         case 1:
             return ui::separated_menu({
                     {item("&Undo", "Ctrl+Z",
-                          [this, state]
+                          [this]
                           {
-                              if (state != nullptr)
+                              if (RepoState* state = active(); state != nullptr)
                               {
                                   undo(*state);
                               }
                           }),
                      item("&Redo", "Ctrl+Y",
-                          [this, state]
+                          [this]
                           {
-                              if (state != nullptr)
+                              if (RepoState* state = active(); state != nullptr)
                               {
                                   redo(*state);
                               }
@@ -1882,7 +1954,8 @@ namespace imgit::app
         while (std::getline(file, line))
         {
             line = trim(line);
-            if (!line.empty() && std::filesystem::exists(line))
+            std::error_code ec;
+            if (!line.empty() && std::filesystem::exists(line, ec))
             {
                 recent_repos.push_back(line);
             }
@@ -1891,21 +1964,23 @@ namespace imgit::app
 
     void Application::save_recent() const
     {
-        std::ofstream file(config_path("recent.txt"));
+        std::string text;
         for (const std::string& path : recent_repos)
         {
-            file << path << '\n';
+            text += path + '\n';
         }
+        (void)write_text_file(config_path("recent.txt"), text);
     }
 
     void Application::save_tabs() const
     {
-        std::ofstream file(config_path("tabs.txt"));
+        std::string text;
         for (const auto& tab : tabs)
         {
-            file << tab->repo.workdir() << '\n';
+            text += tab->repo.workdir() + '\n';
         }
-        file << "#active=" << active_tab << '\n';
+        text += "#active=" + std::to_string(active_tab) + '\n';
+        (void)write_text_file(config_path("tabs.txt"), text);
     }
 
     void Application::restore_tabs()
@@ -1920,7 +1995,7 @@ namespace imgit::app
             {
                 wanted = std::atoi(line.c_str() + 8);
             }
-            else if (!line.empty() && std::filesystem::exists(line))
+            else if (std::error_code ec; !line.empty() && std::filesystem::exists(line, ec))
             {
                 open_repository(line);
             }

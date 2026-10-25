@@ -67,6 +67,18 @@ namespace imgit::ui
             return text;
         }
 
+        // Without the spaces an author's email sometimes carries around it.
+        std::string trim(const std::string& text)
+        {
+            const std::size_t begin = text.find_first_not_of(" \t\r\n");
+            if (begin == std::string::npos)
+            {
+                return {};
+            }
+            const std::size_t end = text.find_last_not_of(" \t\r\n");
+            return text.substr(begin, end - begin + 1);
+        }
+
         // GETs `url` into `file` (through a temporary name, so a cut-off download is never taken for an image).
         bool download(const std::string& url, const std::filesystem::path& file)
         {
@@ -116,7 +128,7 @@ namespace imgit::ui
         {
             Entry result;
             result.state = State::FAILED;
-            const std::string hash = app::md5_hex(lowercase(request.email));
+            const std::string hash = app::md5_hex(lowercase(trim(request.email)));
             if (!g_cache_dir.empty())
             {
                 std::error_code error;
@@ -136,6 +148,11 @@ namespace imgit::ui
                     result.height = image->height;
                     result.rgba = std::move(image->rgba);
                     result.state = State::DECODED;
+                }
+                else if (have)
+                {
+                    // A file that does not decode (a bad download) goes: the next request downloads it again.
+                    std::filesystem::remove(file, error);
                 }
             }
             std::lock_guard lock(g_mutex);

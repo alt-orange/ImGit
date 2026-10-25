@@ -79,9 +79,16 @@ namespace imgit::ui
             return item.type != MenuItem::Type::SEPARATOR && item.enabled;
         }
 
+        // A label as shown: '&' marks the mnemonic in the menu bar's menus; a context menu (its labels built from
+        // branch, tag and file names) shows it as it is.
+        std::string menu_text(const std::string& label)
+        {
+            return g_bar.index >= 0 ? strip_mnemonic(label) : label;
+        }
+
         float label_width(const std::string& label)
         {
-            const std::string text = strip_mnemonic(label);
+            const std::string text = menu_text(label);
             return text_size(fonts().system, FONT_SIZE, text.c_str()).x;
         }
 
@@ -351,8 +358,8 @@ namespace imgit::ui
             }
             else
             {
-                // Mnemonics: the underlined letter of an item activates it.
-                for (int key = ImGuiKey_A; key <= ImGuiKey_Z; ++key)
+                // Mnemonics (menu bar menus only): the underlined letter of an item activates it.
+                for (int key = ImGuiKey_A; key <= ImGuiKey_Z && g_bar.index >= 0; ++key)
                 {
                     if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false))
                     {
@@ -540,9 +547,9 @@ namespace imgit::ui
         void draw_label(ImDrawList* draw, ImVec2 pos, ImU32 color, const std::string& label, bool underline)
         {
             ImFont* font = fonts().system;
-            const std::string text = strip_mnemonic(label);
+            const std::string text = menu_text(label);
             draw_text(draw, font, FONT_SIZE, pos, color, text.c_str());
-            if (!underline)
+            if (!underline || g_bar.index < 0)
             {
                 return;
             }
@@ -714,6 +721,7 @@ namespace imgit::ui
     void popup_bar_menu(MenuItems items, int bar_index, ImVec2 button_min, ImVec2 button_max, bool keyboard)
     {
         close_menus();
+        g_bar = {bar_index, button_min, button_max}; // before the layout: it measures the labels without their '&'
         Level level;
         level.items = std::move(items);
         layout(level);
@@ -724,7 +732,6 @@ namespace imgit::ui
             move_hot(level, 1);
         }
         g_levels.push_back(std::move(level));
-        g_bar = {bar_index, button_min, button_max};
         g_keyboard = keyboard;
         g_take_focus = true;
         g_opened_frame = ImGui::GetFrameCount();

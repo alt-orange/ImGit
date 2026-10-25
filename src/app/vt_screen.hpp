@@ -165,6 +165,8 @@ namespace imgit::app
         void switch_alternate(bool enable, bool save_restore);
         void reset();
         [[nodiscard]] int param(std::size_t index, int fallback) const;
+        // Whether parameter `index` followed a ':' (a sub-parameter of the one before it, as in 4:3 or 38:2:r:g:b).
+        [[nodiscard]] bool sub_param(std::size_t index) const;
         void trim_scrollback();
 
         int m_columns;
@@ -197,7 +199,9 @@ namespace imgit::app
 
         State m_state = State::GROUND;
         std::vector<int> m_params;
+        std::vector<bool> m_sub_params; // parallel to m_params: introduced by ':' rather than ';'
         bool m_param_started = false;
+        bool m_next_sub_param = false; // the last separator was ':'
         char m_private = 0; // '?', '>', '<', '=' before the parameters
         std::string m_intermediates;
         std::string m_osc;

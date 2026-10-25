@@ -213,6 +213,14 @@ void main()
         const GLuint fs = compile(FRAGMENT_SHADER, FRAGMENT_SOURCE);
         if (vs == 0 || fs == 0)
         {
+            if (vs != 0)
+            {
+                gl.DeleteShader(vs);
+            }
+            if (fs != 0)
+            {
+                gl.DeleteShader(fs);
+            }
             return false;
         }
         g_program = gl.CreateProgram();

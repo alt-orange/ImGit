@@ -227,6 +227,9 @@ namespace imgit::ui
             app::RepoState* state;
             float row_width;
             bool refresh_needed = false;
+            // A double-clicked ref, checked out once the tree walk is over: the checkout refreshes the state,
+            // which frees the refs the walk reads.
+            std::optional<git::Ref> checkout_request;
         };
 
         void set_hidden(Context& ctx, const std::vector<const git::Ref*>& refs, bool hidden)
@@ -529,7 +532,7 @@ namespace imgit::ui
                     }
                     else if (row.double_clicked)
                     {
-                        checkout_ref(app, state, ref);
+                        ctx.checkout_request = ref;
                     }
                     else if (row.clicked)
                     {
@@ -1157,6 +1160,10 @@ namespace imgit::ui
         if (ctx.refresh_needed)
         {
             state.refresh();
+        }
+        if (ctx.checkout_request)
+        {
+            checkout_ref(app, state, *ctx.checkout_request);
         }
     }
 } // namespace imgit::ui

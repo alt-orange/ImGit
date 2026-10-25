@@ -102,9 +102,18 @@ namespace imgit::gfx
             {
                 return false;
             }
+            // The face type comes from the file: a CFF .otf or a .ttc collection is not DWRITE_FONT_FACE_TYPE_TRUETYPE.
+            BOOL supported = FALSE;
+            DWRITE_FONT_FILE_TYPE file_type = DWRITE_FONT_FILE_TYPE_UNKNOWN;
+            DWRITE_FONT_FACE_TYPE face_type = DWRITE_FONT_FACE_TYPE_UNKNOWN;
+            UINT32 face_count = 0;
+            if (FAILED(file->Analyze(&supported, &file_type, &face_type, &face_count)) || !supported)
+            {
+                file->Release();
+                return false;
+            }
             auto* data = IM_NEW(SourceData)();
-            const HRESULT created = g_factory->CreateFontFace(DWRITE_FONT_FACE_TYPE_TRUETYPE, 1, &file,
-                                                              static_cast<UINT32>(src->FontNo),
+            const HRESULT created = g_factory->CreateFontFace(face_type, 1, &file, static_cast<UINT32>(src->FontNo),
                                                               DWRITE_FONT_SIMULATIONS_NONE, &data->face);
             file->Release();
             if (FAILED(created))

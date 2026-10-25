@@ -1,5 +1,6 @@
 #include "platform/shell.hpp"
 #include "platform/window.hpp"
+#include <clocale>
 #include <filesystem>
 #include <nfd.h>
 
@@ -31,6 +32,9 @@ namespace imgit::platform::shell
             {
                 return std::nullopt;
             }
+            // The GTK backend's NFD_Init calls setlocale(LC_ALL, ""), after which std::atof / std::strtof /
+            // std::to_string elsewhere in the app would read and print decimals with the user's separator.
+            std::setlocale(LC_NUMERIC, "C");
             std::optional<std::string> result;
             nfdu8char_t* path = nullptr;
             if (show(&path) == NFD_OKAY && path != nullptr)

@@ -7,6 +7,10 @@
 
 namespace imgit::app
 {
+    // Replaces `path` with `text` through a temporary file next to it, so a crash or a full disk never leaves the
+    // file empty; false when it could not be written.
+    bool write_text_file(const std::filesystem::path& path, const std::string& text);
+
     // A profile: a name and the commit author, with its own preferences, tabs and repository
     // lists (the files in its directory).
     struct Profile

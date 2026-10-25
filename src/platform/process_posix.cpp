@@ -2,8 +2,10 @@
 #include <array>
 #include <cerrno>
 #include <climits>
+#include <csignal>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <thread>
@@ -67,6 +69,24 @@ namespace imgit::platform
             return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         }
 
+        // A pipe with both ends close-on-exec from the start: a child spawned meanwhile from another thread, or by
+        // the child itself (a daemonized `git gc --auto`), must not keep an end open, or the read loop never sees
+        // EOF. The child's own copies come from dup2 onto 0 / 1 / 2, which clears the flag.
+        bool open_pipe(int (&fd)[2])
+        {
+#ifdef __linux__
+            return pipe2(fd, O_CLOEXEC) == 0;
+#else
+            if (pipe(fd) != 0)
+            {
+                return false;
+            }
+            fcntl(fd[0], F_SETFD, FD_CLOEXEC);
+            fcntl(fd[1], F_SETFD, FD_CLOEXEC);
+            return true;
+#endif
+        }
+
         // posix_spawnp in `workdir` with the given stdin / stdout / stderr descriptors (-1 leaves one inherited);
         // 0 when it could not start.
         pid_t spawn(const std::string& workdir, std::vector<std::string> args, const Environment& environment, int in,
@@ -104,6 +124,13 @@ namespace imgit::platform
     ProcessOutput run_process(const std::string& workdir, const std::vector<std::string>& args,
                               const std::string& input, const Environment& environment)
     {
+        // A GUI app has no use for SIGPIPE's default action (ending the process): a child that exits before
+        // reading all of its input makes write() fail with EPIPE instead.
+        [[maybe_unused]] static const bool sigpipe_ignored = []
+        {
+            std::signal(SIGPIPE, SIG_IGN);
+            return true;
+        }();
         ProcessOutput result;
         if (args.empty())
         {
@@ -111,19 +138,19 @@ namespace imgit::platform
         }
         int output[2] = {-1, -1};
         int feed[2] = {-1, -1};
-        if (pipe(output) != 0)
+        if (!open_pipe(output))
         {
             return result;
         }
-        if (pipe(feed) != 0)
+        if (!open_pipe(feed))
         {
             close(output[0]);
             close(output[1]);
             return result;
         }
-        // Our ends must not leak into other children spawned meanwhile.
-        fcntl(output[0], F_SETFD, FD_CLOEXEC);
-        fcntl(feed[1], F_SETFD, FD_CLOEXEC);
+        // Our end of the stdin pipe is non-blocking: a blocking write of more than the pipe holds returns only once
+        // the child has read all of it, even after poll() said there was room, so the loop below could not read.
+        fcntl(feed[1], F_SETFL, O_NONBLOCK);
         const pid_t pid = spawn(workdir, args, environment, feed[0], output[1], {output[0], feed[1]});
         close(output[1]);
         close(feed[0]);
@@ -134,37 +161,61 @@ namespace imgit::platform
             return result;
         }
         result.started = true;
-        // The commands fed this way (rev-list --stdin) read all of their input before writing anything.
-        for (std::size_t written = 0; written < input.size();)
-        {
-            const ssize_t count = write(feed[1], input.data() + written, input.size() - written);
-            if (count < 0 && errno == EINTR)
-            {
-                continue;
-            }
-            if (count <= 0)
-            {
-                break;
-            }
-            written += static_cast<std::size_t>(count);
-        }
-        close(feed[1]);
-
+        // The input is fed while the output is drained: writing it all first deadlocks on a child that fills the
+        // output pipe before it has read its input, and a child that exits early leaves the rest unread (EPIPE).
+        std::size_t written = 0;
         std::array<char, 4096> buffer{};
-        while (true)
+        while (output[0] >= 0 || feed[1] >= 0)
         {
-            const ssize_t count = read(output[0], buffer.data(), buffer.size());
-            if (count < 0 && errno == EINTR)
+            if (feed[1] >= 0 && written == input.size())
             {
-                continue;
+                close(feed[1]);
+                feed[1] = -1;
             }
-            if (count <= 0)
+            pollfd fds[2] = {{output[0], POLLIN, 0}, {feed[1], POLLOUT, 0}}; // a -1 descriptor is ignored
+            if (poll(fds, 2, -1) < 0)
             {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
                 break;
             }
-            result.text.append(buffer.data(), static_cast<std::size_t>(count));
+            if (fds[1].revents != 0)
+            {
+                const ssize_t count = write(feed[1], input.data() + written, input.size() - written);
+                if (count > 0)
+                {
+                    written += static_cast<std::size_t>(count);
+                }
+                else if (count < 0 && errno != EINTR && errno != EAGAIN)
+                {
+                    close(feed[1]);
+                    feed[1] = -1;
+                }
+            }
+            if (fds[0].revents != 0)
+            {
+                const ssize_t count = read(output[0], buffer.data(), buffer.size());
+                if (count > 0)
+                {
+                    result.text.append(buffer.data(), static_cast<std::size_t>(count));
+                }
+                else if (count == 0 || (errno != EINTR && errno != EAGAIN))
+                {
+                    close(output[0]);
+                    output[0] = -1;
+                }
+            }
         }
-        close(output[0]);
+        if (feed[1] >= 0)
+        {
+            close(feed[1]);
+        }
+        if (output[0] >= 0)
+        {
+            close(output[0]);
+        }
         result.exit_code = wait_for(pid);
         return result;
     }

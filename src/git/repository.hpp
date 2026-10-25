@@ -7,6 +7,7 @@
 #include <vector>
 
 struct git_repository;
+struct git_signature;
 
 namespace imgit::git
 {
@@ -63,11 +64,12 @@ namespace imgit::git
         // Fills additions / deletions of `changes` (matched by path) from the given diff source.
         [[nodiscard]] Result<void> fill_stats(std::vector<FileChange>& changes, StatsSource source,
                                               const Sha& sha) const;
-        // `context_lines` around each change; a huge value yields the whole file as one hunk.
+        // `context_lines` around each change; a huge value yields the whole file as one hunk. `ignore_whitespace`
+        // leaves out changes in whitespace only (GIT_DIFF_IGNORE_WHITESPACE).
         [[nodiscard]] Result<FileDiff> commit_file_diff(const Sha& sha, const std::string& path,
-                                                        int context_lines = 3) const;
+                                                        int context_lines = 3, bool ignore_whitespace = false) const;
         [[nodiscard]] Result<FileDiff> workdir_file_diff(const std::string& path, bool staged,
-                                                         int context_lines = 3) const;
+                                                         int context_lines = 3, bool ignore_whitespace = false) const;
         [[nodiscard]] Result<Author> default_author() const;
         [[nodiscard]] Result<std::string> head_commit_message() const;
 
@@ -128,7 +130,10 @@ namespace imgit::git
         [[nodiscard]] Result<void> rewrite_history(const Sha& base, const std::vector<RebaseStep>& steps) const;
 
         // Stashes
-        [[nodiscard]] Result<void> stash_push(const std::string& message) const;
+        // Returns the new stash's commit sha (stash@{0}).
+        [[nodiscard]] Result<Sha> stash_push(const std::string& message) const;
+        // The current index of the stash with that commit sha, -1 when it is gone.
+        [[nodiscard]] int stash_index_of(const Sha& sha) const;
         [[nodiscard]] Result<void> stash_apply(int index) const;
         [[nodiscard]] Result<void> stash_pop(int index) const;
         [[nodiscard]] Result<void> stash_drop(int index) const;
@@ -141,9 +146,11 @@ namespace imgit::git
 
         explicit Repository(git_repository* repo);
 
+        // `author` (name, email and date) when it is not the committer: the original author of a commit replayed.
         [[nodiscard]] Result<Sha> commit_index(const std::string& message, const std::vector<Sha>& parents,
-                                               const Author* author) const;
-        [[nodiscard]] Result<bool> finish_sequencer_commit(const std::string& message, const Author* author) const;
+                                               const git_signature* author) const;
+        [[nodiscard]] Result<bool> finish_sequencer_commit(const std::string& message,
+                                                           const git_signature* author) const;
 
         std::unique_ptr<git_repository, Deleter> m_repo;
         std::string m_workdir;
