@@ -30,8 +30,6 @@ namespace imgit::ui
                 return "Create Branch";
             case app::Dialog::Kind::CREATE_TAG:
                 return "Create Tag";
-            case app::Dialog::Kind::STASH:
-                return "Stash Changes";
             case app::Dialog::Kind::RENAME_BRANCH:
                 return "Rename Branch";
             case app::Dialog::Kind::DELETE_BRANCH:
@@ -1285,56 +1283,6 @@ namespace imgit::ui
             if (buttons("Create Tag", !d.text_a.empty() && (!d.flag || !d.text_b.empty()), false, false) || submitted)
             {
                 create_tag_at(app, *state, d.text_a, d.sha, d.flag ? d.text_b : "");
-                ImGui::CloseCurrentPopup();
-            }
-            break;
-        }
-        case app::Dialog::Kind::STASH:
-        {
-            if (ImGui::IsWindowAppearing())
-            {
-                ImGui::SetKeyboardFocusHere();
-            }
-            const bool submitted = input_text("##stash_message", d.text_a, "Stash message (optional)",
-                                              ImGuiInputTextFlags_EnterReturnsTrue);
-            if (buttons("Stash", true, false, false) || submitted)
-            {
-                const std::string message = d.text_a;
-                git::Sha stash_sha;
-                if (app.run(
-                            *state, "Stash",
-                            [&]
-                            {
-                                git::Result<git::Sha> pushed = state->repo.stash_push(message);
-                                if (pushed)
-                                {
-                                    stash_sha = *pushed;
-                                }
-                                return pushed;
-                            },
-                            "Changes stashed"))
-                {
-                    // The undo finds the stash by its commit: one pushed since shifts the indexes.
-                    state->push_undo({"stash",
-                                      [repo, stash_sha]() -> git::Result<void>
-                                      {
-                                          const int index = repo->stash_index_of(stash_sha);
-                                          if (index < 0)
-                                          {
-                                              return std::unexpected(git::Error{"the stash is gone"});
-                                          }
-                                          return repo->stash_pop(index);
-                                      },
-                                      [repo, message]() -> git::Result<void>
-                                      {
-                                          const git::Result<git::Sha> pushed = repo->stash_push(message);
-                                          if (!pushed)
-                                          {
-                                              return std::unexpected(pushed.error());
-                                          }
-                                          return {};
-                                      }});
-                }
                 ImGui::CloseCurrentPopup();
             }
             break;

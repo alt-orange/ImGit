@@ -553,7 +553,8 @@ namespace imgit::ui
         };
 
         void message_input(app::Application& app, std::string& summary, std::string& description, ImVec2 bmin,
-                           ImVec2 bmax, const char* summary_id, const char* description_id, SummaryFocus focus)
+                           ImVec2 bmax, const char* summary_id, const char* description_id, SummaryFocus focus,
+                           const char* summary_hint = "Commit summary", bool counter_shown = true)
         {
             const theme::Palette& p = theme::palette();
             ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -571,7 +572,7 @@ namespace imgit::ui
             ImGui::PushStyleColor(ImGuiCol_Text, p.text_normal);
             const int remaining = 72 - static_cast<int>(summary.size());
             const std::string counter = std::to_string(remaining);
-            const float counter_w = text_size(fonts().regular, 16.f, counter.c_str()).x;
+            const float counter_w = counter_shown ? text_size(fonts().regular, 16.f, counter.c_str()).x : 0.f;
             const float counter_x = bmax.x - px(10.f) - counter_w;
 
             // Summary: an input with 10px padding inside a 1px transparent border.
@@ -604,10 +605,13 @@ namespace imgit::ui
             if (summary.empty())
             {
                 css_text(draw, 16.f, ImVec2(smin.x + px(11.f), text_box), theme::u32(p.text_secondary),
-                         "Commit summary");
+                         summary_hint);
             }
-            css_text(draw, 16.f, ImVec2(counter_x, bmin.y + px(13.08f)),
-                     theme::u32(remaining < 0 ? p.orange : p.text_disabled), counter.c_str());
+            if (counter_shown)
+            {
+                css_text(draw, 16.f, ImVec2(counter_x, bmin.y + px(13.08f)),
+                         theme::u32(remaining < 0 ? p.orange : p.text_disabled), counter.c_str());
+            }
             // Description: a textarea with 5px 10px padding.
             const ImVec2 dmin(bmin.x + 1.f, bmin.y + px(38.f));
             ImGui::SetCursorScreenPos(dmin);
@@ -644,6 +648,53 @@ namespace imgit::ui
             css_text(draw, 12.f, ImVec2(std::round((min.x + max.x - text_w) / 2.f), min.y + px(7.f)),
                      theme::u32(p.text_normal), label);
             return clicked;
+        }
+
+        // The composer's Stash tab: a title and description over the stash button, which takes every change
+        // (the .btn-success of the commit button, 50% opacity while there is nothing to stash).
+        void draw_stash_form(app::Application& app, app::RepoState& state, ImVec2 origin, float width, float c)
+        {
+            const theme::Palette& p = theme::palette();
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            message_input(app, state.stash_summary, state.stash_description, ImVec2(origin.x + px(11.f), c + px(55.f)),
+                          ImVec2(origin.x + width - px(11.f), c + px(55.f + 185.f)), "##stash_summary",
+                          "##stash_description", SummaryFocus::NONE, "Stash title", false);
+
+            const bool enabled = !state.status.empty() && !state.history.head_sha.empty();
+            const char* label = enabled ? "Stash all changes" : "Stage Changes to Stash";
+            const ImVec2 bmin(origin.x + px(11.f), c + px(260.f));
+            const ImVec2 bmax(origin.x + width - px(11.f), bmin.y + px(40.f));
+            ImGui::SetCursorScreenPos(bmin);
+            const bool pressed = ImGui::InvisibleButton("##stash", ImVec2(bmax.x - bmin.x, bmax.y - bmin.y)) && enabled;
+            const bool hovered = ImGui::IsItemHovered() && enabled;
+            if (ImGui::IsItemHovered() && !enabled)
+            {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+            }
+            const float alpha = enabled ? 1.f : 0.5f;
+            draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.green, (hovered ? 0.3f : 0.2f) * alpha)),
+                                px(2.f));
+            draw->AddRect(bmin, bmax, theme::u32(theme::with_alpha(p.green, alpha)), px(2.f), 0, 1.f);
+            const float text_w = text_size(fonts().semibold, 12.f, label).x;
+            const float content = px(15.f + 5.f) + text_w;
+            const float x = bmin.x + (bmax.x - bmin.x - content) / 2.f;
+            const ImU32 color = theme::u32(theme::with_alpha(p.text_normal, p.text_normal.w * alpha));
+            draw_fa_icon(draw, "far:inbox-in", ImVec2(x + px(7.5f), bmin.y + px(20.f)), px(12.f), color);
+            css_text(draw, 12.f, ImVec2(x + px(20.f), bmin.y + px(11.42f)), color, label, fonts().semibold);
+
+            if (pressed || (enabled && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Enter)))
+            {
+                std::string message = state.stash_summary;
+                if (!state.stash_description.empty())
+                {
+                    message += "\n\n" + state.stash_description;
+                }
+                if (stash_changes(app, state, message))
+                {
+                    state.stash_summary.clear();
+                    state.stash_description.clear();
+                }
+            }
         }
 
         void draw_wip_panel(app::Application& app, app::RepoState& state, ImVec2 size)
@@ -838,32 +889,65 @@ namespace imgit::ui
                 draw->AddRectFilled(ImVec2(cx - px(50.f), c), ImVec2(cx + px(50.f), c + px(4.f)),
                                     theme::u32(p.section_border), px(4.f));
             }
-            // Tabs: the active "Commit" tab is boxed on three sides; the rest of the row is underlined.
+            // Tabs (Commit | Stash): the active tab shows its label and is boxed on three sides, the other is
+            // its icon alone; the rest of the row is underlined.
             {
                 const float top = c + px(10.f);
                 const float h = px(31.f);
-                const float tab_r = origin.x + px(106.3f);
+                const float row_l = origin.x + px(10.f);
+                const float row_r = origin.x + width - px(10.f);
                 const ImU32 border = theme::u32(p.section_border);
-                draw->AddRectFilled(ImVec2(origin.x + px(10.f), top), ImVec2(tab_r, top + 1.f), border);
-                draw->AddRectFilled(ImVec2(origin.x + px(10.f), top), ImVec2(origin.x + px(11.f), top + h), border);
-                draw->AddRectFilled(ImVec2(tab_r - 1.f, top), ImVec2(tab_r, top + h), border);
-                draw->AddRectFilled(ImVec2(tab_r, top + h - 1.f), ImVec2(origin.x + width - px(10.f), top + h), border);
-                draw_fa_icon(draw, "far:code-commit", ImVec2(origin.x + px(29.75f), top + px(16.f)), px(14.f),
-                             theme::u32(p.text_selected));
-                css_text(draw, 14.f, ImVec2(origin.x + px(43.5f), top + px(6.f)), theme::u32(p.text_selected),
-                         "Commit");
-                ImGui::SetCursorScreenPos(ImVec2(origin.x + px(113.f), top));
-                if (ImGui::InvisibleButton("##tab_stash", ImVec2(px(31.f), h - 1.f)))
+                struct Tab
                 {
-                    app.dialog.open(app::Dialog::Kind::STASH);
-                }
-                const bool stash_hovered = ImGui::IsItemHovered();
-                if (stash_hovered)
+                    const char* id;
+                    const char* icon;
+                    const char* label;
+                    bool stash;
+                };
+                const Tab tabs[] = {{"##tab_commit", "far:code-commit", "Commit", false},
+                                    {"##tab_stash", "far:inbox-in", "Stash", true}};
+                float x = row_l;
+                float active_l = row_l;
+                float active_r = row_l;
+                for (const Tab& tab : tabs)
                 {
-                    tooltip("Stash");
+                    const bool active = tab.stash == state.composer_stash;
+                    const float label_w = active ? text_size(fonts().regular, 14.f, tab.label).x : 0.f;
+                    const float w = active ? px(33.5f) + label_w + px(13.f) : px(31.f);
+                    ImGui::SetCursorScreenPos(ImVec2(x, top));
+                    if (ImGui::InvisibleButton(tab.id, ImVec2(w, h - 1.f)) && !active)
+                    {
+                        state.composer_stash = tab.stash;
+                    }
+                    const bool hovered = ImGui::IsItemHovered();
+                    if (hovered && !active)
+                    {
+                        tooltip(tab.label);
+                    }
+                    const ImU32 color = theme::u32(active || hovered ? p.text_selected : p.text_secondary);
+                    if (active)
+                    {
+                        active_l = x;
+                        active_r = x + w;
+                        draw->AddRectFilled(ImVec2(x, top), ImVec2(x + w, top + 1.f), border);
+                        draw->AddRectFilled(ImVec2(x, top), ImVec2(x + 1.f, top + h), border);
+                        draw->AddRectFilled(ImVec2(x + w - 1.f, top), ImVec2(x + w, top + h), border);
+                        draw_fa_icon(draw, tab.icon, ImVec2(x + px(19.75f), top + px(16.f)), px(14.f), color);
+                        css_text(draw, 14.f, ImVec2(x + px(33.5f), top + px(6.f)), color, tab.label);
+                    }
+                    else
+                    {
+                        draw_fa_icon(draw, tab.icon, ImVec2(x + px(15.5f), top + px(15.f)), px(14.f), color);
+                    }
+                    x += w + px(6.7f);
                 }
-                draw_fa_icon(draw, "far:inbox-in", ImVec2(origin.x + px(125.05f), top + px(15.f)), px(14.f),
-                             theme::u32(stash_hovered ? p.text_selected : p.text_secondary));
+                draw->AddRectFilled(ImVec2(row_l, top + h - 1.f), ImVec2(active_l, top + h), border);
+                draw->AddRectFilled(ImVec2(active_r, top + h - 1.f), ImVec2(row_r, top + h), border);
+            }
+            if (state.composer_stash)
+            {
+                draw_stash_form(app, state, origin, width, c);
+                return;
             }
             // Amend previous commit
             if (small_checkbox("##amend", "Amend previous commit", &state.amend, ImVec2(origin.x + px(11.f), c + px(55.f)),
@@ -1606,6 +1690,48 @@ namespace imgit::ui
             ImGui::EndChild();
         }
     } // namespace
+
+    bool stash_changes(app::Application& app, app::RepoState& state, const std::string& message)
+    {
+        git::Sha stash_sha;
+        if (!app.run(
+                    state, "Stash",
+                    [&]
+                    {
+                        git::Result<git::Sha> pushed = state.repo.stash_push(message);
+                        if (pushed)
+                        {
+                            stash_sha = *pushed;
+                        }
+                        return pushed;
+                    },
+                    "Changes stashed"))
+        {
+            return false;
+        }
+        // The undo finds the stash by its commit: one pushed since shifts the indexes.
+        git::Repository* repo = &state.repo;
+        state.push_undo({"stash",
+                         [repo, stash_sha]() -> git::Result<void>
+                         {
+                             const int index = repo->stash_index_of(stash_sha);
+                             if (index < 0)
+                             {
+                                 return std::unexpected(git::Error{"the stash is gone"});
+                             }
+                             return repo->stash_pop(index);
+                         },
+                         [repo, message]() -> git::Result<void>
+                         {
+                             const git::Result<git::Sha> pushed = repo->stash_push(message);
+                             if (!pushed)
+                             {
+                                 return std::unexpected(pushed.error());
+                             }
+                             return {};
+                         }});
+        return true;
+    }
 
     void draw_detail_panel(app::Application& app, app::RepoState& state, ImVec2 size)
     {

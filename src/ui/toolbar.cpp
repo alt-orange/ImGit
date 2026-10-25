@@ -509,42 +509,7 @@ namespace imgit::ui
                          "Stash all changes")
                     .clicked)
         {
-            git::Sha stash_sha;
-            if (app.run(
-                        state, "Stash",
-                        [&]
-                        {
-                            git::Result<git::Sha> pushed = state.repo.stash_push("");
-                            if (pushed)
-                            {
-                                stash_sha = *pushed;
-                            }
-                            return pushed;
-                        },
-                        "Changes stashed"))
-            {
-                // The undo finds the stash by its commit: one pushed since shifts the indexes.
-                git::Repository* repo = &state.repo;
-                state.push_undo({"stash",
-                                 [repo, stash_sha]() -> git::Result<void>
-                                 {
-                                     const int index = repo->stash_index_of(stash_sha);
-                                     if (index < 0)
-                                     {
-                                         return std::unexpected(git::Error{"the stash is gone"});
-                                     }
-                                     return repo->stash_pop(index);
-                                 },
-                                 [repo]() -> git::Result<void>
-                                 {
-                                     const git::Result<git::Sha> pushed = repo->stash_push("");
-                                     if (!pushed)
-                                     {
-                                         return std::unexpected(pushed.error());
-                                     }
-                                     return {};
-                                 }});
-            }
+            stash_changes(app, state, "");
         }
         if (toolbar_item(app, "##pop", {Icon::POP}, "Pop", has_stash, false, "Pop the most recent stash").clicked)
         {

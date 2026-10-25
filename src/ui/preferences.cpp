@@ -2774,7 +2774,7 @@ namespace imgit::ui
             if (selected || hovered)
             {
                 box(page, 0.f, top, page.width, 45.7f,
-                    {selected ? ImVec4(BLUE.x, BLUE.y, BLUE.z, 0.2f) : theme::palette().hover_row});
+                    {selected ? theme::palette().selected_row : theme::palette().hover_row});
             }
             const ImVec4 color = selected || hovered ? white(1.f) : white(0.6f);
             icon(page, entry.icon, 30.f, top + 13.25f, 22.5f, 18.f, 18.f, color);

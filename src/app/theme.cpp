@@ -89,7 +89,8 @@ namespace imgit::theme
             return from_hsl(hsl, c.w);
         }
 
-        // What a theme changes: its background (the rest of the surfaces are lighter steps of it) and its accent.
+        // What a theme changes: its background (the rest of the surfaces are lighter steps of it) and its accent. A
+        // theme with `exact` replaces the derived surfaces and text colours with its own afterwards.
         struct ThemeSpec
         {
             const char* name;
@@ -100,7 +101,45 @@ namespace imgit::theme
             unsigned avatar; // the default avatar disc
             unsigned prompt; // the terminal's repository name
             int first_lane; // the lane colour the graph starts with, so its first lane matches the accent
+            void (*exact)(Palette&) = nullptr;
         };
+
+        // The colours of Claude Code Desktop's dark theme, as it draws them: the window, its darker sidebar, the
+        // neutral grey hover and selection rows, its text ramp and the diff backgrounds of its code preview.
+        void claude_code_palette(Palette& p) noexcept
+        {
+            p.blue = rgb(0x2776D0); // the toggles
+
+            // The chrome is as dark as the content: the title bar and sidebar one step darker than the window,
+            // the toolbar the window itself, and only inputs, popovers and dropdowns a step lighter.
+            p.app_bg0 = rgb(0x151515);
+            p.toolbar_bg0 = rgb(0x101010); // the tabs bar
+            p.toolbar_bg1 = rgb(0x151515); // the toolbar
+            p.toolbar_bg2 = rgb(0x1F1F1F); // popovers
+            p.panel_bg0 = rgb(0x101010); // the sidebar
+            p.panel_bg1 = rgb(0x1A1A18); // the preferences sidebar, popups, toasts
+            p.panel_bg2 = rgb(0x1F1F1F); // dropdowns, segmented controls
+            p.input_bg = rgb(0x1F1F1F); // the prompt box
+            p.panel_border = rgb(0x2F2F2F);
+            p.section_border = rgb(0x2C2D2A);
+            p.subtle_border = rgb(0x222222);
+
+            p.text_selected = rgb(0xEEEEEC);
+            p.text_normal = rgb(0xC2C3C0);
+            p.text_secondary = rgb(0x8B8B89);
+            p.text_disabled = rgb(0x626260);
+            p.text_dimmed = rgb(0x414141);
+
+            p.hover_row = rgb(0x2F2F2F);
+            p.selected_row = rgb(0x414141);
+            p.added_line = rgb(0x253B24);
+            p.deleted_line = rgb(0x452524);
+            p.hunk_header = rgb(0x1A1A18);
+            p.scroll_thumb = rgb(0x464646);
+            p.toggle_border = rgb(0x464644);
+            p.terminal_bg = rgb(0x101010);
+            p.terminal_fg = rgb(0xC2C3C0);
+        }
 
         constexpr ThemeSpec THEMES[] = {
                 {"ImGit Dark", 0x1E1C1A, 0xF28C28, 0xFFAE5C, 0xFFBE7D, 0xC2661D, 0xFFAE5C, 0},
@@ -108,10 +147,12 @@ namespace imgit::theme
                 {"Midnight Teal", 0x121518, 0x1FB5A3, 0x4FD8C8, 0x86E0D5, 0x167F73, 0x4FD8C8, 4},
                 {"Amethyst", 0x1D1B24, 0x9B6BFF, 0xC59BFF, 0xC6AEF7, 0x6B46B5, 0xC59BFF, 7},
                 {"Rose", 0x211C1F, 0xE5486C, 0xFF8FA8, 0xF7A8B9, 0xAD3450, 0xFF8FA8, 9},
+                // Claude Code Desktop's dark theme: its terracotta accent over its own greys (claude_code_palette).
+                {"Claude Code", 0x151515, 0xD97757, 0xD97757, 0xD97757, 0x444444, 0xD97757, 0, claude_code_palette},
         };
 
         constexpr const char* THEME_NAMES[] = {THEMES[0].name, THEMES[1].name, THEMES[2].name, THEMES[3].name,
-                                               THEMES[4].name};
+                                               THEMES[4].name, THEMES[5].name};
         static_assert(std::size(THEME_NAMES) == std::size(THEMES));
 
         Palette build_palette(const ThemeSpec& theme) noexcept
@@ -178,6 +219,10 @@ namespace imgit::theme
             p.terminal_fg = rgb(0xDCDCDC);
             p.terminal_prompt = rgb(theme.prompt);
             p.terminal_red = rgb(0xF0716A);
+            if (theme.exact != nullptr)
+            {
+                theme.exact(p);
+            }
             return p;
         }
     } // namespace

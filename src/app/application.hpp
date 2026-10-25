@@ -63,7 +63,6 @@ namespace imgit::app
             INIT_REPO,
             CREATE_BRANCH,
             CREATE_TAG,
-            STASH,
             RENAME_BRANCH,
             DELETE_BRANCH,
             DELETE_TAG,

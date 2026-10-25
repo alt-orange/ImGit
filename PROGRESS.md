@@ -29,7 +29,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Zoom (Ctrl+= / Ctrl+- / Ctrl+0) | ✅ | |
 | Panels open and close at once; dialog / palette fade, toolbar hover fade | ✅ | |
 | Panel resize: left panel 215–800, detail panel 353–(window − 687), terminal; col-resize cursor; sizes saved | ✅ | |
-| Themes | ✅ | ImGit Dark (orange accent, the default), Ocean, Midnight Teal, Amethyst, Rose: Preferences → UI Customization or Ctrl+P → Switch Theme, applied at once |
+| Themes | ✅ | ImGit Dark (orange accent, the default), Ocean, Midnight Teal, Amethyst, Rose, Claude Code: Preferences → UI Customization or Ctrl+P → Switch Theme, applied at once |
 | Light theme, custom themes | ⬜ | Text colours are still white-based in places |
 | Remember tabs, recent repositories | ✅ | |
 
