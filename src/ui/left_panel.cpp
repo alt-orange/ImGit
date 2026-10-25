@@ -963,6 +963,15 @@ namespace imgit::ui
         TreeNode local, remote, tags;
         std::vector<const git::Ref*> stashes;
         std::size_t local_count = 0, remote_count = 0, tag_count = 0;
+        // Every configured remote gets its row, also one with nothing fetched yet (its branches fill it in).
+        for (const git::Remote& r : state.history.remotes)
+        {
+            // (A name with '/' is left to its branches: the tree splits ref names there.)
+            if (r.name.find('/') == std::string::npos && (!filtering || contains_ci(r.name, state.left_filter)))
+            {
+                remote.children.push_back(TreeNode{r.name, "remote:" + r.name, nullptr, {}});
+            }
+        }
         for (const git::Ref& ref : state.history.refs)
         {
             if (filtering && !contains_ci(ref.name, state.left_filter) && !contains_ci(ref.message, state.left_filter))

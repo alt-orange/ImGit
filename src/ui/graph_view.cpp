@@ -1970,7 +1970,7 @@ namespace imgit::ui
                     }
                 }
                 // A popover item over this row keeps its own zone (else this row's ghost refs would replace it).
-                if (zone_window_hovered && !g_drag.active && hovered_zone_now.empty() && mouse.x >= z.ref_x - px(3.f)
+                if (window_hovered && !g_drag.active && hovered_zone_now.empty() && mouse.x >= z.ref_x - px(3.f)
                     && mouse.x < z.ref_x + z.ref_w - px(3.f) && mouse.y >= y0 && mouse.y < y0 + row_h
                     && (!shown_groups.empty()))
                 {
