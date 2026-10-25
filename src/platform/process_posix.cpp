@@ -123,7 +123,7 @@ namespace imgit::platform
     } // namespace
 
     ProcessOutput run_process(const std::string& workdir, const std::vector<std::string>& args,
-                              const std::string& input, const Environment& environment)
+                              const std::string& input, const Environment& environment, const OutputSink& on_output)
     {
         // A GUI app has no use for SIGPIPE's default action (ending the process): a child that exits before
         // reading all of its input makes write() fail with EPIPE instead.
@@ -201,6 +201,10 @@ namespace imgit::platform
                 if (count > 0)
                 {
                     result.text.append(buffer.data(), static_cast<std::size_t>(count));
+                    if (on_output)
+                    {
+                        on_output(std::string_view(buffer.data(), static_cast<std::size_t>(count)));
+                    }
                 }
                 else if (count == 0 || (errno != EINTR && errno != EAGAIN))
                 {

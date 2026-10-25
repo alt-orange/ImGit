@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -205,7 +206,13 @@ namespace imgit::app
         std::vector<std::string> recent_repos;
         void save_recent() const;
 
-        // `git clone` in flight; the destination opens as a tab when it finishes.
+        // `git clone` in flight; the destination opens as a tab when it finishes. Its progress is written by the
+        // clone's thread and read by the Clone dialog's progress bar.
+        struct SharedCloneProgress
+        {
+            std::mutex mutex;
+            git::cli::CloneProgress progress;
+        };
         struct PendingClone
         {
             std::future<git::cli::Output> future;
@@ -213,10 +220,13 @@ namespace imgit::app
             std::string parent;
             std::string url;
             std::optional<git::cli::Credential> attempt;
+            std::shared_ptr<SharedCloneProgress> progress;
         };
         std::optional<PendingClone> pending_clone;
         void start_clone(std::string parent, std::string url, std::string destination,
                          std::optional<git::cli::Credential> attempt = std::nullopt);
+        // A snapshot of the running clone's progress (empty when none runs).
+        [[nodiscard]] git::cli::CloneProgress clone_progress() const;
 
         // The credentials prompt: a git command refused for want of a username / password waits here for the
         // user, then `retry` runs it again with what they entered.

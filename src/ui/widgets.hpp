@@ -64,6 +64,9 @@ namespace imgit::ui
     // Whether a transition was still under way in the last frame (the main loop then keeps drawing at the display
     // rate instead of waiting for input).
     [[nodiscard]] bool animating() noexcept;
+    // Keeps the main loop drawing at the display rate for the next frame: for an animation that is not a smooth()
+    // transition (the toasts' slides, a progress bar fed from another thread).
+    void keep_animating() noexcept;
 
     // Text drawn with `font` at logical `size`, clipped with an ellipsis to `max_width` device px.
     // Returns the width used.

@@ -609,15 +609,31 @@ namespace imgit::app
                                   std::optional<git::cli::Credential> attempt)
     {
         std::vector<git::cli::Credential> credentials_for_run = credentials_with(credentials, attempt);
+        auto progress = std::make_shared<SharedCloneProgress>();
         std::future<git::cli::Output> future =
                 std::async(std::launch::async,
-                           [parent, url, destination, credentials_for_run = std::move(credentials_for_run)]
+                           [parent, url, destination, credentials_for_run = std::move(credentials_for_run), progress]
                            {
                                return git::cli::run(parent, {"clone", "--progress", url, destination}, {},
-                                                    credentials_for_run);
+                                                    credentials_for_run,
+                                                    [progress](std::string_view chunk)
+                                                    {
+                                                        const std::lock_guard lock(progress->mutex);
+                                                        git::cli::feed_clone_progress(progress->progress, chunk);
+                                                    });
                            });
         pending_clone = PendingClone{std::move(future), std::move(destination), std::move(parent), std::move(url),
-                                     std::move(attempt)};
+                                     std::move(attempt), std::move(progress)};
+    }
+
+    git::cli::CloneProgress Application::clone_progress() const
+    {
+        if (!pending_clone)
+        {
+            return {};
+        }
+        const std::lock_guard lock(pending_clone->progress->mutex);
+        return pending_clone->progress->progress;
     }
 
     bool Application::prompt_for_credentials(const std::string& output,

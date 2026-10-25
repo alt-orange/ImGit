@@ -65,7 +65,7 @@ namespace imgit::platform
     } // namespace
 
     ProcessOutput run_process(const std::string& workdir, const std::vector<std::string>& args,
-                              const std::string& input, const Environment& environment)
+                              const std::string& input, const Environment& environment, const OutputSink& on_output)
     {
         ProcessOutput result;
         SECURITY_ATTRIBUTES sa{};
@@ -157,6 +157,10 @@ namespace imgit::platform
         while (ReadFile(read_pipe, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) && read > 0)
         {
             result.text.append(buffer.data(), read);
+            if (on_output)
+            {
+                on_output(std::string_view(buffer.data(), read));
+            }
         }
         CloseHandle(read_pipe);
         WaitForSingleObject(pi.hProcess, INFINITE);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,7 +42,9 @@ namespace imgit::app
             ToastKind kind;
             std::string title;
             std::string detail;
+            double shown_at; // ImGui time: the slide in starts here
             double expires_at;
+            std::optional<double> hidden_at; // the slide out started (expired or dismissed)
         };
         std::vector<Toast> m_toasts;
         std::vector<Entry> m_history; // newest first

@@ -294,6 +294,11 @@ namespace imgit::ui
         return g_animating_frame >= 0 && g_animating_frame >= ImGui::GetFrameCount() - 1;
     }
 
+    void keep_animating() noexcept
+    {
+        g_animating_frame = ImGui::GetFrameCount();
+    }
+
     float smooth(const char* id, bool on, float seconds)
     {
         Transition& transition = g_transitions[ImGui::GetID(id)];
