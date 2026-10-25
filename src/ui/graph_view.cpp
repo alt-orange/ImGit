@@ -1662,6 +1662,10 @@ namespace imgit::ui
         bool show_more = false;
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const bool window_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+        // A pressed pill is the active item: the ref zone stays hovered through it, so a double click lands on the
+        // popover it was aimed at.
+        const bool zone_window_hovered =
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         const bool searching = state.search_open && !state.search_text.empty();
         std::unordered_set<std::size_t> search_rows(state.search_matches.begin(), state.search_matches.end());
         // .dimmed-row: rows that miss the hovered ref group (or, while Ctrl is held, the selected commit's first
@@ -1750,7 +1754,7 @@ namespace imgit::ui
                     context_ref = *group.refs.front();
                     open_ref_menu = true;
                 }
-                if (window_hovered && mouse.x >= z.ref_x && mouse.x < z.ref_x + width && mouse.y >= top
+                if (zone_window_hovered && mouse.x >= z.ref_x && mouse.x < z.ref_x + width && mouse.y >= top
                     && mouse.y < top + px(theme::REF_ZONE_TEXT_HEIGHT))
                 {
                     hovered_zone_now = hovered_zone_sha;
@@ -1965,7 +1969,8 @@ namespace imgit::ui
                         }
                     }
                 }
-                if (window_hovered && !g_drag.active && mouse.x >= z.ref_x - px(3.f)
+                // A popover item over this row keeps its own zone (else this row's ghost refs would replace it).
+                if (zone_window_hovered && !g_drag.active && hovered_zone_now.empty() && mouse.x >= z.ref_x - px(3.f)
                     && mouse.x < z.ref_x + z.ref_w - px(3.f) && mouse.y >= y0 && mouse.y < y0 + row_h
                     && (!shown_groups.empty()))
                 {
