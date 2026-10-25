@@ -207,15 +207,15 @@ namespace imgit::ui
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
 
-        // The menu: #1C1E23, 20% white border, 4px radius, 0 6px 12px rgba(0,0,0,.4).
+        // The menu: the theme's darkest surface (#1C1E23 in ImGit's, toolbar-bg0 as the prompt bar's react-select
+        // menu), 20% white border, 4px radius, 0 6px 12px rgba(0,0,0,.4).
         const ImVec2 menu_min(origin.x, origin.y + px(36.f));
         const ImVec2 menu_max(origin.x + px(330.f), menu_min.y + px(menu_h));
         draw_box_shadow(draw, menu_min, menu_max, ImVec2(0.f, px(6.f)), px(12.f), 0.f, ImVec4(0.f, 0.f, 0.f, 0.4f),
                         px(4.f));
         draw->AddRectFilled(menu_min, menu_max, theme::u32(DIVIDER), px(4.f));
-        const ImVec4 menu_bg(28 / 255.f, 30 / 255.f, 35 / 255.f, 1.f);
         draw->AddRectFilled(ImVec2(menu_min.x + 1.f, menu_min.y + 1.f), ImVec2(menu_max.x - 1.f, menu_max.y - 1.f),
-                            theme::u32(menu_bg), px(3.f));
+                            theme::u32(theme::palette().toolbar_bg0), px(3.f));
         // "OPEN TABS": 10.5px, weight 500, uppercase, #999.
         text_at(draw, fonts().regular, 10.5f, menu_min, 13.f, 13.f, 15.f, IM_COL32(153, 153, 153, 255), "OPEN TABS");
 
@@ -460,9 +460,8 @@ namespace imgit::ui
             draw_box_shadow(draw, menu_min, menu_max, ImVec2(0.f, px(6.f)), px(12.f), 0.f, ImVec4(0.f, 0.f, 0.f, 0.4f),
                             px(4.f));
             draw->AddRectFilled(menu_min, menu_max, theme::u32(DIVIDER), px(4.f));
-            const ImVec4 menu_bg(28 / 255.f, 30 / 255.f, 35 / 255.f, 1.f);
             draw->AddRectFilled(ImVec2(menu_min.x + 1.f, menu_min.y + 1.f), ImVec2(menu_max.x - 1.f, menu_max.y - 1.f),
-                                theme::u32(menu_bg), px(3.f));
+                                theme::u32(theme::palette().toolbar_bg0), px(3.f));
             for (int i = 0; i < 3; ++i)
             {
                 const ImVec2 row_min(menu_min.x + 1.f, menu_min.y + px(4.f + 37.f * static_cast<float>(i)));
