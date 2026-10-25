@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1247,6 +1248,39 @@ namespace imgit::ui
             return true;
         }
 
+        // The timeline bucket of a commit `age` seconds old, on format_relative's steps: 0 within the hour, then
+        // rising with each hour, "yesterday", day, week, month and year it reads.
+        int timeline_bucket(std::int64_t age)
+        {
+            constexpr std::int64_t HOUR = 3600;
+            constexpr std::int64_t DAY = 86400;
+            if (age < HOUR)
+            {
+                return 0;
+            }
+            if (age < DAY)
+            {
+                return static_cast<int>(age / HOUR); // 1..23
+            }
+            if (age < DAY * 2)
+            {
+                return 24; // yesterday
+            }
+            if (age < DAY * 7)
+            {
+                return 23 + static_cast<int>(age / DAY); // 25..29
+            }
+            if (age < DAY * 30)
+            {
+                return 29 + static_cast<int>(age / (DAY * 7)); // 30..33
+            }
+            if (age < DAY * 365)
+            {
+                return 33 + static_cast<int>(age / (DAY * 30)); // 34..45
+            }
+            return 45 + static_cast<int>(std::min<std::int64_t>(age / (DAY * 365), 1000));
+        }
+
         // A graph header cell: ".fs-1 .ml1 .font-monospace" in text-disabled, a 1px section border on its left.
         void header_cell(ImDrawList* draw, float x, float w, float y, float h, const char* label, bool border)
         {
@@ -1773,6 +1807,36 @@ namespace imgit::ui
         popover_layer.SetCurrentChannel(rows_draw, 0);
         ImGui::SetCursorScreenPos(rows_origin);
 
+        // Timeline markers: the first row past each age step ("1 hour ago", "2 hours ago", "yesterday"...) gets a
+        // line along its top edge and the age in a label at the rows' right end. Rows out of date order never step
+        // back.
+        struct TimelineMarker
+        {
+            int row;
+            std::string label;
+        };
+        std::vector<TimelineMarker> timeline;
+        {
+            const std::int64_t now =
+                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+            int reached = 0;
+            for (int i = 0; i < row_count; ++i)
+            {
+                const git::Commit& commit = commits[static_cast<std::size_t>(i)];
+                if (commit.type == git::NodeType::WORK_DIR)
+                {
+                    continue;
+                }
+                const int bucket = timeline_bucket(std::max<std::int64_t>(0, now - commit.time));
+                if (bucket > reached)
+                {
+                    reached = bucket;
+                    timeline.push_back({i, format_relative(commit.time)});
+                }
+            }
+        }
+
         ImGuiListClipper clipper;
         clipper.Begin(row_count + (state.history.has_more ? 1 : 0), row_h);
         while (clipper.Step())
@@ -2181,6 +2245,36 @@ namespace imgit::ui
             }
         }
         clipper.End();
+        // Over the rows, under the ref zone's popover.
+        popover_layer.SetCurrentChannel(rows_draw, 0);
+        {
+            const float visible_top = ImGui::GetWindowPos().y;
+            const float visible_bottom = visible_top + ImGui::GetWindowHeight();
+            const float rows_right = origin.x + size.x - scrollbar;
+            const float label_h = px(12.f);
+            for (const TimelineMarker& marker : timeline)
+            {
+                const float y = std::round(rows_origin_y + static_cast<float>(marker.row) * row_h);
+                if (y + label_h < visible_top || y - label_h > visible_bottom)
+                {
+                    continue;
+                }
+                // The first row has no row above to part from, and its label stays inside the rows.
+                if (marker.row > 0)
+                {
+                    rows_draw->AddLine(ImVec2(origin.x, y + 0.5f), ImVec2(rows_right, y + 0.5f),
+                                       theme::u32(theme::with_alpha(p.white, 0.08f)), 1.f);
+                }
+                const float label_y = marker.row > 0 ? y : y + label_h / 2.f;
+                const ImVec2 label_size = text_size(fonts().regular, 10.f, marker.label.c_str());
+                const ImVec2 label_max(rows_right - px(8.f), std::round(label_y + label_h / 2.f));
+                const ImVec2 label_min(std::round(label_max.x - label_size.x - px(10.f)), label_max.y - label_h);
+                rows_draw->AddRectFilled(label_min, label_max, theme::u32(p.panel_bg0), px(3.f));
+                draw_text(rows_draw, fonts().regular, 10.f,
+                          ImVec2(label_min.x + px(5.f), std::round(label_min.y + (label_h - label_size.y) / 2.f)),
+                          theme::u32(p.text_secondary), marker.label.c_str());
+            }
+        }
         popover_layer.Merge(rows_draw);
         ImGui::PopStyleVar();
         if (!g_drag.active)

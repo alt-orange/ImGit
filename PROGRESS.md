@@ -66,7 +66,8 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Commit search (Ctrl+F) with n of m navigation | ✅ | Floating bar over the graph |
 | Multi-select (Ctrl / Shift), keyboard j / k / arrows / Home / End | ✅ | |
 | Lazy loading / "Show more commits" | ✅ | |
-| Timeline markers, scroll markers for HEAD / branches | ⬜ | |
+| Timeline markers | 🟡 | A line and an age label ("1 hour ago", "yesterday", "3 weeks ago"...) on the first row past each age step |
+| Scroll markers for HEAD / branches | ⬜ | |
 | Compact graph mode | ⬜ | Setting exists, rendering is always "rich" |
 | Pin branch to left | ✅ | Context menu |
 
