@@ -30,8 +30,8 @@ namespace imgit::ui
 
         int g_menu_tab = -1; // repository tab right-clicked this frame
 
-        // A held repository tab shows the grabbing hand; moved 4px it is dragged along the bar, over the other
-        // tabs, and swaps places with a neighbour once its centre passes that neighbour's.
+        // A repository tab held and moved 4px is dragged along the bar under the system's drag-and-drop cursor,
+        // over the other tabs, and swaps places with a neighbour once its centre passes that neighbour's.
         struct TabDrag
         {
             int index = -1; // the tab held, -1: none
@@ -259,10 +259,13 @@ namespace imgit::ui
             }
             else
             {
-                set_drag_cursor(DragCursor::GRABBING);
                 if (!g_tab_drag.active && std::abs(mouse.x - g_tab_drag.press_x) >= px(4.f))
                 {
                     g_tab_drag.active = true;
+                }
+                if (g_tab_drag.active)
+                {
+                    set_drag_cursor(DragCursor::MOVE);
                 }
             }
         }

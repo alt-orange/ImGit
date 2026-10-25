@@ -623,7 +623,7 @@ namespace
                                   : wanted == imgit::ui::DragCursor::NO_DROP    ? CursorShape::NO_DROP
                                   : wanted == imgit::ui::DragCursor::COL_RESIZE ? CursorShape::COL_RESIZE
                                   : wanted == imgit::ui::DragCursor::ROW_RESIZE ? CursorShape::ROW_RESIZE
-                                                                                : CursorShape::GRABBING;
+                                                                                : CursorShape::GRAB;
         imgit::platform::set_cursor(window, shape);
         io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
         showing = true;

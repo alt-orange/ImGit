@@ -1758,6 +1758,10 @@ namespace imgit::ui
                 }
                 ImGui::SetCursorScreenPos(ImVec2(x, header_y));
                 ImGui::InvisibleButton((std::string("##zone_header_") + zone_key(type)).c_str(), ImVec2(w, header_h));
+                if (ImGui::IsItemHovered())
+                {
+                    set_drag_cursor(DragCursor::GRAB); // cursor: grab over the header cells
+                }
                 if (ImGui::IsItemActivated() && !g_zone_move.pressed)
                 {
                     g_zone_move = {type, true, false, mouse.x, mouse.x - x, w};
@@ -1777,7 +1781,7 @@ namespace imgit::ui
             }
             if (g_zone_move.pressed)
             {
-                set_drag_cursor(DragCursor::GRABBING);
+                set_drag_cursor(DragCursor::GRAB);
             }
             if (g_zone_move.active)
             {

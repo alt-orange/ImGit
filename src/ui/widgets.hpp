@@ -51,7 +51,7 @@ namespace imgit::ui
         NO_DROP,
         COL_RESIZE,
         ROW_RESIZE,
-        GRABBING, // a tab or graph column held for reordering
+        GRAB, // the open hand over a graph column header, which drags
     };
     void set_drag_cursor(DragCursor cursor) noexcept;
     // The cursor asked for this frame; resets it for the next one.

@@ -36,10 +36,10 @@ namespace imgit::platform
         NO_DROP,
         COL_RESIZE,
         ROW_RESIZE,
-        GRABBING, // the closed hand holding a dragged tab
+        GRAB, // the open hand over something that can be dragged (CSS `grab`)
     };
-    // Chromium's grabbing cursor as a GLFW cursor: a 16px closed hand drawn here, its hotspot in the palm.
-    [[nodiscard]] GLFWcursor* grabbing_cursor();
+    // Chromium's grab cursor as a GLFW cursor: an 18px open hand drawn here, its hotspot in the palm.
+    [[nodiscard]] GLFWcursor* grab_cursor();
     // Shows `shape` over the window instead of ImGui's cursor until reset_cursor(): the system drag-and-drop
     // cursors, and on Windows Chromium's own resize cursors (inverting masks GLFW's RGBA cursors cannot show).
     void set_cursor(GLFWwindow* window, CursorShape shape);

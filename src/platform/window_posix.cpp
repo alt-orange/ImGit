@@ -94,38 +94,39 @@ namespace imgit::platform
         static GLFWcursor* no_drop = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
         static GLFWcursor* col_resize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         static GLFWcursor* row_resize = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
-        static GLFWcursor* grabbing = grabbing_cursor();
+        static GLFWcursor* grab = grab_cursor();
         GLFWcursor* cursor = shape == CursorShape::MOVE         ? move
                              : shape == CursorShape::NO_DROP    ? no_drop
                              : shape == CursorShape::COL_RESIZE ? col_resize
                              : shape == CursorShape::ROW_RESIZE ? row_resize
-                                                                : grabbing;
+                                                                : grab;
         glfwSetCursor(window, cursor);
     }
 
-    GLFWcursor* grabbing_cursor()
+    GLFWcursor* grab_cursor()
     {
-        // The closed hand, black outlined and white filled, as the "grabbing" CSS cursor draws it.
-        static constexpr const char* ROWS[16] = {
-                "................", "................", "......XX.XX.....", ".....XooXooXX...",
-                ".....XooXooXooX.", "..XX.XooXooXooX.", ".XooXXooooooooX.", ".XoooXoooooooX..",
-                ".XoooooooooooX..", "..XooooooooooX..", "..XoooooooooX...", "...XooooooooX...",
-                "...XoooooooX....", "....XoooooX.....", "....XXXXXXX.....", "................",
+        // The open hand, black outlined and white filled, as Chromium draws the "grab" CSS cursor.
+        static constexpr const char* ROWS[18] = {
+                ".......XX.XX......", "...XX.XooXooX.XX..", "...XooXooXooXXooX.", "...XooXooXooXooX..",
+                "...XooXooXooXooX..", "...XoooooooooooX..", ".XXXoooooooooooX..", "XooXXooooooooooX..",
+                "XoooXooooooooooX..", ".XoooooooooooooX..", "..XooooooooooooX..", "..XoooooooooooX...",
+                "...XooooooooooX...", "...XoooooooooX....", "....XoooooooX.....", "....XoooooooX.....",
+                "....XXXXXXXXX.....", "..................",
         };
-        static unsigned char rgba[16 * 16 * 4];
-        for (int y = 0; y < 16; ++y)
+        static unsigned char rgba[18 * 18 * 4];
+        for (int y = 0; y < 18; ++y)
         {
-            for (int x = 0; x < 16; ++x)
+            for (int x = 0; x < 18; ++x)
             {
-                unsigned char* out = rgba + (y * 16 + x) * 4;
+                unsigned char* out = rgba + (y * 18 + x) * 4;
                 const char c = ROWS[y][x];
                 const unsigned char v = c == 'X' ? 0 : 255;
                 out[0] = out[1] = out[2] = v;
                 out[3] = c == '.' ? 0 : 255;
             }
         }
-        const GLFWimage image{16, 16, rgba};
-        return glfwCreateCursor(&image, 8, 8);
+        const GLFWimage image{18, 18, rgba};
+        return glfwCreateCursor(&image, 9, 9);
     }
 
     void reset_cursor(GLFWwindow*)
