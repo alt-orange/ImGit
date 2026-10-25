@@ -71,6 +71,7 @@ namespace imgit::gfx
         GLint g_lcd = -1;
         GLint g_gray_gamma = -1;
         float g_gray_gamma_value = 1.38f;
+        bool g_subpixel_atlas = false;
         bool g_ready = false;
 
         template<class Fn>
@@ -333,7 +334,8 @@ void main()
                           static_cast<int>(clip_max.x - clip_min.x), static_cast<int>(clip_max.y - clip_min.y));
                 const ImTextureID texture = cmd.GetTexID();
                 glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(texture));
-                gl.Uniform1i(g_lcd, texture == lcd_texture ? (grayscale ? 2 : 1) : 0);
+                const bool subpixel = g_subpixel_atlas && texture == lcd_texture;
+                gl.Uniform1i(g_lcd, subpixel ? (grayscale ? 2 : 1) : 0);
                 const void* indices =
                         reinterpret_cast<const void*>(static_cast<std::uintptr_t>(cmd.IdxOffset * sizeof(ImDrawIdx)));
                 const GLenum index_type = sizeof(ImDrawIdx) == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
@@ -349,6 +351,11 @@ void main()
     void set_grayscale_gamma(float gamma)
     {
         g_gray_gamma_value = gamma;
+    }
+
+    void set_subpixel_atlas(bool subpixel)
+    {
+        g_subpixel_atlas = subpixel;
     }
 
     void set_grayscale_text(ImDrawList* list, bool on)

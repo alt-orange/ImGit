@@ -5,6 +5,7 @@
 #include "gfx/native_font_loader.hpp"
 #include "git/git_cli.hpp"
 #include "git/repository.hpp"
+#include "platform/app_menu.hpp"
 #include "platform/process.hpp"
 #include "platform/system.hpp"
 #include "platform/window.hpp"
@@ -539,9 +540,11 @@ namespace
         {
             imgit::gfx::set_native_coverage_curve(g_text_gamma, g_text_contrast);
             io.Fonts->SetFontLoader(native);
+            imgit::gfx::set_subpixel_atlas(true);
         }
         else
         {
+            imgit::gfx::set_subpixel_atlas(false);
 #ifdef IMGUI_ENABLE_FREETYPE
             io.Fonts->FontLoaderFlags = ImGuiFreeTypeLoaderFlags_NoHinting;
             install_gamma_font_loader(io.Fonts, 3.0f);
@@ -648,8 +651,9 @@ int main(int argc, char** argv)
     const float dpi_scale = imgit::platform::layout_scale(window);
     imgit::ui::set_dpi_scale(dpi_scale);
     // The minimum window (950x675 outside its frame) leaves a 934x610 page; ImGit's client area also holds
-    // the 26px menu bar.
-    glfwSetWindowSizeLimits(window, static_cast<int>(934.f * dpi_scale), static_cast<int>(636.f * dpi_scale),
+    // the 26px menu bar where the app draws it (not on macOS, whose menu bar is the system's).
+    const float min_height = 610.f + (imgit::platform::has_native_menu_bar() ? 0.f : imgit::theme::MENU_BAR_HEIGHT);
+    glfwSetWindowSizeLimits(window, static_cast<int>(934.f * dpi_scale), static_cast<int>(min_height * dpi_scale),
                             GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     IMGUI_CHECKVERSION();
