@@ -7,6 +7,29 @@
 **A fast, native Git client with a commit graph front and centre.**
 C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
+[![Release](https://img.shields.io/github/v/release/alt-orange/ImGit?sort=semver)](https://github.com/alt-orange/ImGit/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/alt-orange/ImGit/total)](https://github.com/alt-orange/ImGit/releases)
+![Last commit](https://img.shields.io/github/last-commit/alt-orange/ImGit/github-main)
+[![CI](https://img.shields.io/github/actions/workflow/status/alt-orange/ImGit/ci.yml?branch=github-main&label=CI)](https://github.com/alt-orange/ImGit/actions/workflows/ci.yml)
+![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-555)
+[![discord badge](https://dcbadge.limes.pink/api/server/https://discord.gg/eDgdaWbqwZ?style=flat)](https://discord.gg/eDgdaWbqwZ)
+[![telegram badge](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/orangennotes)
+
+<br>
+
+---
+
+**[<kbd> <br> Download <br> </kbd>][DOWNLOAD]** 
+**[<kbd> <br> Install <br> </kbd>][INSTALL]** 
+**[<kbd> <br> Porting <br> </kbd>][PORTING]** 
+**[<kbd> <br> Contribute <br> </kbd>][CONTRIBUTING]** 
+**[<kbd> <br> Donate <br> </kbd>][SPONSOR]** 
+
+---
+
+<br>
+
 </div>
 
 ![ImGit: the commit graph with a commit's details open](docs/images/overview.png)
@@ -161,3 +184,11 @@ linking exception), [GLFW](https://www.glfw.org) (zlib), [cpr](https://github.co
 [stb](https://github.com/nothings/stb) (public domain). It ships the Open Sans font (SIL OFL,
 `assets/fonts/LICENSE.txt`), Font Awesome Free icons (CC BY 4.0, `assets/icons/NOTICE.txt`) and two of Chromium's
 cursors (BSD, `assets/cursors/NOTICE.txt`).
+
+<!-- Link references -->
+
+[DOWNLOAD]: https://github.com/alt-orange/ImGit/releases
+[INSTALL]: INSTALL.md
+[PORTING]: PORTING.md
+[CONTRIBUTING]: CONTRIBUTING.md
+[SPONSOR]: https://boosty.to/orangecpp/purchase/3568644?ssource=DIRECT&share=subscription_link
