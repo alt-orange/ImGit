@@ -18,10 +18,10 @@ namespace imgit::graph
         struct Assigner
         {
             const std::unordered_set<git::Sha>& pinned;
-            std::unordered_map<int, bool> columns_used;
-            std::unordered_map<git::Sha, ReserverInfo> reserver_by_sha;
-            std::unordered_map<git::Sha, std::vector<int>> columns_to_free_when_found;
-            std::unordered_set<git::Sha> has_merge_node_child;
+            std::unordered_map<int, bool> columns_used{};
+            std::unordered_map<git::Sha, ReserverInfo> reserver_by_sha{};
+            std::unordered_map<git::Sha, std::vector<int>> columns_to_free_when_found{};
+            std::unordered_set<git::Sha> has_merge_node_child{};
 
             int free_column()
             {

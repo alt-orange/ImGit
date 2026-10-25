@@ -229,7 +229,7 @@ namespace imgit::ui
             bool refresh_needed = false;
             // A double-clicked ref, checked out once the tree walk is over: the checkout refreshes the state,
             // which frees the refs the walk reads.
-            std::optional<git::Ref> checkout_request;
+            std::optional<git::Ref> checkout_request{};
         };
 
         void set_hidden(Context& ctx, const std::vector<const git::Ref*>& refs, bool hidden)

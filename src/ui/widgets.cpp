@@ -1615,6 +1615,8 @@ namespace imgit::ui
             draw->AddRect(ImVec2(c.x - s * 0.25f, c.y - s * 0.25f), ImVec2(c.x + s * 0.75f, c.y + s * 0.75f), color,
                           px(1.f), 0, t);
             break;
+        default:
+            break; // drawn from their Font Awesome paths only
         }
     }
 

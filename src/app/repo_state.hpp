@@ -43,7 +43,7 @@ namespace imgit::app
         std::optional<git::cli::Credential> attempt; // the credential entered for this run, kept when it works
         // Commands run one after another once this one succeeds (push a tag to every remote); the toast comes
         // with the last.
-        std::vector<std::vector<std::string>> queued;
+        std::vector<std::vector<std::string>> queued{};
     };
 
     // The Undo / Redo: each entry knows how to reverse (and, when cheap, repeat) one action.
@@ -206,7 +206,7 @@ namespace imgit::app
         {
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
-            std::optional<std::uint64_t> refs_signature; // Repository::refs_signature, none when it could not be read
+            std::optional<std::uint64_t> refs_signature{}; // Repository::refs_signature; none: it could not be read
         };
 
         void refresh(); // history + status + layout

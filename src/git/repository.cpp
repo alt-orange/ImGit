@@ -332,7 +332,8 @@ namespace imgit::git
 
         git_checkout_options safe_checkout_options()
         {
-            git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+            git_checkout_options opts;
+            git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
             opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_RECREATE_MISSING;
             return opts;
         }
@@ -1070,7 +1071,8 @@ namespace imgit::git
 
     Result<WorkDirStatus> Repository::load_status() const
     {
-        git_status_options opts = GIT_STATUS_OPTIONS_INIT;
+        git_status_options opts;
+        git_status_options_init(&opts, GIT_STATUS_OPTIONS_VERSION);
         opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
         opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS
                      | GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX | GIT_STATUS_OPT_RENAMES_INDEX_TO_WORKDIR
@@ -1140,7 +1142,8 @@ namespace imgit::git
             IMGIT_TRY(git_commit_parent(parent.out(), *commit, 0), "could not read parent");
             IMGIT_TRY(git_commit_tree(parent_tree.out(), parent), "could not read parent tree");
         }
-        git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
         DiffHandle diff;
         IMGIT_TRY(git_diff_tree_to_tree(diff.out(), m_repo.get(), parent_tree, *tree, &opts), "could not diff commit");
         git_diff_find_similar(diff, nullptr);
@@ -1177,7 +1180,8 @@ namespace imgit::git
         }
         std::vector<std::string> paths{path};
         auto c_paths = c_strings(paths);
-        git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
         opts.pathspec.strings = c_paths.data();
         opts.pathspec.count = c_paths.size();
         opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
@@ -1195,7 +1199,8 @@ namespace imgit::git
         }
         // An added file may really be the new side of a rename: re-run over the whole tree with similarity
         // detection and pick the delta that ends at `path`.
-        git_diff_options all = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options all;
+        git_diff_options_init(&all, GIT_DIFF_OPTIONS_VERSION);
         if (ignore_whitespace)
         {
             all.flags |= GIT_DIFF_IGNORE_WHITESPACE;
@@ -1224,7 +1229,8 @@ namespace imgit::git
         IMGIT_TRY(git_repository_index(index.out(), repo), "could not read index");
         std::vector<std::string> paths{path};
         auto c_paths = c_strings(paths);
-        git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
         opts.pathspec.strings = c_paths.data();
         opts.pathspec.count = c_paths.size();
         opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH | GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_SHOW_UNTRACKED_CONTENT
@@ -1424,7 +1430,8 @@ namespace imgit::git
             return {};
         }
         auto c_paths = c_strings(tracked);
-        git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+        git_checkout_options opts;
+        git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
         // The paths are literal, not patterns: [ ] * ? may be part of a file name.
         opts.checkout_strategy =
                 GIT_CHECKOUT_FORCE | GIT_CHECKOUT_RECREATE_MISSING | GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH;
@@ -1695,7 +1702,8 @@ namespace imgit::git
             kind = GIT_RESET_HARD;
             break;
         }
-        git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+        git_checkout_options opts;
+        git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
         opts.checkout_strategy = GIT_CHECKOUT_FORCE;
         IMGIT_TRY(git_reset(m_repo.get(), reinterpret_cast<git_object*>(commit->get()), kind, &opts), "reset failed");
         return {};
@@ -1736,7 +1744,8 @@ namespace imgit::git
         {
             return std::unexpected(commit.error());
         }
-        git_cherrypick_options opts = GIT_CHERRYPICK_OPTIONS_INIT;
+        git_cherrypick_options opts;
+        git_cherrypick_options_init(&opts, GIT_CHERRYPICK_OPTIONS_VERSION);
         opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS;
         IMGIT_TRY(git_cherrypick(m_repo.get(), *commit, &opts), "cherry pick failed");
         // The author (with its date) belongs to `commit`, which outlives the call.
@@ -1751,7 +1760,8 @@ namespace imgit::git
         {
             return std::unexpected(commit.error());
         }
-        git_revert_options opts = GIT_REVERT_OPTIONS_INIT;
+        git_revert_options opts;
+        git_revert_options_init(&opts, GIT_REVERT_OPTIONS_VERSION);
         opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS;
         IMGIT_TRY(git_revert(m_repo.get(), *commit, &opts), "revert failed");
         const char* summary = git_commit_summary(*commit);
@@ -1841,8 +1851,11 @@ namespace imgit::git
             return true;
         }
 
-        git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
-        git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+        git_merge_options merge_opts;
+
+        git_merge_options_init(&merge_opts, GIT_MERGE_OPTIONS_VERSION);
+        git_checkout_options checkout_opts;
+        git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
         checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS;
         IMGIT_TRY(git_merge(repo, heads, 1, &merge_opts, &checkout_opts), "merge failed");
 
@@ -1917,7 +1930,8 @@ namespace imgit::git
         }
         if (head->get() != nullptr)
         {
-            git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+            git_checkout_options opts;
+            git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
             opts.checkout_strategy = GIT_CHECKOUT_FORCE;
             IMGIT_TRY(git_reset(repo, reinterpret_cast<git_object*>(head->get()), GIT_RESET_HARD, &opts),
                       "reset failed");
@@ -1988,7 +2002,8 @@ namespace imgit::git
 
     std::vector<LineHunk> diff_lines(const std::string& old_text, const std::string& new_text)
     {
-        git_diff_options options = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options options;
+        git_diff_options_init(&options, GIT_DIFF_OPTIONS_VERSION);
         options.context_lines = 0;
         options.interhunk_lines = 0;
         options.flags = GIT_DIFF_FORCE_TEXT;
@@ -2074,7 +2089,8 @@ namespace imgit::git
 
     Result<void> Repository::stash_apply(int index) const
     {
-        git_stash_apply_options opts = GIT_STASH_APPLY_OPTIONS_INIT;
+        git_stash_apply_options opts;
+        git_stash_apply_options_init(&opts, GIT_STASH_APPLY_OPTIONS_VERSION);
         opts.flags = GIT_STASH_APPLY_REINSTATE_INDEX;
         if (git_stash_apply(m_repo.get(), static_cast<std::size_t>(index), &opts) == 0)
         {
@@ -2085,7 +2101,8 @@ namespace imgit::git
 
     Result<void> Repository::stash_pop(int index) const
     {
-        git_stash_apply_options opts = GIT_STASH_APPLY_OPTIONS_INIT;
+        git_stash_apply_options opts;
+        git_stash_apply_options_init(&opts, GIT_STASH_APPLY_OPTIONS_VERSION);
         opts.flags = GIT_STASH_APPLY_REINSTATE_INDEX;
         if (git_stash_pop(m_repo.get(), static_cast<std::size_t>(index), &opts) == 0)
         {
@@ -2103,7 +2120,8 @@ namespace imgit::git
     Result<void> Repository::fill_stats(std::vector<FileChange>& changes, StatsSource source, const Sha& sha) const
     {
         git_repository* repo = m_repo.get();
-        git_diff_options opts = GIT_DIFF_OPTIONS_INIT;
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
         opts.flags = GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_SHOW_UNTRACKED_CONTENT | GIT_DIFF_RECURSE_UNTRACKED_DIRS;
         DiffHandle diff;
         TreeHandle tree;
@@ -2283,7 +2301,8 @@ namespace imgit::git
 
         const auto roll_back = [&](const std::string& why) -> std::unexpected<Error>
         {
-            git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+            git_checkout_options opts;
+            git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
             opts.checkout_strategy = GIT_CHECKOUT_FORCE;
             if (auto original = lookup_commit(repo, original_sha))
             {
@@ -2310,7 +2329,8 @@ namespace imgit::git
             {
                 return roll_back(commit.error().message + ".");
             }
-            git_cherrypick_options opts = GIT_CHERRYPICK_OPTIONS_INIT;
+            git_cherrypick_options opts;
+            git_cherrypick_options_init(&opts, GIT_CHERRYPICK_OPTIONS_VERSION);
             opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS;
             if (git_cherrypick(repo, *commit, &opts) < 0)
             {
