@@ -187,11 +187,9 @@ namespace
             }
             else if (command == "press" || command == "release")
             {
-                // A held button for mid-drag shots: "press x y", moves, shots, then "release".
-                if (command == "press")
+                // A held button for mid-drag shots: "press [x y]", moves, shots, then "release".
+                if (float x = 0.f, y = 0.f; command == "press" && (in >> x >> y))
                 {
-                    float x, y;
-                    in >> x >> y;
                     move(x, y);
                     wait(2);
                 }
