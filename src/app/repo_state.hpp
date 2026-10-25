@@ -206,12 +206,15 @@ namespace imgit::app
         {
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
+            std::optional<std::uint64_t> refs_signature; // Repository::refs_signature, none when it could not be read
         };
 
         void refresh(); // history + status + layout
-        void refresh_status(); // cheap: working directory only, rebuilds rows when the WIP row appears/disappears
-        // The periodic status poll: re-reads the working directory on a worker thread once `interval` seconds have
-        // passed since the last read finished, and applies the result on a later frame.
+        // Cheap: working directory only; rebuilds the rows when the WIP row appears / disappears or a ref changed.
+        void refresh_status();
+        // The periodic status poll: re-reads the working directory and the refs on a worker thread once `interval`
+        // seconds have passed since the last read finished, and applies the result on a later frame. A commit,
+        // checkout, fetch or stash made outside ImGit thus shows up within one interval.
         void poll_status(double now, double interval);
         void load_commit_files(const git::Sha& sha);
         void open_diff(DiffTarget target);
@@ -246,6 +249,8 @@ namespace imgit::app
 
     private:
         void apply_status(StatusSnapshot snapshot);
+        // refresh() from a status already read (one that predates the history load, as refresh()'s own does).
+        void rebuild(StatusSnapshot snapshot);
         void insert_wip_row();
         void rebuild_layout();
         std::unordered_set<git::Sha> m_selected_set;
@@ -253,5 +258,6 @@ namespace imgit::app
         // Bumped by every status read on the UI thread; a poll started before one is out of date.
         std::uint64_t m_status_generation = 0;
         std::uint64_t m_status_job_generation = 0;
+        std::optional<std::uint64_t> m_refs_signature; // the refs the rows were built from
     };
 } // namespace imgit::app

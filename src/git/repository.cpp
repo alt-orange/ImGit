@@ -7,6 +7,7 @@
 #include <git2.h>
 #include <map>
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -88,6 +89,7 @@ namespace imgit::git
         using RevwalkHandle = Handle<git_revwalk, git_revwalk_free>;
         using StatusListHandle = Handle<git_status_list, git_status_list_free>;
         using BranchIteratorHandle = Handle<git_branch_iterator, git_branch_iterator_free>;
+        using ReferenceIteratorHandle = Handle<git_reference_iterator, git_reference_iterator_free>;
         using RemoteHandle = Handle<git_remote, git_remote_free>;
         using AnnotatedCommitHandle = Handle<git_annotated_commit, git_annotated_commit_free>;
         using ConfigHandle = Handle<git_config, git_config_free>;
@@ -114,6 +116,17 @@ namespace imgit::git
             char buffer[GIT_OID_MAX_HEXSIZE + 1] = {};
             git_oid_tostr(buffer, sizeof(buffer), oid);
             return buffer;
+        }
+
+        // FNV-1a: `text` folded into `hash`.
+        std::uint64_t fnv1a(std::uint64_t hash, std::string_view text)
+        {
+            for (const unsigned char c : text)
+            {
+                hash ^= c;
+                hash *= 0x100000001b3ULL;
+            }
+            return hash;
         }
 
         Result<git_oid> parse_oid(const Sha& sha)
@@ -423,6 +436,64 @@ namespace imgit::git
         default:
             return RepoState::OTHER;
         }
+    }
+
+    Result<std::uint64_t> Repository::refs_signature() const
+    {
+        git_repository* repo = m_repo.get();
+        // The sum of one hash per "name target" pair: order-free, since the refdb may list loose and packed refs
+        // in any order, and fixed-size however many refs there are.
+        std::uint64_t signature = 0;
+        auto add = [&signature](std::string_view name, std::string_view target)
+        {
+            std::uint64_t line = fnv1a(0xcbf29ce484222325ULL, name);
+            line = fnv1a(line, " ");
+            signature += fnv1a(line, target);
+        };
+        // A ref by what it names, not where that lands: a checkout between two branches at one commit must count.
+        const auto add_ref = [&add](git_reference* ref)
+        {
+            if (git_reference_type(ref) == GIT_REFERENCE_SYMBOLIC)
+            {
+                add(git_reference_name(ref), git_reference_symbolic_target(ref));
+            }
+            else
+            {
+                add(git_reference_name(ref), oid_str(git_reference_target(ref)));
+            }
+        };
+        {
+            ReferenceHandle head;
+            IMGIT_TRY(git_reference_lookup(head.out(), repo, "HEAD"), "could not read HEAD");
+            add_ref(head);
+        }
+        {
+            // Every ref under refs/ (libgit2 leaves out loose refs it cannot parse, as load_history does).
+            ReferenceIteratorHandle it;
+            IMGIT_TRY(git_reference_iterator_new(it.out(), repo), "could not list references");
+            git_reference* raw = nullptr;
+            int rc = 0;
+            while ((rc = git_reference_next(&raw, it)) == 0)
+            {
+                ReferenceHandle ref;
+                ref.ptr = raw;
+                add_ref(ref);
+            }
+            if (rc != GIT_ITEROVER)
+            {
+                return last_error("could not list references");
+            }
+        }
+        // Stashes: dropping one below the top leaves refs/stash in place, only its reflog shrinks.
+        {
+            auto callback = [](std::size_t index, const char*, const git_oid* stash_id, void* data) -> int
+            {
+                (*static_cast<decltype(add)*>(data))("stash@{" + std::to_string(index) + "}", oid_str(stash_id));
+                return 0;
+            };
+            IMGIT_TRY(git_stash_foreach(repo, callback, &add), "could not list stashes");
+        }
+        return signature;
     }
 
     Result<History> Repository::load_history(const HistoryOptions& options) const
