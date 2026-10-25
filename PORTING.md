@@ -112,7 +112,7 @@ real build. What the port consists of:
   used instead.
 - **Title bar.** The system title bar is hidden (`titlebarAppearsTransparent`, `NSWindowStyleMaskFullSizeContentView`,
   an empty compact-style toolbar for the traffic lights' inset, as Electron's `hiddenInset`), so the tabs bar is
-  the top of the window with the traffic lights over its left end; `platform::title_bar_inset()` (56 px) keeps the
+  the top of the window with the traffic lights over its left end; `platform::title_bar_inset()` (72 px) keeps the
   folder icon and the tabs clear of them. A press on the bar's empty part calls `platform::drag_window()`
   (`performWindowDragWithEvent:` with the current event) and a double-click `title_bar_double_click()` (zoom or
   minimise per `AppleActionOnDoubleClick`); ImGui is handed the release itself, since AppKit keeps it.

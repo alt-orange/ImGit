@@ -60,7 +60,7 @@ namespace imgit::platform
     float title_bar_inset()
     {
 #ifdef __APPLE__
-        return 56.f; // the three traffic lights, inset as in a toolbar window
+        return 72.f; // the three traffic lights (inset as in a toolbar window, they end near 70) and a gap
 #else
         return 0.f;
 #endif
