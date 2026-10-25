@@ -2088,6 +2088,9 @@ namespace imgit::ui
             break;
         }
         case app::Dialog::Kind::NONE:
+        case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
+        case app::Dialog::Kind::PUSH_NEW_BRANCH:
+        case app::Dialog::Kind::ADD_SUBMODULE: // the slide panel
             break;
         }
         ImGui::PopStyleVar();

@@ -1,6 +1,7 @@
 #pragma once
 
 struct GLFWwindow;
+struct GLFWcursor;
 
 // Platform touches on the GLFW main window: its frame, cursors and native handle.
 namespace imgit::platform
