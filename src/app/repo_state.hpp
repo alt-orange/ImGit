@@ -206,7 +206,7 @@ namespace imgit::app
         {
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
-            std::string refs_signature; // Repository::refs_signature, empty when it could not be read
+            std::optional<std::uint64_t> refs_signature; // Repository::refs_signature, none when it could not be read
         };
 
         void refresh(); // history + status + layout
@@ -249,6 +249,8 @@ namespace imgit::app
 
     private:
         void apply_status(StatusSnapshot snapshot);
+        // refresh() from a status already read (one that predates the history load, as refresh()'s own does).
+        void rebuild(StatusSnapshot snapshot);
         void insert_wip_row();
         void rebuild_layout();
         std::unordered_set<git::Sha> m_selected_set;
@@ -256,6 +258,6 @@ namespace imgit::app
         // Bumped by every status read on the UI thread; a poll started before one is out of date.
         std::uint64_t m_status_generation = 0;
         std::uint64_t m_status_job_generation = 0;
-        std::string m_refs_signature; // the refs the rows were built from
+        std::optional<std::uint64_t> m_refs_signature; // the refs the rows were built from
     };
 } // namespace imgit::app

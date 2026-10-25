@@ -7,6 +7,7 @@
 #include <git2.h>
 #include <map>
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -115,6 +116,17 @@ namespace imgit::git
             char buffer[GIT_OID_MAX_HEXSIZE + 1] = {};
             git_oid_tostr(buffer, sizeof(buffer), oid);
             return buffer;
+        }
+
+        // FNV-1a: `text` folded into `hash`.
+        std::uint64_t fnv1a(std::uint64_t hash, std::string_view text)
+        {
+            for (const unsigned char c : text)
+            {
+                hash ^= c;
+                hash *= 0x100000001b3ULL;
+            }
+            return hash;
         }
 
         Result<git_oid> parse_oid(const Sha& sha)
@@ -426,32 +438,37 @@ namespace imgit::git
         }
     }
 
-    Result<std::string> Repository::refs_signature() const
+    Result<std::uint64_t> Repository::refs_signature() const
     {
         git_repository* repo = m_repo.get();
-        // One line per ref, sorted: the refdb may list loose and packed refs in any order.
-        std::vector<std::string> lines;
-        const auto describe = [](git_reference* ref)
+        // The sum of one hash per "name target" pair: order-free, since the refdb may list loose and packed refs
+        // in any order, and fixed-size however many refs there are.
+        std::uint64_t signature = 0;
+        auto add = [&signature](std::string_view name, std::string_view target)
         {
-            std::string line = git_reference_name(ref);
-            line += ' ';
-            // What HEAD names, not where that lands: a checkout between two branches at one commit must count.
+            std::uint64_t line = fnv1a(0xcbf29ce484222325ULL, name);
+            line = fnv1a(line, " ");
+            signature += fnv1a(line, target);
+        };
+        // A ref by what it names, not where that lands: a checkout between two branches at one commit must count.
+        const auto add_ref = [&add](git_reference* ref)
+        {
             if (git_reference_type(ref) == GIT_REFERENCE_SYMBOLIC)
             {
-                line += git_reference_symbolic_target(ref);
+                add(git_reference_name(ref), git_reference_symbolic_target(ref));
             }
-            else if (const git_oid* oid = git_reference_target(ref); oid != nullptr)
+            else
             {
-                line += oid_str(oid);
+                add(git_reference_name(ref), oid_str(git_reference_target(ref)));
             }
-            return line;
         };
         {
             ReferenceHandle head;
             IMGIT_TRY(git_reference_lookup(head.out(), repo, "HEAD"), "could not read HEAD");
-            lines.push_back(describe(head));
+            add_ref(head);
         }
         {
+            // Every ref under refs/ (libgit2 leaves out loose refs it cannot parse, as load_history does).
             ReferenceIteratorHandle it;
             IMGIT_TRY(git_reference_iterator_new(it.out(), repo), "could not list references");
             git_reference* raw = nullptr;
@@ -460,7 +477,7 @@ namespace imgit::git
             {
                 ReferenceHandle ref;
                 ref.ptr = raw;
-                lines.push_back(describe(ref));
+                add_ref(ref);
             }
             if (rc != GIT_ITEROVER)
             {
@@ -471,18 +488,10 @@ namespace imgit::git
         {
             auto callback = [](std::size_t index, const char*, const git_oid* stash_id, void* data) -> int
             {
-                static_cast<std::vector<std::string>*>(data)->push_back("stash@{" + std::to_string(index) + "} "
-                                                                        + oid_str(stash_id));
+                (*static_cast<decltype(add)*>(data))("stash@{" + std::to_string(index) + "}", oid_str(stash_id));
                 return 0;
             };
-            git_stash_foreach(repo, callback, &lines);
-        }
-        std::sort(lines.begin(), lines.end());
-        std::string signature;
-        for (const std::string& line : lines)
-        {
-            signature += line;
-            signature += '\n';
+            IMGIT_TRY(git_stash_foreach(repo, callback, &add), "could not list stashes");
         }
         return signature;
     }

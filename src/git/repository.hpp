@@ -1,6 +1,7 @@
 #pragma once
 
 #include "git/types.hpp"
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -62,7 +63,7 @@ namespace imgit::git
         [[nodiscard]] RepoState state() const noexcept;
         // A fingerprint of HEAD, every reference and the stash list: it changes whenever a ref moves, appears or
         // disappears (a commit, checkout, fetch, tag or stash made outside ImGit) without walking the history.
-        [[nodiscard]] Result<std::string> refs_signature() const;
+        [[nodiscard]] Result<std::uint64_t> refs_signature() const;
         [[nodiscard]] Result<std::vector<FileChange>> commit_changes(const Sha& sha) const;
         // Fills additions / deletions of `changes` (matched by path) from the given diff source.
         [[nodiscard]] Result<void> fill_stats(std::vector<FileChange>& changes, StatsSource source,

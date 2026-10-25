@@ -76,12 +76,17 @@ namespace imgit::app
 
     void RepoState::refresh()
     {
-        load_error.clear();
         // The status (with the refs signature) is read before the history: a ref that moves in between then shows
         // as a change on the next poll instead of hiding behind a signature newer than the rows.
         ++m_status_generation;
-        StatusSnapshot snapshot = read_status(repo);
-        m_refs_signature = std::move(snapshot.refs_signature);
+        rebuild(read_status(repo));
+        last_status_poll = 0.0;
+    }
+
+    void RepoState::rebuild(StatusSnapshot snapshot)
+    {
+        load_error.clear();
+        m_refs_signature = snapshot.refs_signature;
         git::HistoryOptions options;
         options.max_commits = commit_limit;
         options.hidden_refs = hidden_refs;
@@ -92,6 +97,7 @@ namespace imgit::app
             load_error = loaded.error().message;
             history = {};
             layout = {};
+            m_refs_signature.reset(); // the next poll tries again
             return;
         }
         history = std::move(*loaded);
@@ -127,7 +133,6 @@ namespace imgit::app
         }
         reload_diff();
         run_search();
-        last_status_poll = 0.0;
     }
 
     void RepoState::refresh_status()
@@ -180,18 +185,18 @@ namespace imgit::app
         }
         const bool had_wip = history.row_by_sha.contains(WIP_SHA);
         const bool has_wip = !snapshot.status->empty();
+        // A ref moved, appeared or disappeared outside ImGit (a commit, checkout, fetch...): the rows are stale.
+        const bool refs_changed = snapshot.refs_signature && snapshot.refs_signature != m_refs_signature;
+        if (had_wip != has_wip || refs_changed)
+        {
+            rebuild(std::move(snapshot)); // no second status read: this one already predates the history load
+            return;
+        }
         const bool changed = !same_changes(snapshot.status->staged, status.staged)
                              || !same_changes(snapshot.status->unstaged, status.unstaged)
                              || !same_changes(snapshot.status->conflicted, status.conflicted);
         status = std::move(*snapshot.status);
         operation_state = snapshot.operation_state;
-        // A ref moved, appeared or disappeared outside ImGit (a commit, checkout, fetch...): the rows are stale.
-        const bool refs_changed = !snapshot.refs_signature.empty() && snapshot.refs_signature != m_refs_signature;
-        if (had_wip != has_wip || refs_changed)
-        {
-            refresh();
-            return;
-        }
         if (changed && diff_target && diff_target->source != DiffTarget::Source::COMMIT)
         {
             reload_diff();
