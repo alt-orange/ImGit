@@ -220,7 +220,12 @@ jobs:
             codesign --force --deep --sign - "dist/$name/ImGit.app"
           else
             cp build/${{ matrix.preset }}/imgit "dist/$name/"
-            strip "dist/$name/imgit"
+            # every symbol and all debug info (the statically linked vcpkg libraries' included), plus the compiler tags
+            strip --strip-all --remove-section=.comment "dist/$name/imgit"
+            if readelf -S --wide "dist/$name/imgit" | grep -E '\.(debug_|zdebug_|symtab|comment)'; then
+              echo "::error::strip left debug or symbol sections in imgit"
+              exit 1
+            fi
             if [ "${{ inputs.upx }}" = true ]; then
               upx --best --lzma "dist/$name/imgit"
               upx -t "dist/$name/imgit"
