@@ -129,4 +129,4 @@ if(MSVC)
 endif()
 
 include(cmake/EmbedAssets.cmake)
-imgit_embed_assets(imgit ${CMAKE_SOURCE_DIR}/assets)
+imgit_embed_assets(imgit ${CMAKE_CURRENT_SOURCE_DIR}/assets)
