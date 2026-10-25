@@ -23,6 +23,10 @@ namespace imgit::app
                 (void)repo.fill_stats(snapshot.status->staged, git::StatsSource::STAGED, {});
                 (void)repo.fill_stats(snapshot.status->unstaged, git::StatsSource::UNSTAGED, {});
             }
+            if (auto signature = repo.refs_signature())
+            {
+                snapshot.refs_signature = std::move(*signature);
+            }
             return snapshot;
         }
 
@@ -73,6 +77,11 @@ namespace imgit::app
     void RepoState::refresh()
     {
         load_error.clear();
+        // The status (with the refs signature) is read before the history: a ref that moves in between then shows
+        // as a change on the next poll instead of hiding behind a signature newer than the rows.
+        ++m_status_generation;
+        StatusSnapshot snapshot = read_status(repo);
+        m_refs_signature = std::move(snapshot.refs_signature);
         git::HistoryOptions options;
         options.max_commits = commit_limit;
         options.hidden_refs = hidden_refs;
@@ -86,8 +95,6 @@ namespace imgit::app
             return;
         }
         history = std::move(*loaded);
-        ++m_status_generation;
-        StatusSnapshot snapshot = read_status(repo);
         if (snapshot.status)
         {
             status = std::move(*snapshot.status);
@@ -178,7 +185,9 @@ namespace imgit::app
                              || !same_changes(snapshot.status->conflicted, status.conflicted);
         status = std::move(*snapshot.status);
         operation_state = snapshot.operation_state;
-        if (had_wip != has_wip)
+        // A ref moved, appeared or disappeared outside ImGit (a commit, checkout, fetch...): the rows are stale.
+        const bool refs_changed = !snapshot.refs_signature.empty() && snapshot.refs_signature != m_refs_signature;
+        if (had_wip != has_wip || refs_changed)
         {
             refresh();
             return;

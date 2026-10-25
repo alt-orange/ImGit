@@ -88,6 +88,7 @@ namespace imgit::git
         using RevwalkHandle = Handle<git_revwalk, git_revwalk_free>;
         using StatusListHandle = Handle<git_status_list, git_status_list_free>;
         using BranchIteratorHandle = Handle<git_branch_iterator, git_branch_iterator_free>;
+        using ReferenceIteratorHandle = Handle<git_reference_iterator, git_reference_iterator_free>;
         using RemoteHandle = Handle<git_remote, git_remote_free>;
         using AnnotatedCommitHandle = Handle<git_annotated_commit, git_annotated_commit_free>;
         using ConfigHandle = Handle<git_config, git_config_free>;
@@ -423,6 +424,67 @@ namespace imgit::git
         default:
             return RepoState::OTHER;
         }
+    }
+
+    Result<std::string> Repository::refs_signature() const
+    {
+        git_repository* repo = m_repo.get();
+        // One line per ref, sorted: the refdb may list loose and packed refs in any order.
+        std::vector<std::string> lines;
+        const auto describe = [](git_reference* ref)
+        {
+            std::string line = git_reference_name(ref);
+            line += ' ';
+            // What HEAD names, not where that lands: a checkout between two branches at one commit must count.
+            if (git_reference_type(ref) == GIT_REFERENCE_SYMBOLIC)
+            {
+                line += git_reference_symbolic_target(ref);
+            }
+            else if (const git_oid* oid = git_reference_target(ref); oid != nullptr)
+            {
+                line += oid_str(oid);
+            }
+            return line;
+        };
+        {
+            ReferenceHandle head;
+            IMGIT_TRY(git_reference_lookup(head.out(), repo, "HEAD"), "could not read HEAD");
+            lines.push_back(describe(head));
+        }
+        {
+            ReferenceIteratorHandle it;
+            IMGIT_TRY(git_reference_iterator_new(it.out(), repo), "could not list references");
+            git_reference* raw = nullptr;
+            int rc = 0;
+            while ((rc = git_reference_next(&raw, it)) == 0)
+            {
+                ReferenceHandle ref;
+                ref.ptr = raw;
+                lines.push_back(describe(ref));
+            }
+            if (rc != GIT_ITEROVER)
+            {
+                return last_error("could not list references");
+            }
+        }
+        // Stashes: dropping one below the top leaves refs/stash in place, only its reflog shrinks.
+        {
+            auto callback = [](std::size_t index, const char*, const git_oid* stash_id, void* data) -> int
+            {
+                static_cast<std::vector<std::string>*>(data)->push_back("stash@{" + std::to_string(index) + "} "
+                                                                        + oid_str(stash_id));
+                return 0;
+            };
+            git_stash_foreach(repo, callback, &lines);
+        }
+        std::sort(lines.begin(), lines.end());
+        std::string signature;
+        for (const std::string& line : lines)
+        {
+            signature += line;
+            signature += '\n';
+        }
+        return signature;
     }
 
     Result<History> Repository::load_history(const HistoryOptions& options) const

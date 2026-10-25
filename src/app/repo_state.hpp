@@ -206,12 +206,15 @@ namespace imgit::app
         {
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
+            std::string refs_signature; // Repository::refs_signature, empty when it could not be read
         };
 
         void refresh(); // history + status + layout
-        void refresh_status(); // cheap: working directory only, rebuilds rows when the WIP row appears/disappears
-        // The periodic status poll: re-reads the working directory on a worker thread once `interval` seconds have
-        // passed since the last read finished, and applies the result on a later frame.
+        // Cheap: working directory only; rebuilds the rows when the WIP row appears / disappears or a ref changed.
+        void refresh_status();
+        // The periodic status poll: re-reads the working directory and the refs on a worker thread once `interval`
+        // seconds have passed since the last read finished, and applies the result on a later frame. A commit,
+        // checkout, fetch or stash made outside ImGit thus shows up within one interval.
         void poll_status(double now, double interval);
         void load_commit_files(const git::Sha& sha);
         void open_diff(DiffTarget target);
@@ -253,5 +256,6 @@ namespace imgit::app
         // Bumped by every status read on the UI thread; a poll started before one is out of date.
         std::uint64_t m_status_generation = 0;
         std::uint64_t m_status_job_generation = 0;
+        std::string m_refs_signature; // the refs the rows were built from
     };
 } // namespace imgit::app
