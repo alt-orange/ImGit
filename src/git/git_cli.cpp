@@ -107,19 +107,15 @@ namespace imgit::git::cli
             }
         }
         command.insert(command.end(), args.begin(), args.end());
-        // git runs the askpass program through a shell, so a path with a space (C:\Program Files\...) is quoted.
-        std::string askpass = platform::executable_path();
-        if (!askpass.empty())
-        {
-            askpass = "\"" + askpass + "\"";
-        }
         // Never block on a terminal prompt or a credential helper's window: git asks ImGit (its credentials
-        // prompt), and the helpers still answer with what they have stored.
+        // prompt), and the helpers still answer with what they have stored. GIT_ASKPASS is a bare path: git
+        // executes it directly, not through a shell, so a quoted path (even one with a space) is "not found"
+        // and every prompt fails with "could not read Username".
         const platform::ProcessOutput process =
                 platform::run_process(workdir, command, input,
                                       {{"GIT_TERMINAL_PROMPT", "0"},
                                        {"GCM_INTERACTIVE", "never"},
-                                       {"GIT_ASKPASS", askpass},
+                                       {"GIT_ASKPASS", platform::executable_path()},
                                        {ASKPASS_MARKER, "1"},
                                        {CREDENTIALS_VARIABLE, encode(credentials)}});
         Output output{process.exit_code, process.text};
@@ -202,12 +198,14 @@ namespace imgit::git::cli
         {
             return 1;
         }
-        std::string username;
-        const std::string host = credential_host(*url, &username);
+        // The password prompt names the username git settled on ("Password for 'user@host'"), from the remote
+        // url or our own answer; the host's credential answers it either way, since a remote url that carries
+        // a user (https://me@github.com/...) never asks for one, whatever the sign-in bar was given.
+        const std::string host = credential_host(*url);
         const char* encoded = std::getenv(CREDENTIALS_VARIABLE);
         for (const Credential& credential : decode(encoded != nullptr ? encoded : ""))
         {
-            if (credential.url != host || (!username.empty() && credential.username != username))
+            if (credential.url != host)
             {
                 continue;
             }
