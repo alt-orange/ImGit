@@ -1,0 +1,7 @@
+# assets/ is compiled into the executable byte for byte: no line-ending conversion.
+/assets/** -text
+# vcpkg applies these patches to LF sources on Linux; keep them LF in every checkout.
+/vcpkg-overlays/** text eol=lf
+
+# Binary icon files.
+/res/*.ico binary

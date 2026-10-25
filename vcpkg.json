@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "imgit",
+  "version-string": "0.1.0",
+  "description": "ImGit Desktop, a Git client built on Dear ImGui and libgit2",
+  "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
+  "dependencies": [
+    {
+      "name": "imgui",
+      "features": [ "freetype", "glfw-binding", "opengl3-binding" ]
+    },
+    "cpr",
+    "glfw3",
+    "libgit2",
+    "nativefiledialog-extended",
+    "stb"
+  ]
+}

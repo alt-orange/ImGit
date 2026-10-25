@@ -1,0 +1,2 @@
+col_resize.cur and row_resize.cur are Chromium's ui/resources/cursors/col_resize.cur and row_resize.cur,
+under Chromium's BSD-style license: https://chromium.googlesource.com/chromium/src/+/main/LICENSE

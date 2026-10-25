@@ -1,0 +1,6 @@
+fa_icons.tsv and svg/{arrows-rotate,circle-check,circle-info,circle-xmark,clipboard,code-branch}.svg are icons from
+Font Awesome Free 6.7.2 by Fonticons, Inc. (https://fontawesome.com), under the Creative Commons Attribution 4.0
+International license: https://creativecommons.org/licenses/by/4.0/ (Font Awesome Free license:
+https://fontawesome.com/license/free). The paths are unchanged; fa_icons.tsv keys them by the names ImGit's code uses.
+
+svg/{chevron-down,close,plus}.svg are ImGit's own.

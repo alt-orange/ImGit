@@ -1,0 +1,101 @@
+#include "platform/shell.hpp"
+#include "platform/window.hpp"
+#include <filesystem>
+#include <nfd.h>
+
+namespace imgit::platform::shell
+{
+    namespace
+    {
+        nfdwindowhandle_t parent()
+        {
+            const NativeWindow native = native_window(main_window());
+            switch (native.kind)
+            {
+            case NativeWindow::Kind::WINDOWS_HWND:
+                return {NFD_WINDOW_HANDLE_TYPE_WINDOWS, native.handle};
+            case NativeWindow::Kind::COCOA_NSWINDOW:
+                return {NFD_WINDOW_HANDLE_TYPE_COCOA, native.handle};
+            case NativeWindow::Kind::X11_WINDOW:
+                return {NFD_WINDOW_HANDLE_TYPE_X11, native.handle};
+            default:
+                return {NFD_WINDOW_HANDLE_TYPE_UNSET, nullptr};
+            }
+        }
+
+        // Runs `show` between NFD_Init / NFD_Quit (COM on Windows, GTK on Linux) and takes the path it returns.
+        template<class Show>
+        std::optional<std::string> run_dialog(Show&& show)
+        {
+            if (NFD_Init() != NFD_OKAY)
+            {
+                return std::nullopt;
+            }
+            std::optional<std::string> result;
+            nfdu8char_t* path = nullptr;
+            if (show(&path) == NFD_OKAY && path != nullptr)
+            {
+                result = path;
+                NFD_FreePathU8(path);
+            }
+            NFD_Quit();
+            return result;
+        }
+    } // namespace
+
+    std::optional<std::string> save_file_dialog(const std::string& default_name, const std::string& extension)
+    {
+        const std::string name = extension + " files";
+        const nfdu8filteritem_t filter{name.c_str(), extension.c_str()};
+        return run_dialog(
+                [&](nfdu8char_t** path)
+                {
+                    nfdsavedialogu8args_t args{};
+                    args.filterList = extension.empty() ? nullptr : &filter;
+                    args.filterCount = extension.empty() ? 0 : 1;
+                    args.defaultName = default_name.empty() ? nullptr : default_name.c_str();
+                    args.parentWindow = parent();
+                    return NFD_SaveDialogU8_With(path, &args);
+                });
+    }
+
+    std::optional<std::string> open_file_dialog(const std::string& extension)
+    {
+        const std::string name = extension + " files";
+        const nfdu8filteritem_t filter{name.c_str(), extension.c_str()};
+        return run_dialog(
+                [&](nfdu8char_t** path)
+                {
+                    nfdopendialogu8args_t args{};
+                    args.filterList = extension.empty() ? nullptr : &filter;
+                    args.filterCount = extension.empty() ? 0 : 1;
+                    args.parentWindow = parent();
+                    return NFD_OpenDialogU8_With(path, &args);
+                });
+    }
+
+    std::optional<std::string> pick_folder_dialog(const std::string& start)
+    {
+        std::error_code error;
+        // The shell rejects "C:/repo/": native separators, no trailing one.
+        std::string folder;
+        std::filesystem::path path = std::filesystem::path(std::u8string(start.begin(), start.end())).make_preferred();
+        if (!start.empty() && std::filesystem::is_directory(path, error))
+        {
+            if (!path.has_filename() && path.has_parent_path() && path != path.root_path())
+            {
+                path = path.parent_path();
+            }
+            const std::u8string text = path.u8string();
+            folder.assign(text.begin(), text.end());
+        }
+        return run_dialog(
+                [&](nfdu8char_t** picked)
+                {
+                    nfdpickfolderu8args_t args{};
+                    args.defaultPath = folder.empty() ? nullptr : folder.c_str();
+                    args.parentWindow = parent();
+                    return NFD_PickFolderU8_With(picked, &args);
+                });
+    }
+} // namespace imgit::platform::shell

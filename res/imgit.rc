@@ -1,0 +1,2 @@
+// The executable's icon (Explorer, the taskbar). GLFW also loads the resource named GLFW_ICON as the window icon.
+GLFW_ICON ICON "imgit.ico"

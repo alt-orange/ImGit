@@ -1,0 +1,130 @@
+<div align="center">
+
+<img src="assets/images/app_icon.png" width="96" alt="ImGit icon">
+
+# ImGit Desktop
+
+**A fast, native Git client with a commit graph front and centre.**
+C++23 on Dear ImGui and libgit2 · Windows and Linux
+
+</div>
+
+![ImGit: the commit graph with a commit's details open](docs/images/overview.png)
+
+## Highlights
+
+- **Commit graph** — lanes, merge and stash nodes, branch / tag / remote labels with ahead and behind counts, search
+  (`Ctrl+F`), multi-select, lazy loading and drag-and-drop of branches to merge, rebase or reset.
+- **Stage and commit** — per-file and per-folder staging, a tree or path view with change counts, amend, push after
+  commit, and undo / redo (`Ctrl+Z` / `Ctrl+Y`) for almost every operation.
+- **Interactive rebase** — pick, reword, squash, drop and reorder in a full view, from the keyboard or the mouse.
+- **Merge tool** — resolve conflicts three ways: take a side, take single lines, or edit the result by hand.
+- **Built in** — a real terminal (PowerShell / your shell), a command palette (`Ctrl+P`), profiles with their own
+  settings and commit author, and a sign-in prompt for HTTPS remotes.
+- **Themes** — five dark themes, orange-accented ImGit Dark by default.
+
+## Tour
+
+### Commits and diffs
+
+Click a commit for its message, author, parents and changed files; click a file for its diff, inline or side by side,
+with the whole file or just the hunks. The working directory's changes stage and unstage from the same panel.
+
+![A file's diff next to its commit](docs/images/diff.png)
+
+### Interactive rebase
+
+Right-click a commit and choose *Interactive Rebase*: every commit above it becomes a row. `P` / `S` / `R` / `D` set the
+selected row's action, `Ctrl+↑` / `Ctrl+↓` move it, and Reword opens a message editor in place. Start Rebase rewrites
+the branch; a conflict rolls everything back, and Undo restores the old head.
+
+![Interactive rebase with a dropped and a squashed commit](docs/images/interactive-rebase.png)
+
+### Merge conflicts
+
+Clicking a conflicted file opens the merge tool: your side (**A**) and theirs (**B**) next to each other, the result
+under them. Tick a conflict to take a side, click single lines to take just those, step through the conflicts with
+the arrows, or double-click the output to edit it. Save writes the file and marks it resolved.
+
+![The merge tool resolving a conflict](docs/images/merge-tool.png)
+
+### Themes
+
+ImGit Dark, Ocean, Midnight Teal, Amethyst and Rose: pick one in Preferences → UI Customization or with `Ctrl+P` →
+*Switch Theme*. The graph's lanes start at each theme's accent colour.
+
+![Ocean, Midnight Teal, Amethyst and Rose](docs/images/themes.png)
+
+## Everything else
+
+- **Toolbar** — repository and branch switchers, Undo / Redo, Pull (fast-forward, fast-forward only, rebase, fetch
+  all), Push (asks for an upstream when there is none), Branch, Stash, Pop, Terminal, Git LFS and the command palette.
+- **Context menus** — checkout, branches and tags, cherry-pick, revert, reset, edit any commit message on the branch,
+  squash / drop selected commits, merge, rebase, set upstream, hide / solo / pin branches, push and delete remote refs,
+  stashes, patches, copy sha / message / names.
+- **Left panel** — local branches as a folder tree, remotes, tags, stashes, worktrees and submodules, with a filter.
+- **Profiles** — each profile keeps its own settings, tabs, repository lists and commit author, and shows its author's
+  Gravatar or initials. Settings live in `%APPDATA%\.imgit` (`~/.imgit` elsewhere).
+- **Credentials** — when a push, pull, fetch or clone needs a username and password, ImGit asks in a sign-in bar and
+  runs the command again. Accepted credentials last for the session; *Remember me* hands them to your git credential
+  helper.
+- **Repository Management** — favourites, recent and open repositories with their branch, ahead / behind and
+  uncommitted changes.
+
+Local operations use libgit2. Network operations (fetch, pull, push, clone, rebase, remote refs, LFS) run the `git`
+on your `PATH` in the background, so your credential helpers and SSH setup apply as usual.
+
+## Building
+
+**Windows** — Visual Studio 2022 or later with the C++ workload, clang-cl, CMake and vcpkg (the ones bundled with
+Visual Studio work), and `git` on `PATH`:
+
+```bash
+cmake --preset x64-release
+cmake --build --preset x64-release
+build/x64-release/imgit.exe path/to/repository
+```
+
+`CMakePresets.json` points `CMAKE_TOOLCHAIN_FILE` at the Visual Studio vcpkg bundle; change it (or use
+`$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`) for another install. Dependencies come from `vcpkg.json`: imgui
+with the GLFW / OpenGL 3 bindings, glfw3, libgit2, cpr, nativefiledialog-extended and stb. Use `x64-debug` for a build
+with a console for logs.
+
+**Linux** — g++ 13+ or clang 17+, CMake, Ninja, a vcpkg checkout in `VCPKG_ROOT`, and GLFW's X11 packages
+(`libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config`):
+
+```bash
+cmake --preset linux-release
+cmake --build --preset linux-release
+build/linux-release/imgit path/to/repository
+```
+
+File dialogs need the xdg desktop portal (`xdg-desktop-portal` and a backend such as `xdg-desktop-portal-gtk`).
+`vcpkg-overlays/dbus` is the stock dbus port without its systemd default. See `PORTING.md` for what each platform
+implements.
+
+**Headless screenshots** — `imgit <repo> --screenshot out.bmp [--size WxH] [--select-row N]` renders a few frames and
+exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
+made this way.
+
+## Source map
+
+| Path | What |
+|---|---|
+| `src/git/` | the libgit2 wrapper (history, refs, status, diffs, index, branches, tags, remotes, stashes, merge, history rewriting, conflict sides) and the `git` command runner with the sign-in prompt's askpass side |
+| `src/graph/` | lane and edge assignment for the commit graph |
+| `src/app/` | the application: settings, profiles, tabs, themes, repository state, undo, the merge model, toasts, the terminal's screen |
+| `src/ui/` | every view: graph, panels, diff, interactive rebase, merge tool, menus, dialogs, preferences, command palette, terminal |
+| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window |
+| `src/gfx/` | image decoding, the LCD text renderer and the platform font loader |
+| `assets/` | fonts, icons and images compiled into the executable |
+| `tools/app_icon.py` | draws the app icon |
+
+## Credits
+
+ImGit is built on [Dear ImGui](https://github.com/ocornut/imgui) (MIT), [libgit2](https://libgit2.org) (GPLv2 with
+linking exception), [GLFW](https://www.glfw.org) (zlib), [cpr](https://github.com/libcpr/cpr) (MIT),
+[nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) (zlib) and
+[stb](https://github.com/nothings/stb) (public domain). It ships the Open Sans font (SIL OFL,
+`assets/fonts/LICENSE.txt`), Font Awesome Free icons (CC BY 4.0, `assets/icons/NOTICE.txt`) and two of Chromium's
+cursors (BSD, `assets/cursors/NOTICE.txt`).
