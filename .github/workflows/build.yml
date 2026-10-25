@@ -1,0 +1,191 @@
+# Builds ImGit for Windows and Linux and uploads one package per platform as a workflow artifact.
+# Called by ci.yml (every push / pull request) and release.yml (attaches the packages to a release).
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit, branch or tag to build (the caller's ref when empty)
+        type: string
+        default: ''
+      version:
+        description: The version in the package names, such as v0.2.0 (the short sha when empty)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+            preset: ci-windows
+            triplet: x64-windows-static
+            platform: windows-x64
+          - name: Linux x64
+            os: ubuntu-24.04
+            preset: ci-linux
+            triplet: x64-linux
+            platform: linux-x64
+    env:
+      VCPKG_DISABLE_METRICS: 1
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # GLFW's X11 headers (README.md), the compiler, and Xvfb + Mesa for the smoke test
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build g++-14 pkg-config \
+            libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
+            xvfb xauth libgl1-mesa-dri
+          printf 'CC=gcc-14\nCXX=g++-14\n' >> "$GITHUB_ENV"
+
+      # cl, link, the Windows SDK and Ninja on PATH for clang-cl (and for vcpkg's own port builds)
+      - name: Set up the MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # vcpkg at the manifest's builtin-baseline, so CI resolves the same port versions as a local build.
+      - name: Check out vcpkg
+        shell: bash
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          {
+            echo "VCPKG_ROOT=$temp/vcpkg"
+            echo "VCPKG_CACHE_DIR=$temp/vcpkg-cache"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$temp/vcpkg-cache,readwrite"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$temp/vcpkg-cache"
+          baseline=$(grep -o '"builtin-baseline": *"[0-9a-f]*"' vcpkg.json | grep -o '[0-9a-f]\{40\}')
+          git clone --quiet --filter=blob:none https://github.com/microsoft/vcpkg "$temp/vcpkg"
+          git -C "$temp/vcpkg" checkout --quiet "$baseline"
+
+      - name: Bootstrap vcpkg (Linux)
+        if: runner.os == 'Linux'
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics'
+
+      # vcpkg's binary cache: built ports as zips, keyed by their ABI hash (port version, options, compiler).
+      # A new cache entry is saved only when this run built a port the restored cache did not have.
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_CACHE_DIR }}
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**') }}-
+            vcpkg-${{ matrix.triplet }}-
+
+      - name: Count cached ports
+        id: cached-before
+        shell: bash
+        run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
+
+      # pwsh on both runners: Git Bash would put its own `link` ahead of MSVC's.
+      - name: Configure (installs the vcpkg dependencies)
+        shell: pwsh
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Check for newly built ports
+        id: cached-after
+        shell: bash
+        run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Save the vcpkg binary cache
+        if: steps.cached-after.outputs.count != steps.cached-before.outputs.count
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_CACHE_DIR }}
+          key: ${{ steps.vcpkg-restore.outputs.cache-primary-key }}
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Upload vcpkg logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs-${{ matrix.platform }}
+          path: |
+            ${{ env.VCPKG_ROOT }}/buildtrees/*/*.log
+            build/vcpkg_installed*/vcpkg/issue_body.md
+          if-no-files-found: ignore
+
+      # The Linux runner has no GPU, so the window renders through Mesa's llvmpipe on Xvfb.
+      # (The Windows runner has no OpenGL 3.3 driver, so there is no smoke test there.)
+      - name: Smoke test (screenshot of this repository)
+        if: runner.os == 'Linux'
+        run: |
+          timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+            build/${{ matrix.preset }}/imgit . --screenshot smoke.bmp
+          test -s smoke.bmp
+
+      - name: Upload the smoke test screenshot
+        if: runner.os == 'Linux' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot
+          path: smoke.bmp
+          if-no-files-found: ignore
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          version="${{ inputs.version }}"
+          version="${version:-$(git rev-parse --short HEAD)}"
+          name="imgit-$version-${{ matrix.platform }}"
+          mkdir -p "dist/$name/licenses"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp build/${{ matrix.preset }}/imgit.exe "dist/$name/"
+          else
+            cp build/${{ matrix.preset }}/imgit "dist/$name/"
+            strip "dist/$name/imgit"
+          fi
+          cp README.md "dist/$name/"
+          # assets/ is compiled in, so its notices ship next to the binary, with every statically linked library's
+          cp assets/fonts/LICENSE.txt "dist/$name/licenses/OpenSans.txt"
+          cp assets/icons/NOTICE.txt "dist/$name/licenses/FontAwesome.txt"
+          cp assets/cursors/NOTICE.txt "dist/$name/licenses/Chromium-cursors.txt"
+          for copyright in build/vcpkg_installed*/${{ matrix.triplet }}/share/*/copyright; do
+            port=$(basename "$(dirname "$copyright")")
+            case "$port" in vcpkg-*) continue ;; esac # vcpkg's build helpers, not linked in
+            cp "$copyright" "dist/$name/licenses/$port.txt"
+          done
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+            echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: imgit-${{ matrix.platform }}
+          path: ${{ steps.package.outputs.file }}
+          if-no-files-found: error
