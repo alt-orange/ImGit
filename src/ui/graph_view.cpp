@@ -1775,9 +1775,12 @@ namespace imgit::ui
             {
                 g_zone_move.active = true;
             }
+            if (g_zone_move.pressed)
+            {
+                set_drag_cursor(DragCursor::GRABBING);
+            }
             if (g_zone_move.active)
             {
-                set_drag_cursor(DragCursor::MOVE);
                 // The floating cell's centre against the neighbours': past one, the zones swap and the layout is
                 // placed again for the rows below.
                 const float centre = mouse.x - g_zone_move.grab + g_zone_move.width / 2.f;
