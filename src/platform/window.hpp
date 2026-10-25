@@ -21,6 +21,14 @@ namespace imgit::platform
     // The window init_window() was given (the parent of file dialogs), null before.
     [[nodiscard]] GLFWwindow* main_window();
 
+    // Logical pixels the tabs bar leaves free at its left for the window's own controls: the traffic lights on
+    // macOS, where the system title bar is hidden and the tabs bar stands in for it; 0 elsewhere.
+    [[nodiscard]] float title_bar_inset();
+    // Where the tabs bar is the title bar: the part of it (window coordinates, logical px) that acts as one, moving
+    // the window when dragged and zooming or minimising on a double-click, as the system is set. Set every frame,
+    // empty (max <= min) when there is none; the presses there never reach ImGui. A no-op elsewhere.
+    void set_title_bar_drag_region(float min_x, float min_y, float max_x, float max_y);
+
     enum class CursorShape
     {
         MOVE, // drag-and-drop: drop allowed

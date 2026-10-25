@@ -336,6 +336,7 @@ namespace imgit::app
         void save_tabs() const;
         void draw_menu_bar(RepoState* state);
         [[nodiscard]] ui::MenuItems bar_menu(int index);
+        bool native_menu_installed = false; // the menus sit in the system menu bar (macOS)
         void draw_status_bar();
         void draw_repo_tab(RepoState& state, ImVec2 size);
 

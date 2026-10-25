@@ -70,10 +70,11 @@ add_executable(imgit
     src/ui/vector_icons.cpp
     src/ui/widgets.cpp)
 
-# Platform code lives in src/platform (one header per service, a _win32 / _posix source each, plus window_mac.mm
-# for the Cocoa calls) and in the native font loader; everything else is portable.
+# Platform code lives in src/platform (one header per service, a _win32 / _posix source each, plus the .mm
+# sources for the Cocoa calls) and in the native font loader; everything else is portable.
 if(WIN32)
     target_sources(imgit PRIVATE
+        src/platform/app_menu_none.cpp
         src/platform/process_win32.cpp
         src/platform/pseudo_console_win32.cpp
         src/platform/shell_win32.cpp
@@ -94,7 +95,7 @@ else()
     if(APPLE)
         # An app bundle (ImGit.app) with the Dock icon; the GL 1.1 header's deprecation warnings are silenced.
         enable_language(OBJCXX)
-        target_sources(imgit PRIVATE src/platform/window_mac.mm res/imgit.icns)
+        target_sources(imgit PRIVATE src/platform/app_menu_mac.mm src/platform/window_mac.mm res/imgit.icns)
         set_source_files_properties(res/imgit.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         set_target_properties(imgit PROPERTIES
             OUTPUT_NAME ImGit
@@ -108,6 +109,7 @@ else()
         target_compile_definitions(imgit PRIVATE GL_SILENCE_DEPRECATION)
         target_link_libraries(imgit PRIVATE "-framework Cocoa")
     else()
+        target_sources(imgit PRIVATE src/platform/app_menu_none.cpp)
         target_link_libraries(imgit PRIVATE util) # forkpty
     endif()
 endif()

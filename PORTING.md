@@ -110,6 +110,33 @@ real build. What the port consists of:
 - **Window.** `window_mac.mm` gives the NSWindow the dark appearance (`NSAppearanceNameDarkAqua`), so the title bar
   matches the dark UI whatever the system setting. GLFW ignores `glfwSetWindowIcon` on macOS; the bundle's icon is
   used instead.
+- **Title bar.** The system title bar is hidden (`titlebarAppearsTransparent`, `NSWindowStyleMaskFullSizeContentView`,
+  an empty compact-style toolbar for the traffic lights' inset, as Electron's `hiddenInset`), so the tabs bar is
+  the top of the window with the traffic lights over its left end; `platform::title_bar_inset()` (72 px) keeps the
+  folder icon and the tabs clear of them. The bar publishes its empty part (from the + to the right-hand icons)
+  through `platform::set_title_bar_drag_region()` each frame; a transparent `ImGitDragView` over GLFW's content
+  view hit-tests that region and starts `performWindowDragWithEvent:` from the press itself, or zooms / minimises
+  on a double-click per `AppleActionOnDoubleClick`. (Handing AppKit a later "current event" from the ImGui frame
+  instead did nothing once the window had been tiled or zoomed.) The presses there never reach ImGui. In full
+  screen the toolbar is taken off the window (`NSWindowWillEnterFullScreenNotification`; macOS would keep it as
+  an opaque band over the tabs bar) and the inset is 0, the lights being hidden there.
+- **Menu bar.** `platform/app_menu.hpp`: on macOS (`app_menu_mac.mm`) the File / Edit / View / Help menus are
+  NSMenus between the application menu and the Window menu GLFW creates, and the app draws no bar of its own
+  (`has_native_menu_bar()`; the prompt bars and the minimum window height follow the viewport's work area).
+  Each menu is rebuilt from `Application::bar_menu()` as it opens (`menuNeedsUpdate:`), every item disabled while
+  a modal dialog is up; a click is queued and run by `draw_menu_bar` on the next frame, like the in-app menus'
+  deferred clicks. The items show their shortcuts as key equivalents but `menuHasKeyEquivalent:` returns NO, so
+  the keystrokes still reach the window and the app's own shortcut handling, which knows about focused fields and
+  dialogs. Elsewhere `app_menu_none.cpp` does nothing.
+- **Text.** `gfx::set_subpixel_atlas()` tells `lcd_renderer` whether the atlas is the native loader's 3x1
+  sub-pixel coverage. Before it, the renderer sampled every atlas per sub-pixel, and a FreeType atlas (one
+  grey coverage per texel) came out smeared a third of a pixel to each side with red and cyan fringes, most
+  visibly on bold text; it is now drawn like any other texture (this also applies to Linux). The FreeType
+  coverage gamma follows the framebuffer density (`freetype_gamma()` in `main.cpp`: 3.0 at 1x, 1.5 on Retina,
+  `IMGIT_FREETYPE_GAMMA` to try others), since the 1x boost makes bold stems soft at 2x. ImGui 1.92 bakes a font
+  at the framebuffer's density only while it is the current font; the fonts `ui::draw_text` hands to
+  `ImDrawList::AddText` (bold, semibold) kept density 1 and came out pixel-doubled on Retina, so `main.cpp` sets
+  every font's `CurrentRasterizerDensity` to the framebuffer scale each frame.
 - **System.** `system_font_file` tries San Francisco (`SFNS.ttf`), Helvetica Neue and Helvetica for the UI face,
   Menlo, SF Mono and Monaco for the monospace one, and Arial (Supplemental) for the tooltips. The shell is `$SHELL
   -l` (zsh), *Open External Terminal* is `open -a Terminal`, *Show in Folder* is `open -R`. Settings live in
@@ -127,7 +154,7 @@ uploaded when it works.
 2. **macOS.**
    - A universal (arm64 + x86_64) build or an `x64-osx` release package (`macos-15-intel` runner).
    - The system proxy (`CFNetworkCopySystemProxySettings`); curl only reads `HTTPS_PROXY` today.
-   - A native menu bar (NSMenu) in place of the Windows 11 one, and ⌘ glyphs in the labels (Open Sans has none).
+   - ⌘ glyphs in the in-app labels (Open Sans has none); the NSMenus show the real key equivalents.
    - Code signing with a Developer ID and notarisation for the release package.
 3. **Windows-only content.**
    - The Windows 11 menu bar.

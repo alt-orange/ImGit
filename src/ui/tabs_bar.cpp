@@ -2,6 +2,7 @@
 #include "app/theme.hpp"
 #include "git/types.hpp"
 #include "platform/shell.hpp"
+#include "platform/window.hpp"
 #include "ui/avatars.hpp"
 #include "ui/popover.hpp"
 #include "ui/panels.hpp"
@@ -158,13 +159,15 @@ namespace imgit::ui
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), theme::u32(p.toolbar_bg0));
 
-        // Left: open-repo folder, repository tabs, +
-        if (bar_icon("##open_repo", Icon::FOLDER, ImVec2(origin.x + px(21.f), mid), 14.f, p.text_secondary,
+        // Left: the window's own controls where the bar is the title bar (macOS), open-repo folder, repository
+        // tabs, +
+        const float left = origin.x + px(platform::title_bar_inset());
+        if (bar_icon("##open_repo", Icon::FOLDER, ImVec2(left + px(21.f), mid), 14.f, p.text_secondary,
                      "Repository Management", app.repo_management_open))
         {
             app.repo_management_open = !app.repo_management_open;
         }
-        float x = origin.x + px(41.f);
+        float x = left + px(41.f);
         int close_request = -1;
         const int tab_count = static_cast<int>(app.tabs.size());
         for (int i = 0; i < tab_count; ++i)
@@ -264,6 +267,16 @@ namespace imgit::ui
             open_popover("##tabs_list");
         }
         draw_tabs_list_popover(app, ImVec2(right - px(90.5f) + px(14.f), origin.y + px(31.f)));
+
+        // Where the bar is the title bar (macOS), its empty part, from the + to the right-hand icons, acts as one
+        // (the platform takes the presses there); in window coordinates, which are the viewport's.
+        {
+            const ImVec2 viewport_pos = ImGui::GetMainViewport()->Pos;
+            const float empty_min = x + px(33.f);
+            const float empty_max = right - px(103.f);
+            platform::set_title_bar_drag_region(empty_min - viewport_pos.x, origin.y - viewport_pos.y,
+                                                empty_max - viewport_pos.x, origin.y + height - viewport_pos.y);
+        }
         ImGui::EndChild();
 
         if (close_request >= 0)

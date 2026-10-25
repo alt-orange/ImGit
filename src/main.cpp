@@ -5,6 +5,7 @@
 #include "gfx/native_font_loader.hpp"
 #include "git/git_cli.hpp"
 #include "git/repository.hpp"
+#include "platform/app_menu.hpp"
 #include "platform/process.hpp"
 #include "platform/system.hpp"
 #include "platform/window.hpp"
@@ -530,7 +531,20 @@ namespace
     float g_text_gamma = 1.9f;
     float g_text_contrast = 0.f;
 
-    void load_fonts(float dpi_scale)
+    // The coverage gamma of the FreeType fallback for a framebuffer `density` (pixels per logical pixel): 3.0 at 1x
+    // reproduces ClearType's stem weight with grey-scale glyphs; at 2x (Retina) the edge pixels are half as wide
+    // and the same boost makes both sides of a bold stem solid, which reads as blur, so it falls to 1.5.
+    // IMGIT_FREETYPE_GAMMA overrides it.
+    float freetype_gamma(float density)
+    {
+        if (const char* gamma = std::getenv("IMGIT_FREETYPE_GAMMA"); gamma != nullptr)
+        {
+            return std::max(1.f, static_cast<float>(std::atof(gamma)));
+        }
+        return 1.f + 2.f / std::max(1.f, density * density);
+    }
+
+    void load_fonts(float dpi_scale, float density)
     {
         ImGuiIO& io = ImGui::GetIO();
         // The text is Chromium's DirectWrite ClearType. Use the same rasteriser where it exists (drawn by
@@ -539,12 +553,14 @@ namespace
         {
             imgit::gfx::set_native_coverage_curve(g_text_gamma, g_text_contrast);
             io.Fonts->SetFontLoader(native);
+            imgit::gfx::set_subpixel_atlas(true);
         }
         else
         {
+            imgit::gfx::set_subpixel_atlas(false);
 #ifdef IMGUI_ENABLE_FREETYPE
             io.Fonts->FontLoaderFlags = ImGuiFreeTypeLoaderFlags_NoHinting;
-            install_gamma_font_loader(io.Fonts, 3.0f);
+            install_gamma_font_loader(io.Fonts, freetype_gamma(density));
 #endif
         }
         imgit::ui::Fonts& fonts = imgit::ui::fonts();
@@ -648,8 +664,9 @@ int main(int argc, char** argv)
     const float dpi_scale = imgit::platform::layout_scale(window);
     imgit::ui::set_dpi_scale(dpi_scale);
     // The minimum window (950x675 outside its frame) leaves a 934x610 page; ImGit's client area also holds
-    // the 26px menu bar.
-    glfwSetWindowSizeLimits(window, static_cast<int>(934.f * dpi_scale), static_cast<int>(636.f * dpi_scale),
+    // the 26px menu bar where the app draws it (not on macOS, whose menu bar is the system's).
+    const float min_height = 610.f + (imgit::platform::has_native_menu_bar() ? 0.f : imgit::theme::MENU_BAR_HEIGHT);
+    glfwSetWindowSizeLimits(window, static_cast<int>(934.f * dpi_scale), static_cast<int>(min_height * dpi_scale),
                             GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     IMGUI_CHECKVERSION();
@@ -676,7 +693,14 @@ int main(int argc, char** argv)
     {
         g_text_contrast = static_cast<float>(std::atof(contrast));
     }
-    load_fonts(dpi_scale);
+    float density = 1.f;
+    {
+        int w = 0, h = 0, fw = 0, fh = 0;
+        glfwGetWindowSize(window, &w, &h);
+        glfwGetFramebufferSize(window, &fw, &fh);
+        density = w > 0 ? static_cast<float>(fw) / static_cast<float>(w) : 1.f;
+    }
+    load_fonts(dpi_scale, density);
 
     // A scripted run takes no real input: the backend's GLFW callbacks would feed the user's mouse and keyboard
     // into the script's frames.
@@ -825,6 +849,17 @@ int main(int argc, char** argv)
                 ImGui_ImplGlfw_NewFrame();
             }
             ImGui::NewFrame();
+            // A font given to ImDrawList::AddText (ui::draw_text: the bold and semibold labels) bakes its glyphs at
+            // its own CurrentRasterizerDensity, which ImGui keeps current only for the font PushFont() made
+            // current; on a Retina framebuffer the others would bake at 1x and be drawn pixel-doubled. Every font
+            // follows the framebuffer's scale.
+            if (io.DisplayFramebufferScale.x > 0.f)
+            {
+                for (ImFont* font : io.Fonts->Fonts)
+                {
+                    font->CurrentRasterizerDensity = io.DisplayFramebufferScale.x;
+                }
+            }
 
             if (!options.screenshot.empty() && frame == 2)
             {

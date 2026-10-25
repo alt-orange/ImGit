@@ -332,7 +332,8 @@ namespace imgit::ui
         {
             const theme::Palette& p = theme::palette();
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            const ImVec2 min(viewport->Pos.x, viewport->Pos.y + px(theme::MENU_BAR_HEIGHT + theme::TABS_BAR_HEIGHT));
+            const ImVec2 min(viewport->WorkPos.x,
+                             viewport->WorkPos.y + px(theme::TABS_BAR_HEIGHT)); // under the menu bar, if any
             const ImVec2 size(viewport->Size.x, px(theme::TOOLBAR_HEIGHT));
             ImGui::SetNextWindowPos(min);
             ImGui::SetNextWindowSize(size);
@@ -421,7 +422,8 @@ namespace imgit::ui
         {
             const theme::Palette& p = theme::palette();
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            const ImVec2 min(viewport->Pos.x, viewport->Pos.y + px(theme::MENU_BAR_HEIGHT + theme::TABS_BAR_HEIGHT));
+            const ImVec2 min(viewport->WorkPos.x,
+                             viewport->WorkPos.y + px(theme::TABS_BAR_HEIGHT)); // under the menu bar, if any
             const ImVec2 size(viewport->Size.x, px(theme::TOOLBAR_HEIGHT));
             ImGui::SetNextWindowPos(min);
             ImGui::SetNextWindowSize(size);
@@ -659,7 +661,8 @@ namespace imgit::ui
         {
             const theme::Palette& p = theme::palette();
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            const ImVec2 min(viewport->Pos.x, viewport->Pos.y + px(theme::MENU_BAR_HEIGHT + theme::TABS_BAR_HEIGHT));
+            const ImVec2 min(viewport->WorkPos.x,
+                             viewport->WorkPos.y + px(theme::TABS_BAR_HEIGHT)); // under the menu bar, if any
             const ImVec2 size(viewport->Size.x, px(theme::TOOLBAR_HEIGHT));
             ImGui::SetNextWindowPos(min);
             ImGui::SetNextWindowSize(size);

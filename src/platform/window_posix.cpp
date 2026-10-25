@@ -20,8 +20,11 @@ namespace imgit::platform
 #ifdef __APPLE__
     namespace detail
     {
-        // window_mac.mm: gives the NSWindow the dark appearance, whatever the system setting.
-        void set_dark_appearance(void* ns_window);
+        // window_mac.mm: the dark appearance whatever the system setting, and the title bar hidden under the
+        // content (the traffic lights stay, over the tabs bar).
+        void configure_window(void* ns_window);
+        float title_bar_inset();
+        void set_drag_region(float min_x, float min_y, float max_x, float max_y);
     } // namespace detail
 #endif
 
@@ -37,8 +40,8 @@ namespace imgit::platform
     {
         g_window = window;
 #ifdef __APPLE__
-        // The app icon comes from the bundle; the title bar is dark like the rest of the window.
-        detail::set_dark_appearance(static_cast<void*>(glfwGetCocoaWindow(window)));
+        // The app icon comes from the bundle; the window frame is dark like the rest of the window.
+        detail::configure_window(static_cast<void*>(glfwGetCocoaWindow(window)));
 #else
         // The frame belongs to the window manager.
         if (const std::optional<gfx::Image> icon = gfx::decode_image(assets::data("images/app_icon.png")); icon)
@@ -52,6 +55,24 @@ namespace imgit::platform
     GLFWwindow* main_window()
     {
         return g_window;
+    }
+
+    float title_bar_inset()
+    {
+#ifdef __APPLE__
+        // The three traffic lights (inset as in a toolbar window, they end near 70) and a gap; 0 in full screen.
+        return detail::title_bar_inset();
+#else
+        return 0.f;
+#endif
+    }
+
+    void set_title_bar_drag_region([[maybe_unused]] float min_x, [[maybe_unused]] float min_y,
+                                   [[maybe_unused]] float max_x, [[maybe_unused]] float max_y)
+    {
+#ifdef __APPLE__
+        detail::set_drag_region(min_x, min_y, max_x, max_y);
+#endif
     }
 
     float layout_scale([[maybe_unused]] GLFWwindow* window)

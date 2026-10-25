@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 #include "app/theme.hpp"
+#include "platform/app_menu.hpp"
 #include "platform/shell.hpp"
 #include "platform/system.hpp"
 #include "ui/avatars.hpp"
@@ -276,6 +277,7 @@ namespace imgit::app
 
     Application::~Application()
     {
+        platform::set_native_menu_bar({}, nullptr); // its builder refers to this object
         save_state();
     }
 
@@ -1718,9 +1720,54 @@ namespace imgit::app
         }
     }
 
+    namespace
+    {
+        // The bar's items for the platform's own menu bar; `usable` false (a modal dialog is up, which the in-app
+        // bar would sit under) disables every item.
+        platform::AppMenu to_app_menu(const ui::MenuItems& items, bool usable)
+        {
+            platform::AppMenu result;
+            for (const ui::MenuItem& item : items)
+            {
+                platform::AppMenuItem out;
+                out.type = item.type == ui::MenuItem::Type::SEPARATOR  ? platform::AppMenuItem::Type::SEPARATOR
+                           : item.type == ui::MenuItem::Type::CHECKBOX ? platform::AppMenuItem::Type::CHECKBOX
+                                                                       : platform::AppMenuItem::Type::NORMAL;
+                out.label = ui::strip_mnemonic(item.label);
+                out.accelerator = item.accelerator;
+                out.enabled = item.enabled && usable;
+                out.checked = item.checked;
+                out.click = item.click;
+                out.submenu = to_app_menu(item.submenu, usable);
+                result.push_back(std::move(out));
+            }
+            return result;
+        }
+    } // namespace
+
     void Application::draw_menu_bar(RepoState* state)
     {
         (void)state;
+        if (platform::has_native_menu_bar())
+        {
+            // macOS: the same menus in the system menu bar, built from bar_menu() as they open; their clicks run
+            // here, on the UI thread inside the frame, as the in-app menus' do.
+            if (!native_menu_installed)
+            {
+                platform::set_native_menu_bar({"File", "Edit", "View", "Help"},
+                                              [this](int index)
+                                              {
+                                                  return to_app_menu(bar_menu(index),
+                                                                     dialog.kind == Dialog::Kind::NONE);
+                                              });
+                native_menu_installed = true;
+            }
+            for (const std::function<void()>& click : platform::take_native_menu_clicks())
+            {
+                click();
+            }
+            return;
+        }
         // Chromium's views menu bar (Electron on Windows): Segoe UI 9pt on #1F1F1F, 26px tall, the pressed entry
         // on #3E3E3E. Each entry is its label (rounded up) plus 6px on both sides.
         static constexpr const char* LABELS[] = {"&File", "&Edit", "&View", "&Help"};

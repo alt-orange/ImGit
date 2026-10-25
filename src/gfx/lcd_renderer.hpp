@@ -13,9 +13,14 @@ namespace imgit::gfx
     // Loads the GL 3.3 entry points it needs and builds its shader. Returns false when that is not possible
     // (the caller then keeps using ImGui_ImplOpenGL3_RenderDrawData).
     [[nodiscard]] bool lcd_renderer_init(GlProcLoader loader);
-    // `lcd_texture` is the texture whose RGB channels hold per-channel coverage (the font atlas).
+    // `lcd_texture` is the font atlas: drawn with per-channel coverage when it is a sub-pixel atlas.
     void lcd_renderer_render(ImDrawData* draw_data, ImTextureID lcd_texture);
     void lcd_renderer_shutdown();
+
+    // Whether the font atlas holds the native loader's 3x1 sub-pixel coverage in RGB. A grey-scale atlas (FreeType:
+    // one coverage per texel in A) is drawn like any other texture; sampling it per sub-pixel would smear each
+    // glyph a third of a pixel to each side with colour fringes. False until set.
+    void set_subpixel_atlas(bool subpixel);
 
     // Chromium draws text in composited scrolling layers with grey-scale anti-aliasing. Adding
     // this to a draw list switches the rest of that list's text to grey-scale (the channel average of the ClearType

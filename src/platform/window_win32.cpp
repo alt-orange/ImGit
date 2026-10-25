@@ -142,6 +142,15 @@ namespace imgit::platform
         return g_window;
     }
 
+    float title_bar_inset()
+    {
+        return 0.f;
+    }
+
+    void set_title_bar_drag_region(float, float, float, float)
+    {
+    }
+
     float layout_scale(GLFWwindow* window)
     {
         float scale = 1.f;
