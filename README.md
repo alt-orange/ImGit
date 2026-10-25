@@ -20,11 +20,11 @@ C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 ---
 
-**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Download&nbsp;&nbsp;&nbsp; <br> <br> </kbd>][DOWNLOAD]** 
-**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Install&nbsp;&nbsp;&nbsp; <br> <br> </kbd>][INSTALL]** 
-**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Porting&nbsp;&nbsp;&nbsp; <br> <br> </kbd>][PORTING]** 
-**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Contribute&nbsp;&nbsp;&nbsp; <br> <br> </kbd>][CONTRIBUTING]** 
-**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Donate&nbsp;&nbsp;&nbsp; <br> <br> </kbd>][SPONSOR]** 
+**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Download&nbsp;&nbsp;&nbsp; <br> <br> &nbsp;</kbd>][DOWNLOAD]** 
+**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Install&nbsp;&nbsp;&nbsp; <br> <br> &nbsp;</kbd>][INSTALL]** 
+**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Porting&nbsp;&nbsp;&nbsp; <br> <br> &nbsp;</kbd>][PORTING]** 
+**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Contribute&nbsp;&nbsp;&nbsp; <br> <br> &nbsp;</kbd>][CONTRIBUTING]** 
+**[<kbd> <br> <br> &nbsp;&nbsp;&nbsp;Donate&nbsp;&nbsp;&nbsp; <br> <br> &nbsp;</kbd>][SPONSOR]** 
 
 ---
 
