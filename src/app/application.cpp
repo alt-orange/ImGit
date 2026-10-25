@@ -605,19 +605,73 @@ namespace imgit::app
         }
     }
 
+    bool Application::offer_force_push(RepoState& state, const std::string& output, std::vector<std::string> args)
+    {
+        const bool rejected = output.find("! [rejected]") != std::string::npos
+                              && (output.find("non-fast-forward") != std::string::npos
+                                  || output.find("fetch first") != std::string::npos);
+        if (!rejected || dialog.kind != Dialog::Kind::NONE || args.empty() || args.front() != "push")
+        {
+            return false;
+        }
+        std::string branch = "this branch";
+        for (const git::Ref& ref : state.history.refs)
+        {
+            if (ref.is_head)
+            {
+                branch = "'" + ref.name + "'";
+            }
+        }
+        dialog.open(Dialog::Kind::CONFIRM);
+        dialog.workdir = state.repo.workdir();
+        dialog.message = "The push was rejected: the remote has commits that " + branch
+                         + " does not. A force push overwrites them with your local history. Force push anyway?";
+        dialog.confirm_label = "Force Push";
+        dialog.danger = true;
+        args.insert(args.begin() + 1, "--force-with-lease");
+        dialog.on_confirm = [this, workdir = state.repo.workdir(), args = std::move(args)]
+        {
+            for (auto& tab : tabs)
+            {
+                if (tab->repo.workdir() == workdir)
+                {
+                    run_git_cli(*tab, "Push", args);
+                    break;
+                }
+            }
+        };
+        return true;
+    }
+
     void Application::start_clone(std::string parent, std::string url, std::string destination,
                                   std::optional<git::cli::Credential> attempt)
     {
         std::vector<git::cli::Credential> credentials_for_run = credentials_with(credentials, attempt);
+        auto progress = std::make_shared<SharedCloneProgress>();
         std::future<git::cli::Output> future =
                 std::async(std::launch::async,
-                           [parent, url, destination, credentials_for_run = std::move(credentials_for_run)]
+                           [parent, url, destination, credentials_for_run = std::move(credentials_for_run), progress]
                            {
                                return git::cli::run(parent, {"clone", "--progress", url, destination}, {},
-                                                    credentials_for_run);
+                                                    credentials_for_run,
+                                                    [progress](std::string_view chunk)
+                                                    {
+                                                        const std::lock_guard lock(progress->mutex);
+                                                        git::cli::feed_clone_progress(progress->progress, chunk);
+                                                    });
                            });
         pending_clone = PendingClone{std::move(future), std::move(destination), std::move(parent), std::move(url),
-                                     std::move(attempt)};
+                                     std::move(attempt), std::move(progress)};
+    }
+
+    git::cli::CloneProgress Application::clone_progress() const
+    {
+        if (!pending_clone)
+        {
+            return {};
+        }
+        const std::lock_guard lock(pending_clone->progress->mutex);
+        return pending_clone->progress->progress;
     }
 
     bool Application::prompt_for_credentials(const std::string& output,
@@ -857,7 +911,7 @@ namespace imgit::app
             if (output.exit_code != 0 && !silent
                 && prompt_for_credentials(output.text, attempt,
                                           [this, workdir = tab->repo.workdir(), title,
-                                           args = std::move(args)](git::cli::Credential credential)
+                                           args = args](git::cli::Credential credential)
                                           {
                                               for (auto& other : tabs)
                                               {
@@ -935,6 +989,10 @@ namespace imgit::app
             {
                 const char* lfs = lfs_toast(title, false);
                 toasts.push(ToastKind::ERROR, lfs != nullptr ? std::string(lfs) : title + " failed", text);
+                if (title == "Push")
+                {
+                    offer_force_push(*tab, text, std::move(args));
+                }
             }
             tab->refresh();
         }

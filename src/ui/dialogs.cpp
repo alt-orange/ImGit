@@ -123,6 +123,24 @@ namespace imgit::ui
             return confirm;
         }
 
+        // A thin rounded bar filled to `fraction` (0..1) across the content width.
+        void progress_bar(float fraction)
+        {
+            const theme::Palette& p = theme::palette();
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = px(6.f);
+            const float fill = smooth_value("##clone_progress_fill", std::clamp(fraction, 0.f, 1.f), 0.25f);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(min, ImVec2(min.x + width, min.y + height), theme::u32(p.input_bg), height / 2.f);
+            if (fill > 0.f)
+            {
+                draw->AddRectFilled(min, ImVec2(min.x + std::max(height, width * fill), min.y + height),
+                                    theme::u32(p.accent), height / 2.f);
+            }
+            ImGui::Dummy(ImVec2(width, height));
+        }
+
         void error_text(const std::string& error)
         {
             if (!error.empty())
@@ -1195,12 +1213,30 @@ namespace imgit::ui
             secondary_text("Where to clone to");
             path_field("##clone_dest", d.text_b, "C:\\projects");
             error_text(d.error);
+            // While the clone runs the dialog shows its progress (d.flag: it was seen running here, so the dialog
+            // closes when it is done); Hide leaves it running and the toasts report the outcome.
             const bool busy = app.pending_clone.has_value();
             if (busy)
             {
-                secondary_text("Cloning...");
+                d.flag = true;
+                const git::cli::CloneProgress progress = app.clone_progress();
+                ImGui::Dummy(ImVec2(0.f, px(8.f)));
+                secondary_text(progress.line.empty() ? "Cloning..." : progress.line.c_str());
+                ImGui::Dummy(ImVec2(0.f, px(4.f)));
+                progress_bar(progress.fraction);
+                keep_animating();
+                if (buttons("Hide", true, false, false, false))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+                break;
             }
-            if (buttons("Clone", !busy && !d.text_a.empty() && !d.text_b.empty(), false, true))
+            if (d.flag)
+            {
+                ImGui::CloseCurrentPopup();
+                break;
+            }
+            if (buttons("Clone", !d.text_a.empty() && !d.text_b.empty(), false, true))
             {
                 std::string name = d.text_a;
                 while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
@@ -1224,7 +1260,6 @@ namespace imgit::ui
                 std::filesystem::create_directories(parent, created);
                 app.start_clone(parent, url, destination);
                 app.toasts.push(app::ToastKind::INFO, "Cloning " + name, "This may take a while.");
-                ImGui::CloseCurrentPopup();
             }
             break;
         }

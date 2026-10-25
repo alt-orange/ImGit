@@ -23,7 +23,9 @@ namespace imgit::app
         {
             m_history.pop_back();
         }
-        m_toasts.push_back(Toast{kind, std::move(title), std::move(detail), ImGui::GetTime() + lifetime});
+        const double shown_at = ImGui::GetTime();
+        m_toasts.push_back(
+                Toast{kind, std::move(title), std::move(detail), shown_at, shown_at + lifetime, std::nullopt});
     }
 
     int Toasts::unread() const noexcept
@@ -47,19 +49,44 @@ namespace imgit::app
     // The toast cards: bottom-left, 16px in and 32px above the window bottom,
     // 352px wide, at least 80px tall, newest at the bottom, 8px apart. A 36px status column with the white
     // icon, the 16px title and 14px secondary text with 16px padding, and the × in a 31px column. Clicking a
-    // card dismisses it.
+    // card dismisses it. A card slides in from the left edge over SLIDE_SECONDS and back out when it expires or is
+    // dismissed; its slot in the stack grows and shrinks with it, so the cards above settle instead of jumping.
     void Toasts::draw()
     {
+        constexpr double SLIDE_SECONDS = 0.3;
         const double now = ImGui::GetTime();
+        for (Toast& toast : m_toasts)
+        {
+            if (!toast.hidden_at && toast.expires_at < now)
+            {
+                toast.hidden_at = now;
+            }
+        }
         std::erase_if(m_toasts,
-                      [now](const Toast& t)
+                      [&](const Toast& t)
                       {
-                          return t.expires_at < now;
+                          return t.hidden_at && *t.hidden_at + SLIDE_SECONDS <= now;
                       });
         if (m_toasts.empty())
         {
             return;
         }
+        // How far in a card is: 0 fully off the left edge, 1 in place.
+        const auto slide = [&](const Toast& toast)
+        {
+            const double in = (now - toast.shown_at) / SLIDE_SECONDS;
+            float visible = ui::ease_in_out(static_cast<float>(in));
+            if (toast.hidden_at)
+            {
+                const double out = (now - *toast.hidden_at) / SLIDE_SECONDS;
+                visible = std::min(visible, 1.f - ui::ease_in_out(static_cast<float>(out)));
+            }
+            if (in < 1.0 || toast.hidden_at)
+            {
+                ui::keep_animating();
+            }
+            return visible;
+        };
 
         const theme::Palette& p = theme::palette();
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -133,9 +160,11 @@ namespace imgit::app
             const float body_h = line_count(toast.detail, 14.f, 18.2f);
             const float height =
                     std::max(ui::px(80.f), ui::px(16.f) + title_h + ui::px(10.f) + body_h + ui::px(5.f) + ui::px(16.f));
-            const ImVec2 min(x, bottom - height);
-            const ImVec2 max(x + width, bottom);
-            bottom = min.y - ui::px(8.f);
+            const float visible = slide(toast);
+            const float card_x = x - (1.f - visible) * (width + ui::px(16.f));
+            const ImVec2 min(std::round(card_x), bottom - height);
+            const ImVec2 max(min.x + width, bottom);
+            bottom = min.y - ui::px(8.f) + (1.f - visible) * (height + ui::px(8.f));
 
             ImGui::SetNextWindowPos(min);
             ImGui::SetNextWindowSize(ImVec2(width, height));
@@ -187,7 +216,7 @@ namespace imgit::app
                              theme::u32(close_hovered ? p.text_selected : p.text_secondary));
             ImGui::SetCursorScreenPos(min);
             const bool clicked = ImGui::InvisibleButton("##card", ImVec2(width, height));
-            if (close || clicked)
+            if ((close || clicked) && !toast.hidden_at)
             {
                 dismiss = i;
             }
@@ -195,7 +224,7 @@ namespace imgit::app
         }
         if (dismiss)
         {
-            m_toasts.erase(m_toasts.begin() + static_cast<std::ptrdiff_t>(*dismiss));
+            m_toasts[*dismiss].hidden_at = now;
         }
     }
 } // namespace imgit::app

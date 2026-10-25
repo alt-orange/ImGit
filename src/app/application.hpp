@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -205,7 +206,13 @@ namespace imgit::app
         std::vector<std::string> recent_repos;
         void save_recent() const;
 
-        // `git clone` in flight; the destination opens as a tab when it finishes.
+        // `git clone` in flight; the destination opens as a tab when it finishes. Its progress is written by the
+        // clone's thread and read by the Clone dialog's progress bar.
+        struct SharedCloneProgress
+        {
+            std::mutex mutex;
+            git::cli::CloneProgress progress;
+        };
         struct PendingClone
         {
             std::future<git::cli::Output> future;
@@ -213,10 +220,13 @@ namespace imgit::app
             std::string parent;
             std::string url;
             std::optional<git::cli::Credential> attempt;
+            std::shared_ptr<SharedCloneProgress> progress;
         };
         std::optional<PendingClone> pending_clone;
         void start_clone(std::string parent, std::string url, std::string destination,
                          std::optional<git::cli::Credential> attempt = std::nullopt);
+        // A snapshot of the running clone's progress (empty when none runs).
+        [[nodiscard]] git::cli::CloneProgress clone_progress() const;
 
         // The credentials prompt: a git command refused for want of a username / password waits here for the
         // user, then `retry` runs it again with what they entered.
@@ -308,6 +318,10 @@ namespace imgit::app
         // Runs several `git` commands one after another in the background (stopping at the first failure); the
         // result toast reports the last.
         void run_git_cli_sequence(RepoState& state, std::string title, std::vector<std::vector<std::string>> runs);
+        // A failed `git push <...>` whose `output` says the remote has commits the branch lacks (non-fast-forward /
+        // fetch first): asks in the prompt bar whether to push again with --force-with-lease. False when it is not
+        // that refusal, or another prompt is already open.
+        bool offer_force_push(RepoState& state, const std::string& output, std::vector<std::string> args);
         // Writes the settings, the open tabs and the recent repositories (done again at exit).
         void save_state() const;
         // Types `line` and Enter into the repository's active terminal (opening the panel and a shell if needed).

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Network operations go through the user's `git` executable so the configured credential helpers and SSH
@@ -24,11 +26,27 @@ namespace imgit::git::cli
         bool remember = false; // false: the configured credential helpers are skipped for the host (nothing stored)
     };
 
+    // Called from the running thread with each chunk of git's output as it arrives.
+    using OutputSink = std::function<void(std::string_view)>;
+
     // Runs `git <args>` in `workdir` without a console window and waits for it to finish; `input` is written to
     // its stdin (closed after it). Credential helpers never show their own UI; git's username / password prompts
     // are answered from `credentials`, and fail (see auth_request) for a host that has none.
     [[nodiscard]] Output run(const std::string& workdir, const std::vector<std::string>& args,
-                             const std::string& input = {}, const std::vector<Credential>& credentials = {});
+                             const std::string& input = {}, const std::vector<Credential>& credentials = {},
+                             const OutputSink& on_output = {});
+
+    // Where a `git clone --progress` is: its latest phase line ("Receiving objects:  45% (123/273), 1.2 MiB | ...")
+    // and how far along the whole clone is, 0..1 across the phases (counting, compressing, receiving objects,
+    // resolving deltas, updating files).
+    struct CloneProgress
+    {
+        std::string line;
+        float fraction = 0.f;
+        std::string pending; // the output after the last line break, waiting for the rest of its line
+    };
+    // Feeds a chunk of the clone's output (split anywhere) into `progress`.
+    void feed_clone_progress(CloneProgress& progress, std::string_view chunk);
 
     [[nodiscard]] bool available();
 

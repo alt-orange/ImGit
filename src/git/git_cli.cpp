@@ -1,6 +1,7 @@
 #include "git/git_cli.hpp"
 #include "platform/process.hpp"
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -95,7 +96,7 @@ namespace imgit::git::cli
     } // namespace
 
     Output run(const std::string& workdir, const std::vector<std::string>& args, const std::string& input,
-               const std::vector<Credential>& credentials)
+               const std::vector<Credential>& credentials, const OutputSink& on_output)
     {
         std::vector<std::string> command = {"git"};
         // A credential the user did not ask to remember keeps the helpers away from its host: they would store it.
@@ -117,7 +118,8 @@ namespace imgit::git::cli
                                        {"GCM_INTERACTIVE", "never"},
                                        {"GIT_ASKPASS", platform::executable_path()},
                                        {ASKPASS_MARKER, "1"},
-                                       {CREDENTIALS_VARIABLE, encode(credentials)}});
+                                       {CREDENTIALS_VARIABLE, encode(credentials)}},
+                                      on_output);
         Output output{process.exit_code, process.text};
         if (!process.started)
         {
@@ -126,6 +128,84 @@ namespace imgit::git::cli
                                                                         : "folder not found: " + workdir;
         }
         return output;
+    }
+
+    void feed_clone_progress(CloneProgress& progress, std::string_view chunk)
+    {
+        // git's phases in order, each with the share of the bar it fills ("remote: " prefixes the server's).
+        struct Phase
+        {
+            std::string_view label;
+            float from;
+            float to;
+        };
+        static constexpr std::array<Phase, 7> PHASES = {{
+                {"Enumerating objects", 0.f, 0.02f},
+                {"Counting objects", 0.02f, 0.05f},
+                {"Compressing objects", 0.05f, 0.1f},
+                {"Receiving objects", 0.1f, 0.85f},
+                {"Resolving deltas", 0.85f, 0.97f},
+                {"Updating files", 0.97f, 1.f},
+                {"Checking out files", 0.97f, 1.f},
+        }};
+        const auto line = [&](std::string_view text)
+        {
+            if (text.starts_with("remote: "))
+            {
+                text.remove_prefix(8);
+            }
+            while (!text.empty() && text.back() == ' ')
+            {
+                text.remove_suffix(1);
+            }
+            if (text.empty())
+            {
+                return;
+            }
+            for (const Phase& phase : PHASES)
+            {
+                if (!text.starts_with(phase.label))
+                {
+                    continue;
+                }
+                // "<label>: 45% (123/273)..." or "<label>: 273, done." (no percentage: the phase is over).
+                float within = 1.f;
+                if (const auto percent = text.find('%'); percent != std::string_view::npos)
+                {
+                    int value = 0;
+                    std::size_t digits = percent;
+                    while (digits > 0 && text[digits - 1] >= '0' && text[digits - 1] <= '9')
+                    {
+                        --digits;
+                    }
+                    for (std::size_t i = digits; i < percent; ++i)
+                    {
+                        value = value * 10 + (text[i] - '0');
+                    }
+                    within = static_cast<float>(std::min(value, 100)) / 100.f;
+                }
+                progress.fraction = std::max(progress.fraction, phase.from + (phase.to - phase.from) * within);
+                progress.line = std::string(text);
+                return;
+            }
+            if (text.starts_with("Cloning into"))
+            {
+                progress.line = std::string(text);
+            }
+        };
+        progress.pending.append(chunk);
+        std::size_t start = 0;
+        while (true)
+        {
+            const std::size_t end = progress.pending.find_first_of("\r\n", start);
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            line(std::string_view(progress.pending).substr(start, end - start));
+            start = end + 1;
+        }
+        progress.pending.erase(0, start);
     }
 
     bool available()
