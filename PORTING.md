@@ -131,7 +131,9 @@ real build. What the port consists of:
 - **Text.** `gfx::set_subpixel_atlas()` tells `lcd_renderer` whether the atlas is the native loader's 3x1
   sub-pixel coverage. Before it, the renderer sampled every atlas per sub-pixel, and a FreeType atlas (one
   grey coverage per texel) came out smeared a third of a pixel to each side with red and cyan fringes, most
-  visibly on bold text; it is now drawn like any other texture (this also applies to Linux).
+  visibly on bold text; it is now drawn like any other texture (this also applies to Linux). The FreeType
+  coverage gamma follows the framebuffer density (`freetype_gamma()` in `main.cpp`: 3.0 at 1x, 1.5 on Retina,
+  `IMGIT_FREETYPE_GAMMA` to try others), since the 1x boost makes bold stems soft at 2x.
 - **System.** `system_font_file` tries San Francisco (`SFNS.ttf`), Helvetica Neue and Helvetica for the UI face,
   Menlo, SF Mono and Monaco for the monospace one, and Arial (Supplemental) for the tooltips. The shell is `$SHELL
   -l` (zsh), *Open External Terminal* is `open -a Terminal`, *Show in Folder* is `open -R`. Settings live in

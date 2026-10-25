@@ -531,7 +531,20 @@ namespace
     float g_text_gamma = 1.9f;
     float g_text_contrast = 0.f;
 
-    void load_fonts(float dpi_scale)
+    // The coverage gamma of the FreeType fallback for a framebuffer `density` (pixels per logical pixel): 3.0 at 1x
+    // reproduces ClearType's stem weight with grey-scale glyphs; at 2x (Retina) the edge pixels are half as wide
+    // and the same boost makes both sides of a bold stem solid, which reads as blur, so it falls to 1.5.
+    // IMGIT_FREETYPE_GAMMA overrides it.
+    float freetype_gamma(float density)
+    {
+        if (const char* gamma = std::getenv("IMGIT_FREETYPE_GAMMA"); gamma != nullptr)
+        {
+            return std::max(1.f, static_cast<float>(std::atof(gamma)));
+        }
+        return 1.f + 2.f / std::max(1.f, density * density);
+    }
+
+    void load_fonts(float dpi_scale, float density)
     {
         ImGuiIO& io = ImGui::GetIO();
         // The text is Chromium's DirectWrite ClearType. Use the same rasteriser where it exists (drawn by
@@ -547,7 +560,7 @@ namespace
             imgit::gfx::set_subpixel_atlas(false);
 #ifdef IMGUI_ENABLE_FREETYPE
             io.Fonts->FontLoaderFlags = ImGuiFreeTypeLoaderFlags_NoHinting;
-            install_gamma_font_loader(io.Fonts, 3.0f);
+            install_gamma_font_loader(io.Fonts, freetype_gamma(density));
 #endif
         }
         imgit::ui::Fonts& fonts = imgit::ui::fonts();
@@ -680,7 +693,14 @@ int main(int argc, char** argv)
     {
         g_text_contrast = static_cast<float>(std::atof(contrast));
     }
-    load_fonts(dpi_scale);
+    float density = 1.f;
+    {
+        int w = 0, h = 0, fw = 0, fh = 0;
+        glfwGetWindowSize(window, &w, &h);
+        glfwGetFramebufferSize(window, &fw, &fh);
+        density = w > 0 ? static_cast<float>(fw) / static_cast<float>(w) : 1.f;
+    }
+    load_fonts(dpi_scale, density);
 
     // A scripted run takes no real input: the backend's GLFW callbacks would feed the user's mouse and keyboard
     // into the script's frames.
