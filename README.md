@@ -51,9 +51,9 @@ the arrows, or double-click the output to edit it. Save writes the file and mark
 
 ### Themes
 
-ImGit Dark, Ocean, Midnight Teal, Amethyst, Rose and Claude Code (the warm greys and terracotta accent of Claude Code
-Desktop): pick one in Preferences → UI Customization or with `Ctrl+P` →
-*Switch Theme*. The graph's lanes start at each theme's accent colour.
+ImGit Dark, Ocean, Midnight Teal, Amethyst, Rose and Claude Code (the greys, text and terracotta accent of Claude Code
+Desktop's dark theme): pick one in Preferences → UI Customization or with `Ctrl+P` → *Switch Theme*. The graph's lanes
+start at each theme's accent colour.
 
 ![Ocean, Midnight Teal, Amethyst and Rose](docs/images/themes.png)
 
