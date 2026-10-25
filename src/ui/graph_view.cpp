@@ -620,8 +620,9 @@ namespace imgit::ui
         }
 
         // A header cell held and moved 4px becomes a column drag: the cell follows the mouse as a floating copy
-        // and the zone swaps places with its neighbour once the cell's centre passes that neighbour's; the order
-        // is saved on release.
+        // and the zone swaps places with a neighbour once the cell's leading edge passes that neighbour's centre
+        // (its centre would have to travel half its own width, far for the message column); the order is saved
+        // on release.
         struct ZoneMove
         {
             ZoneType type = ZoneType::REF;
@@ -1335,7 +1336,7 @@ namespace imgit::ui
         {
             std::string name;
             bool head = false;
-            std::vector<std::string> remotes; // remote names
+            std::vector<std::string> remotes{}; // remote names
             bool tag = false;
 
             [[nodiscard]] bool operator==(const RefGroupKey&) const = default;
@@ -1785,9 +1786,10 @@ namespace imgit::ui
             }
             if (g_zone_move.active)
             {
-                // The floating cell's centre against the neighbours': past one, the zones swap and the layout is
-                // placed again for the rows below.
-                const float centre = mouse.x - g_zone_move.grab + g_zone_move.width / 2.f;
+                // The floating cell's edges against the neighbours' centres: past one, the zones swap and the
+                // layout is placed again for the rows below.
+                const float left_edge = mouse.x - g_zone_move.grab;
+                const float right_edge = left_edge + g_zone_move.width;
                 bool moved = false;
                 for (int guard = 0; guard < static_cast<int>(g_zones.zones.size()); ++guard)
                 {
@@ -1801,7 +1803,7 @@ namespace imgit::ui
                     if (index > 0)
                     {
                         const ZoneType left = g_zones.zones[static_cast<std::size_t>(index - 1)].type;
-                        if (centre < *zone_x_of(placed, left) + *zone_w_of(placed, left) / 2.f)
+                        if (left_edge < *zone_x_of(placed, left) + *zone_w_of(placed, left) / 2.f)
                         {
                             to = index - 1;
                         }
@@ -1809,7 +1811,7 @@ namespace imgit::ui
                     if (to == index && index + 1 < static_cast<int>(g_zones.zones.size()))
                     {
                         const ZoneType right = g_zones.zones[static_cast<std::size_t>(index + 1)].type;
-                        if (centre > *zone_x_of(placed, right) + *zone_w_of(placed, right) / 2.f)
+                        if (right_edge > *zone_x_of(placed, right) + *zone_w_of(placed, right) / 2.f)
                         {
                             to = index + 1;
                         }

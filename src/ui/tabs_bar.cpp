@@ -31,7 +31,8 @@ namespace imgit::ui
         int g_menu_tab = -1; // repository tab right-clicked this frame
 
         // A repository tab held and moved 4px is dragged along the bar under the system's drag-and-drop cursor,
-        // over the other tabs, and swaps places with a neighbour once its centre passes that neighbour's.
+        // over the other tabs, and swaps places with a neighbour once its leading edge passes that neighbour's
+        // centre.
         struct TabDrag
         {
             int index = -1; // the tab held, -1: none
@@ -274,17 +275,16 @@ namespace imgit::ui
             const int i = g_tab_drag.index;
             const float shown = std::clamp(mouse.x - g_tab_drag.grab, strip_min,
                                            std::max(strip_min, x - g_tab_drag.width));
-            const float centre = shown + g_tab_drag.width / 2.f;
             const auto centre_of = [&](int n)
             {
                 return slots[static_cast<std::size_t>(n)] + widths[static_cast<std::size_t>(n)] / 2.f;
             };
             int to = i;
-            if (i > 0 && centre < centre_of(i - 1))
+            if (i > 0 && shown < centre_of(i - 1))
             {
                 to = i - 1;
             }
-            else if (i + 1 < tab_count && centre > centre_of(i + 1))
+            else if (i + 1 < tab_count && shown + g_tab_drag.width > centre_of(i + 1))
             {
                 to = i + 1;
             }
