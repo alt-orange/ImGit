@@ -318,6 +318,10 @@ namespace imgit::app
         // Runs several `git` commands one after another in the background (stopping at the first failure); the
         // result toast reports the last.
         void run_git_cli_sequence(RepoState& state, std::string title, std::vector<std::vector<std::string>> runs);
+        // A failed `git push <...>` whose `output` says the remote has commits the branch lacks (non-fast-forward /
+        // fetch first): asks in the prompt bar whether to push again with --force-with-lease. False when it is not
+        // that refusal, or another prompt is already open.
+        bool offer_force_push(RepoState& state, const std::string& output, std::vector<std::string> args);
         // Writes the settings, the open tabs and the recent repositories (done again at exit).
         void save_state() const;
         // Types `line` and Enter into the repository's active terminal (opening the panel and a shell if needed).

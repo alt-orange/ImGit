@@ -1570,9 +1570,14 @@ namespace imgit::ui
             // The profiles table: a 41px header with a bottom border, then a panel-bg1 row per profile, sorted by
             // name; the current one is outlined and checked. Its five cells (20% wide, 10px margins) are spread
             // with justify-content: space-between.
+            // The table is 1140px wide in a wide window and narrows with it (the cells shrink, the names
+            // truncate), so the row menu at its right end stays on screen; the page does not scroll sideways.
+            const float table_w = std::clamp(page.width - page.scrollbar - 55.f - 40.f, 400.f, 1140.f);
+            const float scale = std::clamp((table_w - 70.f) / 992.f, 0.3f, 1.f);
+            const float cell_w = 248.f * scale;
             const float header = add_top + 40.f;
-            box(page, 55.f, header + 40.f, 1140.f, 1.f, {white(0.08f)});
-            const float columns[] = {65.f, 340.f, 615.f};
+            box(page, 55.f, header + 40.f, table_w, 1.f, {white(0.08f)});
+            const float columns[] = {55.f + 10.f * scale, 55.f + 285.f * scale, 55.f + 560.f * scale};
             const char* titles[] = {"Profile Name", "Author Name", "Author Email"};
             for (int i = 0; i < 3; ++i)
             {
@@ -1590,21 +1595,22 @@ namespace imgit::ui
                 const bool current = profile.guid == app.profiles.current().guid;
                 const float border = current ? 2.f : 0.f;
                 const float height = 50.f + border * 2.f;
-                const float gap = (1140.f - border * 2.f - 1058.f) / 4.f;
+                const float gap = (table_w - border * 2.f - (4.f * cell_w + 66.f)) / 4.f;
                 const auto cell = [&](int i)
                 {
-                    return 55.f + border + 10.f + static_cast<float>(i) * (248.f + gap);
+                    return 55.f + border + 10.f + static_cast<float>(i) * (cell_w + gap);
                 };
                 const bool menu_open = ImGui::IsPopupOpen("##profile_row_menu") && menu_guid == profile.guid;
-                const bool hovered = hovering(page.at(55.f, row_top), page.at(1195.f, row_top + height)) || menu_open;
+                const bool hovered =
+                        hovering(page.at(55.f, row_top), page.at(55.f + table_w, row_top + height)) || menu_open;
                 if (current)
                 {
-                    box(page, 55.f, row_top, 1140.f, height,
+                    box(page, 55.f, row_top, table_w, height,
                         {ImVec4(BLUE.x, BLUE.y, BLUE.z, 0.1f), BLUE, 2.f, false, 2.f});
                 }
                 else
                 {
-                    box(page, 55.f, row_top, 1140.f, height,
+                    box(page, 55.f, row_top, table_w, height,
                         {hovered ? ImVec4(BLUE.x, BLUE.y, BLUE.z, 0.1f) : PANEL_BG1, CLEAR, 2.f});
                 }
                 if (current)
@@ -1613,10 +1619,12 @@ namespace imgit::ui
                 }
                 const float content = row_top + border + 10.f;
                 draw_profile_icon(page.draw, page.at(cell(0), content), px(30.f), profile);
-                text_truncated(page, cell(0) + 40.f, content + 5.f, LABEL, profile.name, 188.f);
-                text_truncated(page, cell(1), content + 5.f, Style{14.f, white(0.4f)}, profile.user_name, 228.f);
-                text_truncated(page, cell(2), content + 5.f, Style{14.f, white(0.4f)}, profile.user_email, 228.f);
-                const float menu_x = cell(3) + 248.f + gap;
+                text_truncated(page, cell(0) + 40.f, content + 5.f, LABEL, profile.name, cell_w - 60.f);
+                text_truncated(page, cell(1), content + 5.f, Style{14.f, white(0.4f)}, profile.user_name,
+                               cell_w - 20.f);
+                text_truncated(page, cell(2), content + 5.f, Style{14.f, white(0.4f)}, profile.user_email,
+                               cell_w - 20.f);
+                const float menu_x = cell(3) + cell_w + gap;
                 ImGui::PushID(profile.guid.c_str());
                 const bool open_menu = hit(page, "##profile_menu", menu_x, content, 46.f, 30.f);
                 const bool button_hot = ImGui::IsItemHovered() || menu_open;
