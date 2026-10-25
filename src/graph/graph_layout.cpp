@@ -1,4 +1,5 @@
 #include "graph/graph_layout.hpp"
+#include <algorithm>
 #include <unordered_map>
 
 namespace imgit::graph

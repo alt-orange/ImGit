@@ -2,6 +2,7 @@
 #include "platform/system.hpp"
 #include <cstdlib>
 #include <pwd.h>
+#include <span>
 #include <unistd.h>
 
 namespace imgit::platform
@@ -49,9 +50,20 @@ namespace imgit::platform
     {
         std::error_code error;
 #ifdef __APPLE__
-        const char* candidates[] = {font == SystemFont::MONOSPACE ? "/System/Library/Fonts/Menlo.ttc"
-                                    : font == SystemFont::ARIAL   ? "/System/Library/Fonts/Supplemental/Arial.ttf"
-                                                                  : "/System/Library/Fonts/SFNS.ttf"};
+        // The system faces in the roles Windows fills with Segoe UI, Consolas and Arial, oldest macOS release
+        // last: San Francisco (the variable SFNS.ttf, since Big Sur), Menlo and Arial (Supplemental since Catalina).
+        static constexpr const char* UI_FACES[] = {"/System/Library/Fonts/SFNS.ttf",
+                                                   "/System/Library/Fonts/HelveticaNeue.ttc",
+                                                   "/System/Library/Fonts/Helvetica.ttc"};
+        static constexpr const char* MONOSPACE_FACES[] = {"/System/Library/Fonts/Menlo.ttc",
+                                                          "/System/Library/Fonts/SFNSMono.ttf",
+                                                          "/System/Library/Fonts/Monaco.ttf"};
+        static constexpr const char* ARIAL_FACES[] = {"/System/Library/Fonts/Supplemental/Arial.ttf",
+                                                      "/Library/Fonts/Arial.ttf",
+                                                      "/System/Library/Fonts/Helvetica.ttc"};
+        const auto candidates = font == SystemFont::MONOSPACE ? std::span<const char* const>(MONOSPACE_FACES)
+                                : font == SystemFont::ARIAL   ? std::span<const char* const>(ARIAL_FACES)
+                                                              : std::span<const char* const>(UI_FACES);
         for (const char* candidate : candidates)
         {
             if (std::filesystem::exists(candidate, error))

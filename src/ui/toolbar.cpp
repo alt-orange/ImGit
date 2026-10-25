@@ -5,6 +5,7 @@
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>

@@ -8,6 +8,7 @@
 #include <imgui.h>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace imgit::app
 {

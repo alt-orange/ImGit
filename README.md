@@ -5,7 +5,7 @@
 # ImGit Desktop
 
 **A fast, native Git client with a commit graph front and centre.**
-C++23 on Dear ImGui and libgit2 · Windows and Linux
+C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 </div>
 
@@ -14,13 +14,14 @@ C++23 on Dear ImGui and libgit2 · Windows and Linux
 ## Highlights
 
 - **Commit graph** — lanes, merge and stash nodes, branch / tag / remote labels with ahead and behind counts, search
-  (`Ctrl+F`), multi-select, lazy loading and drag-and-drop of branches to merge, rebase or reset.
+  (`Ctrl+F`; `Cmd` stands in for `Ctrl` on macOS throughout), multi-select, lazy loading and drag-and-drop of
+  branches to merge, rebase or reset.
 - **Stage and commit** — per-file and per-folder staging, a tree or path view with change counts, amend, push after
   commit, and undo / redo (`Ctrl+Z` / `Ctrl+Y`) for almost every operation.
 - **Interactive rebase** — pick, reword, squash, drop and reorder in a full view, from the keyboard or the mouse.
 - **Merge tool** — resolve conflicts three ways: take a side, take single lines, or edit the result by hand.
-- **Built in** — a real terminal (PowerShell / your shell), a command palette (`Ctrl+P`), profiles with their own
-  settings and commit author, and a sign-in prompt for HTTPS remotes.
+- **Built in** — a real terminal (PowerShell on Windows, your login shell elsewhere), a command palette (`Ctrl+P`),
+  profiles with their own settings and commit author, and a sign-in prompt for HTTPS remotes.
 - **Themes** — five dark themes, orange-accented ImGit Dark by default.
 
 ## Tour
@@ -103,11 +104,28 @@ File dialogs need the xdg desktop portal (`xdg-desktop-portal` and a backend suc
 `vcpkg-overlays/dbus` is the stock dbus port without its systemd default. See `PORTING.md` for what each platform
 implements.
 
-**CI and releases** — `.github/workflows/ci.yml` builds Windows and Linux on every push to `github-main` and every
-pull request (the `ci-windows` / `ci-linux` presets, vcpkg at the manifest's baseline, its binary cache in the Actions
-cache) and takes a screenshot under Xvfb as a smoke test. Publishing a GitHub release runs `release.yml`, which
-attaches `imgit-<tag>-windows-x64.zip`, `imgit-<tag>-linux-x64.tar.gz` and `SHA256SUMS.txt` to it; run it by hand
-with a tag to rebuild an existing release's packages.
+**macOS** — Xcode (or the Command Line Tools) 15+, CMake, Ninja and a vcpkg checkout in `VCPKG_ROOT` (`brew install
+cmake ninja pkg-config autoconf automake libtool`):
+
+```bash
+cmake --preset macos-release
+cmake --build --preset macos-release
+build/macos-release/ImGit.app/Contents/MacOS/ImGit path/to/repository   # or open build/macos-release/ImGit.app
+```
+
+The build is an app bundle, `ImGit.app`, with the Dock icon (`res/imgit.icns`) and a dark title bar. vcpkg picks
+`arm64-osx` on Apple silicon and `x64-osx` on Intel; `vcpkg-triplets/` holds both with the deployment target
+(macOS 12, the same as `CMAKE_OSX_DEPLOYMENT_TARGET` in `CMakeLists.txt`). Shortcuts use `Cmd` where the labels
+say `Ctrl`, and `Option` for `Alt`; in the terminal panel the Control key still sends control sequences. A
+downloaded `ImGit.app` is only ad-hoc signed, so the first launch needs a right-click → *Open* (or
+`xattr -d com.apple.quarantine ImGit.app`).
+
+**CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
+every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, vcpkg at the manifest's baseline, its binary
+cache in the Actions cache) and takes a screenshot as a smoke test under Xvfb on Linux and, best effort, on the macOS
+runner. Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
+`imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt`
+to it; run it by hand with a tag to rebuild an existing release's packages.
 
 **Headless screenshots** — `imgit <repo> --screenshot out.bmp [--size WxH] [--select-row N]` renders a few frames and
 exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
@@ -121,10 +139,11 @@ made this way.
 | `src/graph/` | lane and edge assignment for the commit graph |
 | `src/app/` | the application: settings, profiles, tabs, themes, repository state, undo, the merge model, toasts, the terminal's screen |
 | `src/ui/` | every view: graph, panels, diff, interactive rebase, merge tool, menus, dialogs, preferences, command palette, terminal |
-| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window |
+| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window (`window_mac.mm` for the Cocoa calls) |
 | `src/gfx/` | image decoding, the LCD text renderer and the platform font loader |
 | `assets/` | fonts, icons and images compiled into the executable |
-| `tools/app_icon.py` | draws the app icon |
+| `res/` | the Windows icon and resource script, the macOS `.icns` and `Info.plist` template |
+| `tools/app_icon.py` | draws the app icon (`app_icon.png`, `imgit.ico`, `imgit.icns`) |
 
 ## Credits
 

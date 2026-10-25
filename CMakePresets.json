@@ -54,6 +54,30 @@
       }
     },
     {
+      "name": "macos-debug",
+      "displayName": "macOS Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed_macos"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release",
+      "inherits": "macos-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "ci-windows",
       "displayName": "CI Windows x64 Release",
       "inherits": "x64-release",
@@ -68,6 +92,14 @@
       "cacheVariables": {
         "CMAKE_EXE_LINKER_FLAGS": "-static-libstdc++ -static-libgcc"
       }
+    },
+    {
+      "name": "ci-macos",
+      "displayName": "CI macOS arm64 Release",
+      "inherits": "macos-release",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx"
+      }
     }
   ],
   "buildPresets": [
@@ -75,7 +107,10 @@
     { "name": "x64-release", "configurePreset": "x64-release" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "macos-debug", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "configurePreset": "macos-release" },
     { "name": "ci-windows", "configurePreset": "ci-windows" },
-    { "name": "ci-linux", "configurePreset": "ci-linux" }
+    { "name": "ci-linux", "configurePreset": "ci-linux" },
+    { "name": "ci-macos", "configurePreset": "ci-macos" }
   ]
 }

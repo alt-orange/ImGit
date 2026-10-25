@@ -949,7 +949,8 @@ namespace imgit::ui
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.f, 0.f, 0.f, 0.f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.f, 0.f, 0.f, 0.f));
             push_font(fonts().regular, theme::FONT_SIZE_ROW);
-            input_text("##left_filter", state.left_filter, "Filter (Ctrl + Alt + f)", 0, max.x - min.x - px(24.f));
+            input_text("##left_filter", state.left_filter, shortcut_label("Filter (Ctrl + Alt + f)").c_str(), 0,
+                       max.x - min.x - px(24.f));
             ImGui::PopFont();
             ImGui::PopStyleColor(3);
             ImGui::PopStyleVar();

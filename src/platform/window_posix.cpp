@@ -17,12 +17,30 @@ namespace imgit::platform
         GLFWwindow* g_window = nullptr;
     } // namespace
 
+#ifdef __APPLE__
+    namespace detail
+    {
+        // window_mac.mm: gives the NSWindow the dark appearance, whatever the system setting.
+        void set_dark_appearance(void* ns_window);
+    } // namespace detail
+#endif
+
+    void apply_window_hints()
+    {
+#ifdef __APPLE__
+        // macOS only gives a core profile context (3.2 to 4.1) when it is forward-compatible.
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#endif
+    }
+
     void init_window(GLFWwindow* window)
     {
-        // The frame belongs to the window manager (Linux) or follows the system appearance (macOS).
         g_window = window;
-#ifndef __APPLE__
-        // The app icon (macOS takes it from the bundle instead).
+#ifdef __APPLE__
+        // The app icon comes from the bundle; the title bar is dark like the rest of the window.
+        detail::set_dark_appearance(static_cast<void*>(glfwGetCocoaWindow(window)));
+#else
+        // The frame belongs to the window manager.
         if (const std::optional<gfx::Image> icon = gfx::decode_image(assets::data("images/app_icon.png")); icon)
         {
             GLFWimage image{icon->width, icon->height, const_cast<unsigned char*>(icon->rgba.data())};
@@ -34,6 +52,19 @@ namespace imgit::platform
     GLFWwindow* main_window()
     {
         return g_window;
+    }
+
+    float layout_scale([[maybe_unused]] GLFWwindow* window)
+    {
+#ifdef __APPLE__
+        // Cocoa windows are measured in points; GLFW_SCALE_TO_MONITOR does nothing there and the Retina
+        // framebuffer is reported through the framebuffer scale instead.
+        return 1.f;
+#else
+        float scale = 1.f;
+        glfwGetWindowContentScale(window, &scale, nullptr);
+        return scale > 0.f ? scale : 1.f;
+#endif
     }
 
     void set_cursor(GLFWwindow* window, CursorShape shape)

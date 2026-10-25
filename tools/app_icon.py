@@ -1,8 +1,9 @@
 # Draws ImGit's app icon: a rounded dark tile holding a small commit graph (a teal main lane, a magenta branch that
-# leaves it and merges back), in the app's own palette. Writes the 1024px master, the sizes a Windows .ico holds and
-# the .ico itself.
+# leaves it and merges back), in the app's own palette. Writes the 1024px master, the sizes a Windows .ico holds,
+# the .ico itself and the macOS .icns.
 #
-#   python tools/app_icon.py            -> assets/images/app_icon.png (256px, the Linux window icon), res/imgit.ico
+#   python tools/app_icon.py            -> assets/images/app_icon.png (256px, the Linux window icon), res/imgit.ico,
+#                                          res/imgit.icns (the ImGit.app bundle's icon)
 #   python tools/app_icon.py <out_dir>  -> previews only, into <out_dir>
 import os
 import sys
@@ -111,6 +112,9 @@ def main():
     os.makedirs(os.path.join(ROOT, "res"), exist_ok=True)
     images[-1].save(os.path.join(ROOT, "res", "imgit.ico"), sizes=[(s, s) for s in sizes],
                     append_images=images[:-1])
+    # .icns: the 1024px master plus the sizes drawn with their own stroke weights (Pillow downsamples the rest).
+    render(1024).save(os.path.join(ROOT, "res", "imgit.icns"),
+                      append_images=[render(size) for size in (32, 64, 128, 256, 512)])
 
 
 if __name__ == "__main__":

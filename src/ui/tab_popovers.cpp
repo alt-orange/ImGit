@@ -9,6 +9,7 @@
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 #include <imgui.h>
 #include <imgui_internal.h>

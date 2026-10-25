@@ -7,6 +7,7 @@
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <imgui.h>
 #include <imgui_internal.h>

@@ -5,3 +5,4 @@
 
 # Binary icon files.
 /res/*.ico binary
+/res/*.icns binary

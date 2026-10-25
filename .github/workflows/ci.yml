@@ -1,4 +1,4 @@
-# Builds and smoke-tests every push to the default branch and every pull request.
+# Builds (Windows, Linux, macOS) and smoke-tests every push to the default branch and every pull request.
 name: CI
 
 on:

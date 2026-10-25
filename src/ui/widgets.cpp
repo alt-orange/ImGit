@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -112,6 +113,43 @@ namespace imgit::ui
     float px(float logical) noexcept
     {
         return std::round(logical * g_dpi_scale);
+    }
+
+    std::string shortcut_label(std::string_view label)
+    {
+        std::string result(label);
+        if (!ImGui::GetIO().ConfigMacOSXBehaviors)
+        {
+            return result;
+        }
+        const auto is_word_char = [](char c)
+        {
+            return std::isalnum(static_cast<unsigned char>(c)) != 0;
+        };
+        for (const auto& [from, to] : {std::pair{"Ctrl", "Cmd"}, std::pair{"Alt", "Option"}})
+        {
+            const std::string_view word = from;
+            for (std::size_t at = result.find(word); at != std::string::npos; at = result.find(word, at))
+            {
+                const bool starts = at == 0 || !is_word_char(result[at - 1]);
+                const bool ends = at + word.size() == result.size() || !is_word_char(result[at + word.size()]);
+                if (starts && ends)
+                {
+                    result.replace(at, word.size(), to);
+                    at += std::strlen(to);
+                }
+                else
+                {
+                    at += word.size();
+                }
+            }
+        }
+        return result;
+    }
+
+    ImGuiKey shortcut_modifier_event() noexcept
+    {
+        return ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     }
 
     void set_drag_cursor(DragCursor cursor) noexcept
@@ -999,6 +1037,8 @@ namespace imgit::ui
         void show_tooltip(ImVec2 anchor_min, ImVec2 anchor_max, const char* text, TooltipSide side, float wait)
         {
             // Bootstrap's OverlayTrigger shows it after a short delay and fades it in over .15s.
+            const std::string platform_text = shortcut_label(text);
+            text = platform_text.c_str();
             static ImGuiID shown_for = 0;
             static double since = 0.0;
             static int last_frame = -1;

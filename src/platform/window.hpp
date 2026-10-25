@@ -5,8 +5,18 @@ struct GLFWwindow;
 // Platform touches on the GLFW main window: its frame, cursors and native handle.
 namespace imgit::platform
 {
-    // Called once the main window exists: the dark caption on Windows; remembers the window for main_window().
+    // GLFW window hints the platform needs, set before the main window is created: on macOS a forward-compatible
+    // context, without which Cocoa gives no core profile.
+    void apply_window_hints();
+
+    // Called once the main window exists: the dark caption on Windows, the dark title bar on macOS; remembers the
+    // window for main_window().
     void init_window(GLFWwindow* window);
+
+    // The factor the UI's logical (CSS) pixels are multiplied by for `window`: the monitor's content scale where
+    // window coordinates are physical pixels (Windows, X11), 1 where they are points and the framebuffer alone is
+    // scaled (macOS: ImGui rasterises the fonts at the framebuffer's density).
+    [[nodiscard]] float layout_scale(GLFWwindow* window);
 
     // The window init_window() was given (the parent of file dialogs), null before.
     [[nodiscard]] GLFWwindow* main_window();
