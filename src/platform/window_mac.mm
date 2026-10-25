@@ -13,6 +13,70 @@ namespace
     }
 } // namespace
 
+// A transparent view over GLFW's content view that owns the tabs bar's empty part, the way a title bar owns its
+// surface: AppKit hit-tests it first, so a press there starts the window drag from the press event itself (and a
+// double-click zooms or minimises), while everything outside `region` falls through to GLFW and ImGui. Being the
+// real event's target is what keeps this working after the window was tiled or zoomed, where handing AppKit a
+// later "current event" did nothing.
+@interface ImGitDragView : NSView
+@property (nonatomic) NSRect region; // top-left origin, points
+@end
+
+@implementation ImGitDragView
+
+- (BOOL)isFlipped
+{
+    return YES;
+}
+
+- (NSView*)hitTest:(NSPoint)point
+{
+    const NSPoint local = [self convertPoint:point fromView:self.superview];
+    return NSPointInRect(local, self.region) ? self : nil;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent*)event
+{
+    return YES; // like a title bar, a press moves an inactive window too
+}
+
+- (BOOL)mouseDownCanMoveWindow
+{
+    return NO; // mouseDown: does it, with the double-click
+}
+
+- (void)mouseDown:(NSEvent*)event
+{
+    NSWindow* window = self.window;
+    if (window == nil)
+    {
+        return;
+    }
+    if (event.clickCount == 2)
+    {
+        // System Settings > Desktop & Dock > "Double-click a window's title bar to": Fill / Zoom, Minimize, or
+        // nothing.
+        NSString* action = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleActionOnDoubleClick"];
+        if ([action isEqualToString:@"Minimize"])
+        {
+            [window miniaturize:nil];
+        }
+        else if (![action isEqualToString:@"None"])
+        {
+            [window zoom:nil];
+        }
+        return;
+    }
+    [window performWindowDragWithEvent:event];
+}
+
+@end
+
+namespace
+{
+    ImGitDragView* g_drag_view = nil;
+} // namespace
+
 namespace imgit::platform::detail
 {
     void configure_window(void* ns_window)
@@ -41,38 +105,24 @@ namespace imgit::platform::detail
 #if !__has_feature(objc_arc)
         [toolbar release]; // the window holds it
 #endif
-    }
-
-    void drag_window(void* ns_window)
-    {
-        NSWindow* window = as_window(ns_window);
-        // The press that ImGui just reported is (or started) the current event; AppKit moves the window with the
-        // mouse from it until the release.
-        NSEvent* event = [NSApp currentEvent];
-        if (window != nil && event != nil
-            && (event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeLeftMouseDragged))
+        // The drag view spans the content view and follows its size; its region starts empty.
+        NSView* content = window.contentView;
+        if (content != nil && g_drag_view == nil)
         {
-            [window performWindowDragWithEvent:event];
+            g_drag_view = [[ImGitDragView alloc] initWithFrame:content.bounds];
+            g_drag_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            g_drag_view.region = NSZeroRect;
+            [content addSubview:g_drag_view];
         }
     }
 
-    void title_bar_double_click(void* ns_window)
+    void set_drag_region(float min_x, float min_y, float max_x, float max_y)
     {
-        NSWindow* window = as_window(ns_window);
-        if (window == nil)
+        if (g_drag_view == nil)
         {
             return;
         }
-        // System Settings > Desktop & Dock > "Double-click a window's title bar to": Fill / Zoom, Minimize, or
-        // nothing.
-        NSString* action = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleActionOnDoubleClick"];
-        if ([action isEqualToString:@"Minimize"])
-        {
-            [window miniaturize:nil];
-        }
-        else if (![action isEqualToString:@"None"])
-        {
-            [window zoom:nil];
-        }
+        g_drag_view.region = max_x > min_x && max_y > min_y ? NSMakeRect(min_x, min_y, max_x - min_x, max_y - min_y)
+                                                            : NSZeroRect;
     }
 } // namespace imgit::platform::detail

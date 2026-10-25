@@ -147,11 +147,7 @@ namespace imgit::platform
         return 0.f;
     }
 
-    void drag_window(GLFWwindow*)
-    {
-    }
-
-    void title_bar_double_click(GLFWwindow*)
+    void set_title_bar_drag_region(float, float, float, float)
     {
     }
 

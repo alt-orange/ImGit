@@ -23,8 +23,7 @@ namespace imgit::platform
         // window_mac.mm: the dark appearance whatever the system setting, and the title bar hidden under the
         // content (the traffic lights stay, over the tabs bar).
         void configure_window(void* ns_window);
-        void drag_window(void* ns_window);
-        void title_bar_double_click(void* ns_window);
+        void set_drag_region(float min_x, float min_y, float max_x, float max_y);
     } // namespace detail
 #endif
 
@@ -66,23 +65,11 @@ namespace imgit::platform
 #endif
     }
 
-    void drag_window([[maybe_unused]] GLFWwindow* window)
+    void set_title_bar_drag_region([[maybe_unused]] float min_x, [[maybe_unused]] float min_y,
+                                   [[maybe_unused]] float max_x, [[maybe_unused]] float max_y)
     {
 #ifdef __APPLE__
-        if (window != nullptr)
-        {
-            detail::drag_window(static_cast<void*>(glfwGetCocoaWindow(window)));
-        }
-#endif
-    }
-
-    void title_bar_double_click([[maybe_unused]] GLFWwindow* window)
-    {
-#ifdef __APPLE__
-        if (window != nullptr)
-        {
-            detail::title_bar_double_click(static_cast<void*>(glfwGetCocoaWindow(window)));
-        }
+        detail::set_drag_region(min_x, min_y, max_x, max_y);
 #endif
     }
 

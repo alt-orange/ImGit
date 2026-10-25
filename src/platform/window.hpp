@@ -24,10 +24,10 @@ namespace imgit::platform
     // Logical pixels the tabs bar leaves free at its left for the window's own controls: the traffic lights on
     // macOS, where the system title bar is hidden and the tabs bar stands in for it; 0 elsewhere.
     [[nodiscard]] float title_bar_inset();
-    // Where the tabs bar is the title bar: moves the window with the mouse from the press on its empty area, and
-    // does what a double-click on a title bar does there (zoom, or minimise, as the system is set). No-ops elsewhere.
-    void drag_window(GLFWwindow* window);
-    void title_bar_double_click(GLFWwindow* window);
+    // Where the tabs bar is the title bar: the part of it (window coordinates, logical px) that acts as one, moving
+    // the window when dragged and zooming or minimising on a double-click, as the system is set. Set every frame,
+    // empty (max <= min) when there is none; the presses there never reach ImGui. A no-op elsewhere.
+    void set_title_bar_drag_region(float min_x, float min_y, float max_x, float max_y);
 
     enum class CursorShape
     {

@@ -268,20 +268,14 @@ namespace imgit::ui
         }
         draw_tabs_list_popover(app, ImVec2(right - px(90.5f) + px(14.f), origin.y + px(31.f)));
 
-        // Where the bar is the title bar (macOS), a press on its empty part moves the window and a double-click
-        // does what one on a title bar does; the release then goes to the system, so ImGui is told of it here.
-        if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive()
-            && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
+        // Where the bar is the title bar (macOS), its empty part, from the + to the right-hand icons, acts as one
+        // (the platform takes the presses there); in window coordinates, which are the viewport's.
         {
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-            {
-                platform::title_bar_double_click(platform::main_window());
-            }
-            else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && platform::title_bar_inset() > 0.f)
-            {
-                platform::drag_window(platform::main_window());
-                ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-            }
+            const ImVec2 viewport_pos = ImGui::GetMainViewport()->Pos;
+            const float empty_min = x + px(33.f);
+            const float empty_max = right - px(103.f);
+            platform::set_title_bar_drag_region(empty_min - viewport_pos.x, origin.y - viewport_pos.y,
+                                                empty_max - viewport_pos.x, origin.y + height - viewport_pos.y);
         }
         ImGui::EndChild();
 
