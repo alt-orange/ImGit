@@ -20,7 +20,11 @@ C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 ---
 
-### **[<kbd> <br> &nbsp;&nbsp;&nbsp;&nbsp;Download&nbsp;&nbsp;&nbsp;&nbsp; <br> </kbd>][DOWNLOAD]** &nbsp; **[<kbd> <br> &nbsp;&nbsp;&nbsp;&nbsp;Install&nbsp;&nbsp;&nbsp;&nbsp; <br> </kbd>][INSTALL]** &nbsp; **[<kbd> <br> &nbsp;&nbsp;&nbsp;&nbsp;Porting&nbsp;&nbsp;&nbsp;&nbsp; <br> </kbd>][PORTING]** &nbsp; **[<kbd> <br> &nbsp;&nbsp;&nbsp;&nbsp;Contribute&nbsp;&nbsp;&nbsp;&nbsp; <br> </kbd>][CONTRIBUTING]** &nbsp; **[<kbd> <br> &nbsp;&nbsp;&nbsp;&nbsp;Donate&nbsp;&nbsp;&nbsp;&nbsp; <br> </kbd>][SPONSOR]**
+**[<kbd> <br> Download <br> </kbd>][DOWNLOAD]** 
+**[<kbd> <br> Install <br> </kbd>][INSTALL]** 
+**[<kbd> <br> Porting <br> </kbd>][PORTING]** 
+**[<kbd> <br> Contribute <br> </kbd>][CONTRIBUTING]** 
+**[<kbd> <br> Donate <br> </kbd>][SPONSOR]** 
 
 ---
 
