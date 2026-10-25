@@ -18,7 +18,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Feature | Status | Notes |
 |---|---|---|
 | Menu bar File / Edit / View / Help | ✅ | Open / Clone / Init, external editor / terminal / file manager, Undo / Redo, panels, zoom, shortcuts, about |
-| Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history) and profile popovers |
+| Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history with the All / Read / Unread filter, read on close or by the eye) and profile popovers |
 | New Tab page | ✅ | Open / Clone / Create, search, Recent |
 | Repository Management view | ✅ | Open / Favorites / Recent sections with branch, ahead / behind and WIP summaries |
 | Repo tab groups, rename tab, reorder tabs | ⬜ | |
