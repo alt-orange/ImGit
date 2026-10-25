@@ -132,6 +132,9 @@ to it; run it by hand with a tag to rebuild an existing release's packages. The 
 Linux are compressed with UPX (macOS has no working UPX target); some antivirus scanners flag UPX-packed files, and
 `upx -d` restores the original binary.
 
+**Warnings** — the build treats every warning as an error on every platform (`/W4 /WX` on MSVC and clang-cl,
+`-Wall -Wextra -Wpedantic -Werror` elsewhere), so a new warning fails the build rather than piling up.
+
 **Headless screenshots** — `imgit <repo> --screenshot out.bmp [--size WxH] [--select-row N]` renders a few frames and
 exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
 made this way.

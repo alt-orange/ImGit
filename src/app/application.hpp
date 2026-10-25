@@ -49,6 +49,7 @@ namespace imgit::app
         float terminal_height = 275.f; // TERMINAL_DEFAULT_HEIGHT
         float commit_message_height = 150.f; // layout.CommitMessage.rightPanelHeight (initialCommitMessageHeight)
         std::map<std::string, float> graph_column_widths; // by zone: ref, graph, message, author...
+        std::vector<std::string> graph_column_order; // the zones' keys as dragged into place; empty: the default
 
         void load(const std::string& path);
         void save(const std::string& path) const;
@@ -272,6 +273,8 @@ namespace imgit::app
         // a repository gets an "Open Failed" toast.
         void browse_for_repository();
         void close_tab(int index);
+        // Moves the repository tab `from` to `to` (a drag along the tabs bar), keeping the active tab active.
+        void move_tab(int from, int to);
         void reopen_closed_tab();
         void select_adjacent_tab(int direction);
         void copy_to_clipboard(const std::string& text);

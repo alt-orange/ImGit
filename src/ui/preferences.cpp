@@ -357,9 +357,9 @@ namespace imgit::ui
                 CODE,
             };
             Kind kind = Kind::WORD;
-            std::string_view text;
+            std::string_view text{};
             Face face = Face::REGULAR;
-            std::string_view url;
+            std::string_view url{};
             float lead = 0.f;
             float trail = 0.f;
         };
@@ -1889,7 +1889,7 @@ namespace imgit::ui
                 [&](Row& r)
                 {
                     browse_row(r, "SSH/Public key", (home + "/.ssh/id_rsa.pub").c_str(), "pub");
-                    const std::string& path = value_of(app, "SSH/Public key", (home + "/.ssh/id_rsa.pub").c_str());
+                    const std::string path = value_of(app, "SSH/Public key", (home + "/.ssh/id_rsa.pub").c_str());
                     // The copy button: btn-default with a clipboard (18px).
                     const float copy_x = r.x() + 31.f + measure(Style{12.f}, "Browse") + measure(LABEL, path) + 5.f;
                     box(page, copy_x, r.top - 0.5f, 40.f, 32.140625f, {CLEAR, white(0.75f), 2.f});

@@ -187,11 +187,9 @@ namespace
             }
             else if (command == "press" || command == "release")
             {
-                // A held button for mid-drag shots: "press x y", moves, shots, then "release".
-                if (command == "press")
+                // A held button for mid-drag shots: "press [x y]", moves, shots, then "release".
+                if (float x = 0.f, y = 0.f; command == "press" && (in >> x >> y))
                 {
-                    float x, y;
-                    in >> x >> y;
                     move(x, y);
                     wait(2);
                 }
@@ -622,7 +620,8 @@ namespace
         const CursorShape shape = wanted == imgit::ui::DragCursor::MOVE         ? CursorShape::MOVE
                                   : wanted == imgit::ui::DragCursor::NO_DROP    ? CursorShape::NO_DROP
                                   : wanted == imgit::ui::DragCursor::COL_RESIZE ? CursorShape::COL_RESIZE
-                                                                                : CursorShape::ROW_RESIZE;
+                                  : wanted == imgit::ui::DragCursor::ROW_RESIZE ? CursorShape::ROW_RESIZE
+                                                                                : CursorShape::GRAB;
         imgit::platform::set_cursor(window, shape);
         io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
         showing = true;

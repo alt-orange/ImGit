@@ -1,6 +1,7 @@
 #pragma once
 
 struct GLFWwindow;
+struct GLFWcursor;
 
 // Platform touches on the GLFW main window: its frame, cursors and native handle.
 namespace imgit::platform
@@ -35,7 +36,10 @@ namespace imgit::platform
         NO_DROP,
         COL_RESIZE,
         ROW_RESIZE,
+        GRAB, // the open hand over something that can be dragged (CSS `grab`)
     };
+    // Chromium's grab cursor as a GLFW cursor: an 18px open hand drawn here, its hotspot in the palm.
+    [[nodiscard]] GLFWcursor* grab_cursor();
     // Shows `shape` over the window instead of ImGui's cursor until reset_cursor(): the system drag-and-drop
     // cursors, and on Windows Chromium's own resize cursors (inverting masks GLFW's RGBA cursors cannot show).
     void set_cursor(GLFWwindow* window, CursorShape shape);

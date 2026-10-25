@@ -231,7 +231,7 @@ namespace imgit::ui
                                       }));
             add("Create patch from all working directory changes",
                 with_repo(
-                        [&app](app::RepoState& r)
+                        [](app::RepoState& r)
                         {
                             if (const auto file = platform::shell::save_file_dialog("changes.patch", "patch"))
                             {

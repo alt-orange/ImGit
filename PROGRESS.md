@@ -18,10 +18,11 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Feature | Status | Notes |
 |---|---|---|
 | Menu bar File / Edit / View / Help | ✅ | Open / Clone / Init, external editor / terminal / file manager, Undo / Redo, panels, zoom, shortcuts, about |
-| Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history) and profile popovers |
+| Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history with the All / Read / Unread filter, read on close or by the eye) and profile popovers |
 | New Tab page | ✅ | Open / Clone / Create, search, Recent |
 | Repository Management view | ✅ | Open / Favorites / Recent sections with branch, ahead / behind and WIP summaries |
-| Repo tab groups, rename tab, reorder tabs | ⬜ | |
+| Reorder tabs | 🟡 | Drag a repository tab along the bar (the drag-and-drop cursor, the tab over the others, swapping as its centre passes a neighbour's); the order is saved with the tabs |
+| Repo tab groups, rename tab | ⬜ | |
 | Toolbar breadcrumbs *repository › branch* with dropdowns | ✅ | |
 | Toolbar Undo / Redo / Pull ▾ / Push / Branch / Stash / Pop / Terminal / LFS ▾ / Actions / Search | ✅ | LFS menu (Fetch / Checkout / Pull / Push / Prune) runs `git lfs` on PATH |
 | Toolbar labels on/off | ✅ | Preferences → UI |
@@ -45,7 +46,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Create branch / add remote / create tag | ✅ | From the context menus |
 | Double-click to checkout, right-click menus | ✅ | |
 | Drag branch onto branch → Merge / Rebase / Reset menu | ✅ | Fast-forward, merge, rebase, interactive rebase, push, reset; gold drop targets, the 75% drag image and the Windows drag cursors |
-| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | Worktrees / submodules are listed only (no create / remove) |
+| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | Worktrees are listed only; Add Submodule is the panel sliding out of the left panel (no remove) |
 | Gitflow | ⬜ | |
 | Branch cleanup | ⬜ | |
 
@@ -62,11 +63,12 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Highlight rows when hovering a branch label | ✅ | Rows whose own or child refs miss the hovered group fade after 1s; Ctrl dims around the selected commit's branch |
 | Commit message + dimmed description | ✅ | |
 | Columns: BRANCH / TAG, GRAPH, COMMIT MESSAGE, AUTHOR, DATE / TIME, SHA, CHANGES with gear settings | ✅ | CHANGES only shows the WIP row's counts (no per-commit stats) |
-| Column drag-reorder and resize | 🟡 | Resize (preferred widths, the last zone fills, handles in the header and over the rows, widths saved); no drag-reorder. A GRAPH zone narrower than its lanes scrolls them (Shift + wheel, horizontal wheel, scrollbar) under shadowed gutters, nodes pinned and fading at the edges, single-column mode below one lane |
+| Column drag-reorder and resize | 🟡 | Resize (preferred widths, the last zone fills, handles in the header and over the rows, widths saved); drag a header cell to reorder the columns (the cell follows the mouse, the columns swap as it passes their centres, the order saved; "Reset columns" restores the default). A GRAPH zone narrower than its lanes scrolls them (Shift + wheel, horizontal wheel, scrollbar) under shadowed gutters, nodes pinned and fading at the edges, single-column mode below one lane |
 | Commit search (Ctrl+F) with n of m navigation | ✅ | Floating bar over the graph |
 | Multi-select (Ctrl / Shift), keyboard j / k / arrows / Home / End | ✅ | |
 | Lazy loading / "Show more commits" | ✅ | |
-| Timeline markers, scroll markers for HEAD / branches | ⬜ | |
+| Timeline markers | 🟡 | A line and an age label ("1 hour ago", "yesterday", "3 weeks ago"...) on the first row past each age step |
+| Scroll markers for HEAD / branches | ⬜ | |
 | Compact graph mode | ⬜ | Setting exists, rendering is always "rich" |
 | Pin branch to left | ✅ | Context menu |
 
@@ -92,7 +94,7 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Feature | Status | Notes |
 |---|---|---|
 | Checkout branch / remote branch / tag / commit | ✅ | |
-| Create / rename / delete branch, set upstream | ✅ | Pushing a branch without an upstream asks in the prompt bar (remote select, branch name) |
+| Create / rename / delete branch, set upstream | ✅ | Renaming asks for the new name in the prompt bar; pushing a branch without an upstream asks there too (remote select, branch name) |
 | Text field right-click menu | ✅ | Cut / Copy / Paste / Select All; no spelling suggestions |
 | Create (annotated) tag, delete tag, push tag | ✅ | |
 | Stage / unstage / discard files or all, commit, amend, push after commit | ✅ | |

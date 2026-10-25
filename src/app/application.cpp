@@ -205,6 +205,19 @@ namespace imgit::app
                     }
                 }
             }
+            else if (key == "graph_column_order")
+            {
+                graph_column_order.clear();
+                std::stringstream stream(value);
+                std::string column;
+                while (std::getline(stream, column, ','))
+                {
+                    if (!column.empty())
+                    {
+                        graph_column_order.push_back(column);
+                    }
+                }
+            }
             else if (key == "hidden_left_sections")
             {
                 hidden_left_sections.clear();
@@ -242,6 +255,14 @@ namespace imgit::app
         for (const auto& [zone, width] : graph_column_widths)
         {
             file << separator << zone << ':' << width;
+            separator = ",";
+        }
+        file << '\n';
+        file << "graph_column_order=";
+        separator = "";
+        for (const std::string& zone : graph_column_order)
+        {
+            file << separator << zone;
             separator = ",";
         }
         file << '\n';
@@ -490,6 +511,34 @@ namespace imgit::app
         else if (active_tab > index || active_tab >= static_cast<int>(tabs.size()))
         {
             active_tab = std::max(active_tab - 1, 0);
+        }
+    }
+
+    void Application::move_tab(int from, int to)
+    {
+        const int count = static_cast<int>(tabs.size());
+        if (from == to || from < 0 || to < 0 || from >= count || to >= count)
+        {
+            return;
+        }
+        std::unique_ptr<RepoState> moved = std::move(tabs[static_cast<std::size_t>(from)]);
+        tabs.erase(tabs.begin() + from);
+        tabs.insert(tabs.begin() + to, std::move(moved));
+        if (active_tab == from)
+        {
+            active_tab = to;
+        }
+        else if (from < active_tab && active_tab <= to)
+        {
+            --active_tab;
+        }
+        else if (to <= active_tab && active_tab < from)
+        {
+            ++active_tab;
+        }
+        if (settings.remember_tabs)
+        {
+            save_tabs();
         }
     }
 
@@ -1417,6 +1466,10 @@ namespace imgit::app
         {
             ImGui::SetCursorScreenPos(ImVec2(center_x, origin.y + upper_h));
             ui::draw_terminal_panel(*this, &state, ImVec2(center_width, terminal_h));
+        }
+        if (!rebasing && !state.diff_target)
+        {
+            ui::draw_slide_panel(*this, state, ImVec2(center_x, origin.y), full_h);
         }
 
         // Sizes follow the mouse while a handle is held and are saved when it is let go.

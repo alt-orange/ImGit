@@ -76,7 +76,12 @@ namespace imgit::platform
             GetIconInfo(cursor, &info);
             const int size = GetSystemMetrics(SM_CXCURSOR);
             BITMAPINFO bitmap_info{};
-            bitmap_info.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB};
+            bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bitmap_info.bmiHeader.biWidth = size;
+            bitmap_info.bmiHeader.biHeight = -size; // top-down
+            bitmap_info.bmiHeader.biPlanes = 1;
+            bitmap_info.bmiHeader.biBitCount = 32;
+            bitmap_info.bmiHeader.biCompression = BI_RGB;
             HDC screen = GetDC(nullptr);
             HDC dc = CreateCompatibleDC(screen);
             const unsigned char* pixels[2] = {};
@@ -172,7 +177,36 @@ namespace imgit::platform
         reset_cursor(window);
         static GLFWcursor* move = drag_drop_cursor(3);
         static GLFWcursor* no_drop = drag_drop_cursor(1);
-        glfwSetCursor(window, shape == CursorShape::MOVE ? move : no_drop);
+        static GLFWcursor* grab = grab_cursor();
+        glfwSetCursor(window, shape == CursorShape::MOVE      ? move
+                              : shape == CursorShape::NO_DROP ? no_drop
+                                                              : grab);
+    }
+
+    GLFWcursor* grab_cursor()
+    {
+        // The open hand, black outlined and white filled, as Chromium draws the "grab" CSS cursor.
+        static constexpr const char* ROWS[18] = {
+                ".......XX.XX......", "...XX.XooXooX.XX..", "...XooXooXooXXooX.", "...XooXooXooXooX..",
+                "...XooXooXooXooX..", "...XoooooooooooX..", ".XXXoooooooooooX..", "XooXXooooooooooX..",
+                "XoooXooooooooooX..", ".XoooooooooooooX..", "..XooooooooooooX..", "..XoooooooooooX...",
+                "...XooooooooooX...", "...XoooooooooX....", "....XoooooooX.....", "....XoooooooX.....",
+                "....XXXXXXXXX.....", "..................",
+        };
+        static unsigned char rgba[18 * 18 * 4];
+        for (int y = 0; y < 18; ++y)
+        {
+            for (int x = 0; x < 18; ++x)
+            {
+                unsigned char* out = rgba + (y * 18 + x) * 4;
+                const char c = ROWS[y][x];
+                const unsigned char v = c == 'X' ? 0 : 255;
+                out[0] = out[1] = out[2] = v;
+                out[3] = c == '.' ? 0 : 255;
+            }
+        }
+        const GLFWimage image{18, 18, rgba};
+        return glfwCreateCursor(&image, 9, 9);
     }
 
     void reset_cursor(GLFWwindow* window)

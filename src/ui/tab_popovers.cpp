@@ -207,15 +207,15 @@ namespace imgit::ui
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
 
-        // The menu: #1C1E23, 20% white border, 4px radius, 0 6px 12px rgba(0,0,0,.4).
+        // The menu: the theme's darkest surface (#1C1E23 in ImGit's, toolbar-bg0 as the prompt bar's react-select
+        // menu), 20% white border, 4px radius, 0 6px 12px rgba(0,0,0,.4).
         const ImVec2 menu_min(origin.x, origin.y + px(36.f));
         const ImVec2 menu_max(origin.x + px(330.f), menu_min.y + px(menu_h));
         draw_box_shadow(draw, menu_min, menu_max, ImVec2(0.f, px(6.f)), px(12.f), 0.f, ImVec4(0.f, 0.f, 0.f, 0.4f),
                         px(4.f));
         draw->AddRectFilled(menu_min, menu_max, theme::u32(DIVIDER), px(4.f));
-        const ImVec4 menu_bg(28 / 255.f, 30 / 255.f, 35 / 255.f, 1.f);
         draw->AddRectFilled(ImVec2(menu_min.x + 1.f, menu_min.y + 1.f), ImVec2(menu_max.x - 1.f, menu_max.y - 1.f),
-                            theme::u32(menu_bg), px(3.f));
+                            theme::u32(theme::palette().toolbar_bg0), px(3.f));
         // "OPEN TABS": 10.5px, weight 500, uppercase, #999.
         text_at(draw, fonts().regular, 10.5f, menu_min, 13.f, 13.f, 15.f, IM_COL32(153, 153, 153, 255), "OPEN TABS");
 
@@ -362,14 +362,35 @@ namespace imgit::ui
 
     void draw_notifications_popover(app::Application& app, ImVec2 anchor_right_bottom)
     {
+        // The "All ▾" filter: All, Read or Unread, picked from its menu. Notifications are read once the popover
+        // closes (the eye marks one read, or unread again, before that).
+        enum class Filter
+        {
+            ALL,
+            READ,
+            UNREAD,
+        };
+        static constexpr const char* FILTER_LABELS[] = {"All", "Read", "Unread"};
+        static Filter filter = Filter::ALL;
+        static bool filter_open = false;
+        static bool was_open = false;
         std::vector<app::Toasts::Entry>& history = app.toasts.history();
+        std::vector<std::size_t> shown;
+        for (std::size_t i = 0; i < history.size(); ++i)
+        {
+            if (filter == Filter::ALL || (filter == Filter::READ) == history[i].read)
+            {
+                shown.push_back(i);
+            }
+        }
         // Each notification: 10px padding, an 18px header line, 5px, the wrapped body, 10px, a 1px divider.
         ImFont* font = fonts().regular;
         const float body_w = 362.f;
         std::vector<float> heights;
         float content = 0.f;
-        for (const app::Toasts::Entry& entry : history)
+        for (const std::size_t i : shown)
         {
+            const app::Toasts::Entry& entry = history[i];
             const std::string body = entry.detail.empty() ? entry.title : entry.title + " " + entry.detail;
             const float wrapped = font->CalcTextSizeA(font_px(font, 12.f), FLT_MAX, px(body_w), body.c_str()).y;
             const int lines = std::max(1, static_cast<int>(std::round(wrapped / font_px(font, 12.f))));
@@ -377,37 +398,110 @@ namespace imgit::ui
             heights.push_back(h);
             content += h;
         }
-        const float empty_h = history.empty() ? 60.f : 0.f;
-        const float list_h = std::min(816.f, content + empty_h);
+        const float empty_h = shown.empty() ? 60.f : 0.f;
+        // The filter menu needs the room under the header when the list is short.
+        const float menu_h = 8.f + 37.f * 3.f;
+        const float list_h = std::max(filter_open ? menu_h + 8.f : 0.f, std::min(816.f, content + empty_h));
         const float height = 52.1f + list_h;
         const ImVec2 pos(anchor_right_bottom.x - px(450.f), anchor_right_bottom.y + px(5.f));
         if (!begin_tab_popover("##notifications", pos, ImVec2(450.f, height)))
         {
+            if (was_open)
+            {
+                app.toasts.mark_all_read();
+                was_open = false;
+                filter_open = false;
+            }
             return;
         }
-        app.toasts.mark_all_read();
+        was_open = true;
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const ImVec2 o = ImGui::GetWindowPos();
         draw->PushClipRectFullScreen();
+        // The filter menu draws over the list, so it gets its own channel; its rows are submitted first and win
+        // the hover over the list's buttons under them.
+        ImDrawListSplitter layers;
+        layers.Split(draw, 2);
+        layers.SetCurrentChannel(draw, 0);
         popover_frame(draw, o, ImVec2(450.f, height));
         text_at(draw, fonts().semibold, 14.f, o, 20.f, 15.6f, 20.f, theme::u32(TEXT), "Notifications");
         // The "All ▾" filter and the "⋮" menu (hover-text buttons).
-        text_at(draw, fonts().regular, 12.f, o, 139.6f, 16.9f, 17.1429f, theme::u32(TEXT), "All");
-        draw->AddTriangleFilled(ImVec2(o.x + px(156.4f), o.y + px(24.8f)), ImVec2(o.x + px(164.4f), o.y + px(24.8f)),
-                                ImVec2(o.x + px(160.4f), o.y + px(28.8f)), theme::u32(TEXT));
+        const char* filter_label = FILTER_LABELS[static_cast<int>(filter)];
+        const float label_w = text_size(fonts().regular, 12.f, filter_label).x / dpi_scale();
+        const ImVec2 filter_min(o.x + px(133.6f), o.y + px(14.f));
+        const ImVec2 filter_max(o.x + px(139.6f + label_w + 22.f), o.y + px(36.f));
+        ImGui::SetCursorScreenPos(filter_min);
+        if (ImGui::InvisibleButton("##filter", ImVec2(filter_max.x - filter_min.x, filter_max.y - filter_min.y)))
+        {
+            filter_open = !filter_open;
+        }
+        const bool filter_hovered = ImGui::IsItemHovered();
+        if (filter_hovered)
+        {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+        const ImU32 filter_color = theme::u32(filter_hovered || filter_open ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT);
+        text_at(draw, fonts().regular, 12.f, o, 139.6f, 16.9f, 17.1429f, filter_color, filter_label);
+        const float tri_x = 139.6f + label_w + 4.8f;
+        draw->AddTriangleFilled(ImVec2(o.x + px(tri_x), o.y + px(24.8f)),
+                                ImVec2(o.x + px(tri_x + 8.f), o.y + px(24.8f)),
+                                ImVec2(o.x + px(tri_x + 4.f), o.y + px(28.8f)), filter_color);
         draw_fa_icon(draw, "far:ellipsis-v", ImVec2(o.x + px(417.f), o.y + px(25.6f)), px(16.f), theme::u32(TEXT));
         draw->AddRectFilled(ImVec2(o.x, o.y + px(51.1f)), ImVec2(o.x + px(450.f), o.y + px(52.1f)),
                             theme::u32(DIVIDER));
 
-        if (history.empty())
+        // The filter's menu: under the control, 150px wide, 37px rows, the current filter highlighted.
+        ImVec2 menu_min, menu_max;
+        if (filter_open)
         {
-            text_at(draw, font, 12.f, o, 20.f, 72.1f, 17.1429f, theme::u32(SECONDARY), "You're all caught up.");
+            layers.SetCurrentChannel(draw, 1);
+            menu_min = ImVec2(o.x + px(133.6f), o.y + px(40.f));
+            menu_max = ImVec2(menu_min.x + px(150.f), menu_min.y + px(menu_h));
+            draw_box_shadow(draw, menu_min, menu_max, ImVec2(0.f, px(6.f)), px(12.f), 0.f, ImVec4(0.f, 0.f, 0.f, 0.4f),
+                            px(4.f));
+            draw->AddRectFilled(menu_min, menu_max, theme::u32(DIVIDER), px(4.f));
+            draw->AddRectFilled(ImVec2(menu_min.x + 1.f, menu_min.y + 1.f), ImVec2(menu_max.x - 1.f, menu_max.y - 1.f),
+                                theme::u32(theme::palette().toolbar_bg0), px(3.f));
+            for (int i = 0; i < 3; ++i)
+            {
+                const ImVec2 row_min(menu_min.x + 1.f, menu_min.y + px(4.f + 37.f * static_cast<float>(i)));
+                const ImVec2 row_max(menu_max.x - 1.f, row_min.y + px(37.f));
+                ImGui::SetCursorScreenPos(row_min);
+                ImGui::PushID(i);
+                const bool picked =
+                        ImGui::InvisibleButton("##filter_option", ImVec2(row_max.x - row_min.x, row_max.y - row_min.y));
+                ImGui::PopID();
+                const bool hovered = ImGui::IsItemHovered();
+                if (hovered)
+                {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                }
+                if (hovered || static_cast<int>(filter) == i)
+                {
+                    draw->AddRectFilled(row_min, row_max, theme::u32(HOVER));
+                }
+                text_at(draw, fonts().regular, 14.f, ImVec2(menu_min.x, row_min.y), 13.f, 8.5f, 20.f,
+                        theme::u32(TEXT), FILTER_LABELS[i]);
+                if (picked)
+                {
+                    filter = static_cast<Filter>(i);
+                    filter_open = false;
+                }
+            }
+            layers.SetCurrentChannel(draw, 0);
+        }
+
+        if (shown.empty())
+        {
+            text_at(draw, font, 12.f, o, 20.f, 72.1f, 17.1429f, theme::u32(SECONDARY),
+                    filter == Filter::READ ? "No read notifications." : "You're all caught up.");
         }
         float y = 52.1f;
         int remove = -1;
-        for (std::size_t i = 0; i < history.size() && y < 52.1f + 816.f; ++i)
+        for (std::size_t n = 0; n < shown.size() && y < 52.1f + 816.f; ++n)
         {
-            const app::Toasts::Entry& entry = history[i];
+            const std::size_t i = shown[n];
+            app::Toasts::Entry& entry = history[i];
             const ImVec4 accent = entry.kind == app::ToastKind::ERROR     ? theme::palette().red
                                   : entry.kind == app::ToastKind::SUCCESS ? theme::palette().green
                                                                           : theme::palette().accent;
@@ -417,10 +511,18 @@ namespace imgit::ui
             const float sender_w = text_size(font, 12.f, "ImGit").x / dpi_scale();
             text_at(draw, font, 12.f, o, 48.f + sender_w + 10.f, y + 10.5f, 17.1429f, theme::u32(SECONDARY),
                     format_notification_time(entry.time).c_str());
-            draw_fa_icon(draw, "far:eye", ImVec2(o.x + px(383.f), o.y + px(y + 19.f)), px(12.f), theme::u32(DISABLED));
+            ImGui::PushID(static_cast<int>(i));
+            // The eye marks the notification read; the eye-slash, unread again.
+            const ImVec2 eye(o.x + px(383.f), o.y + px(y + 19.f));
+            ImGui::SetCursorScreenPos(ImVec2(eye.x - px(9.f), eye.y - px(9.f)));
+            if (ImGui::InvisibleButton("##read", ImVec2(px(18.f), px(18.f))))
+            {
+                entry.read = !entry.read;
+            }
+            draw_fa_icon(draw, entry.read ? "far:eye-slash" : "far:eye", eye, px(12.f),
+                         theme::u32(ImGui::IsItemHovered() ? ImVec4(1.f, 1.f, 1.f, 1.f) : DISABLED));
             const ImVec2 trash(o.x + px(421.f), o.y + px(y + 19.f));
             ImGui::SetCursorScreenPos(ImVec2(trash.x - px(9.f), trash.y - px(9.f)));
-            ImGui::PushID(static_cast<int>(i));
             if (ImGui::InvisibleButton("##delete", ImVec2(px(18.f), px(18.f))))
             {
                 remove = static_cast<int>(i);
@@ -449,10 +551,18 @@ namespace imgit::ui
                     ++line;
                 }
             }
-            y += heights[i];
+            y += heights[n];
             draw->AddRectFilled(ImVec2(o.x, o.y + px(y - 1.f)), ImVec2(o.x + px(450.f), o.y + px(y)),
                                 theme::u32(DIVIDER));
         }
+        // A click outside the open menu closes it.
+        if (filter_open && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+            && !ImGui::IsMouseHoveringRect(menu_min, menu_max, false)
+            && !ImGui::IsMouseHoveringRect(filter_min, filter_max, false))
+        {
+            filter_open = false;
+        }
+        layers.Merge(draw);
         draw->PopClipRect();
         ImGui::EndPopup();
         if (remove >= 0)

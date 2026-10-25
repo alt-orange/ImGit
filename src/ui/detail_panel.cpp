@@ -394,26 +394,6 @@ namespace imgit::ui
             }
         }
 
-        void collapse_all(app::RepoState& state, const FileNode& node, const std::string& prefix, bool collapse)
-        {
-            for (const auto& [key, child] : node.children)
-            {
-                if (child.file != nullptr)
-                {
-                    continue;
-                }
-                if (collapse)
-                {
-                    state.expanded_folders.erase(prefix + child.path);
-                }
-                else
-                {
-                    state.expanded_folders.insert(prefix + child.path);
-                }
-                collapse_all(state, child, prefix, collapse);
-            }
-        }
-
         // "Unstaged Files (2)": the 14px caret 15px in, the 14px label 5px after it and the xs button 15px from
         // the right; `top_margin` is 4px for every section after the first.
         bool files_section(app::RepoState& state, const char* label, std::size_t count, ImVec2 pos, float width,
@@ -552,8 +532,8 @@ namespace imgit::ui
             CARET_END,
         };
 
-        void message_input(app::Application& app, std::string& summary, std::string& description, ImVec2 bmin,
-                           ImVec2 bmax, const char* summary_id, const char* description_id, SummaryFocus focus,
+        void message_input(std::string& summary, std::string& description, ImVec2 bmin, ImVec2 bmax,
+                           const char* summary_id, const char* description_id, SummaryFocus focus,
                            const char* summary_hint = "Commit summary", bool counter_shown = true)
         {
             const theme::Palette& p = theme::palette();
@@ -656,7 +636,7 @@ namespace imgit::ui
         {
             const theme::Palette& p = theme::palette();
             ImDrawList* draw = ImGui::GetWindowDrawList();
-            message_input(app, state.stash_summary, state.stash_description, ImVec2(origin.x + px(11.f), c + px(55.f)),
+            message_input(state.stash_summary, state.stash_description, ImVec2(origin.x + px(11.f), c + px(55.f)),
                           ImVec2(origin.x + width - px(11.f), c + px(55.f + 185.f)), "##stash_summary",
                           "##stash_description", SummaryFocus::NONE, "Stash title", false);
 
@@ -976,7 +956,7 @@ namespace imgit::ui
             }
             // .commit-message-input: summary (16px, 72-character counter) over the description.
             message_input(
-                    app, state.commit_summary, state.commit_description, ImVec2(origin.x + px(11.f), c + px(76.f)),
+                    state.commit_summary, state.commit_description, ImVec2(origin.x + px(11.f), c + px(76.f)),
                     ImVec2(origin.x + width - px(11.f), c + px(76.f + 137.9f)), "##summary", "##description",
                     ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_M) ? SummaryFocus::SELECT_ALL
                                                                                           : SummaryFocus::NONE);
@@ -1127,54 +1107,6 @@ namespace imgit::ui
                 result.push_back(author);
             }
             return result;
-        }
-
-        // The two-option toggles ("Path | Tree"): equal halves in a 1px rounded frame, the active one
-        // filled with selected-row blue. Returns true when the selection changed.
-        bool icon_toggle(const char* id, const Icon* icons, const char* const* labels, int* selected, ImVec2 min,
-                         ImVec2 max)
-        {
-            const theme::Palette& p = theme::palette();
-            ImDrawList* draw = ImGui::GetWindowDrawList();
-            const float split = std::round((min.x + max.x) / 2.f);
-            const ImVec4 border = theme::with_alpha(p.white, 0.37f);
-            bool changed = false;
-            ImGui::PushID(id);
-            for (int i = 0; i < 2; ++i)
-            {
-                const float x0 = i == 0 ? min.x : split;
-                const float x1 = i == 0 ? split : max.x;
-                const bool active = *selected == i;
-                if (active)
-                {
-                    draw->AddRectFilled(ImVec2(x0, min.y), ImVec2(x1, max.y), theme::u32(p.selected_row), px(3.f),
-                                        i == 0 ? ImDrawFlags_RoundCornersLeft : ImDrawFlags_RoundCornersRight);
-                }
-                ImGui::SetCursorScreenPos(ImVec2(x0, min.y));
-                ImGui::PushID(i);
-                ImGui::InvisibleButton("##half", ImVec2(x1 - x0, max.y - min.y));
-                const bool hovered = ImGui::IsItemHovered();
-                if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !active)
-                {
-                    *selected = i;
-                    changed = true;
-                }
-                ImGui::PopID();
-                const ImU32 color = theme::u32(active || hovered ? p.text_selected : p.text_normal);
-                const float em = px(12.f);
-                const float icon_w = icon_width(icons[i], em);
-                const ImVec2 text = text_size(fonts().regular, theme::FONT_SIZE_ROW, labels[i]);
-                const float content = icon_w + px(6.f) + text.x;
-                const float cx = std::round((x0 + x1 - content) / 2.f);
-                const float mid = (min.y + max.y) / 2.f;
-                draw_icon(draw, icons[i], ImVec2(cx + icon_w / 2.f, mid), em, color);
-                draw_text(draw, fonts().regular, theme::FONT_SIZE_ROW,
-                          ImVec2(cx + icon_w + px(6.f), mid - text.y / 2.f), color, labels[i]);
-            }
-            draw->AddRect(min, max, theme::u32(border), px(3.f), 0, 1.f);
-            draw->AddLine(ImVec2(split + 0.5f, min.y), ImVec2(split + 0.5f, max.y), theme::u32(border), 1.f);
-            ImGui::PopID();
-            return changed;
         }
 
         // Text laid out top-down with CSS line boxes (line-height 1.42857, Bootstrap's body default).
@@ -1368,7 +1300,7 @@ namespace imgit::ui
             }
             if (editing)
             {
-                message_input(app, state.amend_summary, state.amend_description, ImVec2(left, box_top),
+                message_input(state.amend_summary, state.amend_description, ImVec2(left, box_top),
                               ImVec2(right, box_top + message_h - px(50.f)), "##amend_summary", "##amend_description",
                               state.amend_focus_requested ? SummaryFocus::CARET_END : SummaryFocus::NONE);
                 state.amend_focus_requested = false;
