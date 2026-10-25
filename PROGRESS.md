@@ -21,7 +21,8 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history with the All / Read / Unread filter, read on close or by the eye) and profile popovers |
 | New Tab page | ✅ | Open / Clone / Create, search, Recent |
 | Repository Management view | ✅ | Open / Favorites / Recent sections with branch, ahead / behind and WIP summaries |
-| Repo tab groups, rename tab, reorder tabs | ⬜ | |
+| Reorder tabs | 🟡 | Drag a repository tab along the bar (the grabbing hand, the tab over the others, swapping as its centre passes a neighbour's); the order is saved with the tabs |
+| Repo tab groups, rename tab | ⬜ | |
 | Toolbar breadcrumbs *repository › branch* with dropdowns | ✅ | |
 | Toolbar Undo / Redo / Pull ▾ / Push / Branch / Stash / Pop / Terminal / LFS ▾ / Actions / Search | ✅ | LFS menu (Fetch / Checkout / Pull / Push / Prune) runs `git lfs` on PATH |
 | Toolbar labels on/off | ✅ | Preferences → UI |

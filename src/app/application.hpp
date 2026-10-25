@@ -273,6 +273,8 @@ namespace imgit::app
         // a repository gets an "Open Failed" toast.
         void browse_for_repository();
         void close_tab(int index);
+        // Moves the repository tab `from` to `to` (a drag along the tabs bar), keeping the active tab active.
+        void move_tab(int from, int to);
         void reopen_closed_tab();
         void select_adjacent_tab(int direction);
         void copy_to_clipboard(const std::string& text);

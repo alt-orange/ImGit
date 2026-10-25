@@ -94,11 +94,38 @@ namespace imgit::platform
         static GLFWcursor* no_drop = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
         static GLFWcursor* col_resize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         static GLFWcursor* row_resize = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
+        static GLFWcursor* grabbing = grabbing_cursor();
         GLFWcursor* cursor = shape == CursorShape::MOVE         ? move
                              : shape == CursorShape::NO_DROP    ? no_drop
                              : shape == CursorShape::COL_RESIZE ? col_resize
-                                                                : row_resize;
+                             : shape == CursorShape::ROW_RESIZE ? row_resize
+                                                                : grabbing;
         glfwSetCursor(window, cursor);
+    }
+
+    GLFWcursor* grabbing_cursor()
+    {
+        // The closed hand, black outlined and white filled, as the "grabbing" CSS cursor draws it.
+        static constexpr const char* ROWS[16] = {
+                "................", "................", "......XX.XX.....", ".....XooXooXX...",
+                ".....XooXooXooX.", "..XX.XooXooXooX.", ".XooXXooooooooX.", ".XoooXoooooooX..",
+                ".XoooooooooooX..", "..XooooooooooX..", "..XoooooooooX...", "...XooooooooX...",
+                "...XoooooooX....", "....XoooooX.....", "....XXXXXXX.....", "................",
+        };
+        static unsigned char rgba[16 * 16 * 4];
+        for (int y = 0; y < 16; ++y)
+        {
+            for (int x = 0; x < 16; ++x)
+            {
+                unsigned char* out = rgba + (y * 16 + x) * 4;
+                const char c = ROWS[y][x];
+                const unsigned char v = c == 'X' ? 0 : 255;
+                out[0] = out[1] = out[2] = v;
+                out[3] = c == '.' ? 0 : 255;
+            }
+        }
+        const GLFWimage image{16, 16, rgba};
+        return glfwCreateCursor(&image, 8, 8);
     }
 
     void reset_cursor(GLFWwindow*)

@@ -30,9 +30,25 @@ namespace imgit::ui
 
         int g_menu_tab = -1; // repository tab right-clicked this frame
 
+        // A held repository tab shows the grabbing hand; moved 4px it is dragged along the bar, over the other
+        // tabs, and swaps places with a neighbour once its centre passes that neighbour's.
+        struct TabDrag
+        {
+            int index = -1; // the tab held, -1: none
+            bool active = false;
+            float press_x = 0.f;
+            float grab = 0.f; // the press, from the tab's left edge
+            float width = 0.f;
+            float strip_min = 0.f, strip_max = 0.f; // the repository tabs' extent, from the last frame
+        };
+
+        TabDrag g_tab_drag;
+
+        // `offset`: the tab is drawn this far from its slot (a dragged tab); `held`: the mouse is down on it.
         bool tab_item(ImDrawList* draw, float& x, float y, float height, const char* id, Icon icon,
                       const std::string& label, bool active, bool closable, int* close_request, int index,
-                      const char* tip, bool divider, bool plain = false)
+                      const char* tip, bool divider, bool plain = false, float offset = 0.f, bool* held = nullptr,
+                      float* width_out = nullptr)
         {
             // `plain`: the "New Tab" entry, no icon and the regular 14px font.
             const theme::Palette& p = theme::palette();
@@ -41,6 +57,11 @@ namespace imgit::ui
             const float gap = plain ? 0.f : px(TAB_ICON_GAP);
             const float text_w = std::min(text_size(font, TAB_FONT, label.c_str()).x, px(200.f));
             const float tab_width = px(TAB_PADDING_LEFT) + icon_w + gap + text_w + px(TAB_PADDING_RIGHT);
+            if (width_out != nullptr)
+            {
+                *width_out = tab_width;
+            }
+            const float slot_x = x;
 
             ImGui::SetCursorScreenPos(ImVec2(x, y));
             ImGui::PushID(id);
@@ -55,10 +76,16 @@ namespace imgit::ui
             // and the close button itself, else the button would vanish under the mouse every other frame.
             const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
             const bool hovered_self = ImGui::IsItemHovered();
+            if (held != nullptr)
+            {
+                *held = ImGui::IsItemActive();
+            }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
             {
                 clicked = true;
             }
+            // The rest draws where the tab is shown; the layout keeps its slot.
+            x += offset;
             if (closable && ImGui::IsItemClicked(ImGuiMouseButton_Middle) && close_request != nullptr)
             {
                 *close_request = index;
@@ -109,7 +136,7 @@ namespace imgit::ui
             }
             ImGui::PopID();
             ImGui::PopID();
-            x += tab_width;
+            x = slot_x + tab_width;
             if (divider && !active)
             {
                 draw->AddLine(ImVec2(x - 0.5f, y + height * 0.1f), ImVec2(x - 0.5f, y + height * 0.9f),
@@ -170,13 +197,98 @@ namespace imgit::ui
         float x = left + px(41.f);
         int close_request = -1;
         const int tab_count = static_cast<int>(app.tabs.size());
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        if (g_tab_drag.index >= tab_count)
+        {
+            g_tab_drag = {};
+        }
+        // The dragged tab draws over the others.
+        ImDrawListSplitter layers;
+        layers.Split(draw, 2);
+        layers.SetCurrentChannel(draw, 0);
+        const float strip_min = x;
+        std::vector<float> slots; // each tab's left edge
+        std::vector<float> widths;
+        int held_tab = -1;
+        float held_x = 0.f;
         for (int i = 0; i < tab_count; ++i)
         {
             const app::RepoState& state = *app.tabs[static_cast<std::size_t>(i)];
+            const bool dragging = g_tab_drag.active && g_tab_drag.index == i;
+            float offset = 0.f;
+            if (dragging)
+            {
+                const float shown = std::clamp(mouse.x - g_tab_drag.grab, g_tab_drag.strip_min,
+                                               std::max(g_tab_drag.strip_min, g_tab_drag.strip_max - g_tab_drag.width));
+                offset = shown - x;
+                layers.SetCurrentChannel(draw, 1);
+            }
+            slots.push_back(x);
+            bool held = false;
+            float width = 0.f;
             if (tab_item(draw, x, origin.y, height, "repo", Icon::BRANCH, state.repo.name(), i == app.active_tab, true,
-                         &close_request, i, state.repo.workdir().c_str(), app.active_tab != i + 1))
+                         &close_request, i, state.repo.workdir().c_str(), app.active_tab != i + 1, false, offset, &held,
+                         &width))
             {
                 app.active_tab = i;
+            }
+            widths.push_back(width);
+            if (held)
+            {
+                held_tab = i;
+                held_x = slots.back();
+            }
+            if (dragging)
+            {
+                layers.SetCurrentChannel(draw, 0);
+            }
+        }
+        layers.Merge(draw);
+        // The drag: picked up on the press, moving after 4px, dropped with the mouse.
+        if (held_tab >= 0 && g_tab_drag.index < 0)
+        {
+            g_tab_drag = {held_tab, false, mouse.x, mouse.x - held_x, widths[static_cast<std::size_t>(held_tab)]};
+        }
+        if (g_tab_drag.index >= 0)
+        {
+            g_tab_drag.strip_min = strip_min;
+            g_tab_drag.strip_max = x;
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                g_tab_drag = {};
+            }
+            else
+            {
+                set_drag_cursor(DragCursor::GRABBING);
+                if (!g_tab_drag.active && std::abs(mouse.x - g_tab_drag.press_x) >= px(4.f))
+                {
+                    g_tab_drag.active = true;
+                }
+            }
+        }
+        if (g_tab_drag.active)
+        {
+            const int i = g_tab_drag.index;
+            const float shown = std::clamp(mouse.x - g_tab_drag.grab, strip_min,
+                                           std::max(strip_min, x - g_tab_drag.width));
+            const float centre = shown + g_tab_drag.width / 2.f;
+            const auto centre_of = [&](int n)
+            {
+                return slots[static_cast<std::size_t>(n)] + widths[static_cast<std::size_t>(n)] / 2.f;
+            };
+            int to = i;
+            if (i > 0 && centre < centre_of(i - 1))
+            {
+                to = i - 1;
+            }
+            else if (i + 1 < tab_count && centre > centre_of(i + 1))
+            {
+                to = i + 1;
+            }
+            if (to != i)
+            {
+                app.move_tab(i, to);
+                g_tab_drag.index = to;
             }
         }
         if (app.new_tab_open || tab_count == 0)

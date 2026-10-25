@@ -514,6 +514,34 @@ namespace imgit::app
         }
     }
 
+    void Application::move_tab(int from, int to)
+    {
+        const int count = static_cast<int>(tabs.size());
+        if (from == to || from < 0 || to < 0 || from >= count || to >= count)
+        {
+            return;
+        }
+        std::unique_ptr<RepoState> moved = std::move(tabs[static_cast<std::size_t>(from)]);
+        tabs.erase(tabs.begin() + from);
+        tabs.insert(tabs.begin() + to, std::move(moved));
+        if (active_tab == from)
+        {
+            active_tab = to;
+        }
+        else if (from < active_tab && active_tab <= to)
+        {
+            --active_tab;
+        }
+        else if (to <= active_tab && active_tab < from)
+        {
+            ++active_tab;
+        }
+        if (settings.remember_tabs)
+        {
+            save_tabs();
+        }
+    }
+
     void Application::reopen_closed_tab()
     {
         if (closed_tabs.empty())
