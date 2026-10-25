@@ -72,6 +72,7 @@ namespace imgit::app
             RESET,
             PUSH_NEW_BRANCH,
             ADD_REMOTE,
+            ADD_SUBMODULE,
             EDIT_REMOTE,
             REWORD_COMMIT,
             SQUASH_COMMITS,

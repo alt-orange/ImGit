@@ -45,6 +45,8 @@ namespace imgit::ui
                 return "Reset Branch";
             case app::Dialog::Kind::ADD_REMOTE:
                 return "Add Remote";
+            case app::Dialog::Kind::ADD_SUBMODULE:
+                return "Add Submodule";
             case app::Dialog::Kind::EDIT_REMOTE:
                 return "Edit Remote";
             case app::Dialog::Kind::REWORD_COMMIT:
@@ -1500,6 +1502,39 @@ namespace imgit::ui
                     app.run_git_cli(*state, "Fetch", {"fetch", name});
                     ImGui::CloseCurrentPopup();
                 }
+            }
+            break;
+        }
+        case app::Dialog::Kind::ADD_SUBMODULE:
+        {
+            // The path defaults to the repository's name, as `git submodule add` picks it.
+            std::string name = d.text_a;
+            while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
+            {
+                name.pop_back();
+            }
+            if (name.ends_with(".git"))
+            {
+                name.resize(name.size() - 4);
+            }
+            if (const auto slash = name.find_last_of("/\\:"); slash != std::string::npos)
+            {
+                name = name.substr(slash + 1);
+            }
+            secondary_text("URL");
+            if (ImGui::IsWindowAppearing())
+            {
+                ImGui::SetKeyboardFocusHere();
+            }
+            input_text("##submodule_url", d.text_a, "https://github.com/owner/repo.git");
+            secondary_text("Path");
+            input_text("##submodule_path", d.text_b, name.empty() ? "path/in/this/repository" : name.c_str());
+            error_text(d.error);
+            if (buttons("Add Submodule", !d.text_a.empty(), false, true))
+            {
+                const std::string path = d.text_b.empty() ? name : d.text_b;
+                app.run_git_cli(*state, "Add submodule", {"submodule", "add", "--", d.text_a, path});
+                ImGui::CloseCurrentPopup();
             }
             break;
         }

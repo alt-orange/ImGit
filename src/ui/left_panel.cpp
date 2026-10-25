@@ -693,17 +693,35 @@ namespace imgit::ui
         }
 
         // The 30px sticky header: chevron (fa-fw), the section icon in text-disabled, the caps label and the count
-        // (both 12px semibold); text-secondary turning white on hover. Returns true when clicked.
+        // (both 12px semibold); text-secondary turning white on hover. With `add`, hovering swaps the count for a
+        // 24px green "+" button 10px from the edge, tooltip `add_tip` (`add` is set when it is clicked). Returns
+        // true when the header itself is clicked.
         bool section_header(Context& ctx, ImVec2 pos, float width, const char* label, const char* icon,
-                            std::size_t count, bool expanded)
+                            std::size_t count, bool expanded, bool* add = nullptr, const char* add_tip = nullptr)
         {
             const theme::Palette& p = theme::palette();
             const float h = px(HEADER_HEIGHT);
             ImDrawList* draw = ImGui::GetWindowDrawList();
             ImGui::SetCursorScreenPos(pos);
             ImGui::PushID(label);
+            ImGui::SetNextItemAllowOverlap();
             const bool clicked = ImGui::InvisibleButton("##section", ImVec2(width, h));
-            const bool hovered = ImGui::IsItemHovered();
+            // While the "+" is held it is the active item; the header must stay hovered for it to finish the click.
+            const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+                                 && ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + width, pos.y + h));
+            const ImVec2 add_min(pos.x + width - px(10.f) - px(24.f), pos.y + px(3.2f));
+            const ImVec2 add_max(add_min.x + px(24.f), add_min.y + px(24.f));
+            bool add_hovered = false;
+            if (add != nullptr && hovered)
+            {
+                ImGui::SetCursorScreenPos(add_min);
+                *add = ImGui::InvisibleButton("##add", ImVec2(add_max.x - add_min.x, add_max.y - add_min.y));
+                add_hovered = ImGui::IsItemHovered();
+                if (add_hovered && add_tip != nullptr)
+                {
+                    tooltip(add_tip);
+                }
+            }
             if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
             {
                 popup_menu(left_section_menu(*ctx.app, *ctx.state, label, SECTIONS));
@@ -721,7 +739,16 @@ namespace imgit::ui
             const float baseline = pos.y + px(19.6f);
             draw_text(draw, fonts().semibold, theme::FONT_SIZE_ROW, ImVec2(pos.x + px(45.f), baseline - ascent), color,
                       upper.c_str());
-            if (count != SIZE_MAX)
+            if (add != nullptr && hovered)
+            {
+                draw->AddRectFilled(add_min, add_max,
+                                    theme::u32(theme::with_alpha(p.green, add_hovered ? 0.3f : 0.2f)), px(2.f));
+                draw->AddRect(add_min, add_max, theme::u32(p.green), px(2.f), 0, 1.f);
+                draw_svg_path(draw, "plus", svg_path("plus"), 24.f, 24.f,
+                              ImVec2(add_min.x + px(4.f), add_min.y + px(4.f)),
+                              ImVec2(add_max.x - px(4.f), add_max.y - px(4.f)), theme::u32(p.text_normal));
+            }
+            else if (count != SIZE_MAX)
             {
                 const std::string count_text = std::to_string(count);
                 const ImVec2 count_size = text_size(fonts().semibold, theme::FONT_SIZE_ROW, count_text.c_str());
@@ -1097,13 +1124,22 @@ namespace imgit::ui
                 }
                 ImGui::PopID();
             }
+            // REMOTE and SUBMODULES have a "+": it adds a remote / a submodule.
+            const bool remotes = section.name == "Remote";
+            const bool submodules = section.name == "Submodules";
+            bool add = false;
             if (section_header(ctx, ImVec2(origin.x, y0), inner_w, section.name.c_str(), section.icon, section.count,
-                               expanded[i]))
+                               expanded[i], remotes || submodules ? &add : nullptr,
+                               remotes ? "Add Remote" : "Add Submodule"))
             {
                 if (!state.expanded_left_sections.erase(section.name))
                 {
                     state.expanded_left_sections.insert(section.name);
                 }
+            }
+            if (add)
+            {
+                app.dialog.open(remotes ? app::Dialog::Kind::ADD_REMOTE : app::Dialog::Kind::ADD_SUBMODULE);
             }
         }
         ImGui::PopStyleVar();
