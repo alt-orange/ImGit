@@ -103,6 +103,12 @@ File dialogs need the xdg desktop portal (`xdg-desktop-portal` and a backend suc
 `vcpkg-overlays/dbus` is the stock dbus port without its systemd default. See `PORTING.md` for what each platform
 implements.
 
+**CI and releases** — `.github/workflows/ci.yml` builds Windows and Linux on every push to `github-main` and every
+pull request (the `ci-windows` / `ci-linux` presets, vcpkg at the manifest's baseline, its binary cache in the Actions
+cache) and takes a screenshot under Xvfb as a smoke test. Publishing a GitHub release runs `release.yml`, which
+attaches `imgit-<tag>-windows-x64.zip`, `imgit-<tag>-linux-x64.tar.gz` and `SHA256SUMS.txt` to it; run it by hand
+with a tag to rebuild an existing release's packages.
+
 **Headless screenshots** — `imgit <repo> --screenshot out.bmp [--size WxH] [--select-row N]` renders a few frames and
 exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
 made this way.
