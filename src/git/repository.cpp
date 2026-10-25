@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 
 namespace imgit::git
 {

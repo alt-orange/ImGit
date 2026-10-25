@@ -9,6 +9,7 @@
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>

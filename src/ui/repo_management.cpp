@@ -6,6 +6,7 @@
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <future>

@@ -6,6 +6,7 @@
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <imgui.h>

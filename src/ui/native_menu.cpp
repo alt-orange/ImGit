@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cmath>
 #include <imgui_internal.h>
+#include <iterator>
+#include <utility>
 
 // Geometry and colours of Electron 41's menus on Windows 11, 100% scale:
 //   Segoe UI 9pt, rows 28px, 12px above the first and below the last row, separators 8 + 1 + 8,
