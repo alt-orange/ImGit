@@ -2238,18 +2238,20 @@ namespace imgit::ui
                     {
                         node_half = px(theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f;
                     }
-                    // From the zone to the node's near edge, whichever side of the graph the zone is on.
+                    // From the zone to the node's near edge, whichever side of the graph the zone is on; with
+                    // other zones between them it stops at the graph zone's edge instead of crossing their text.
                     const bool ref_left = z.ref_x < z.graph_x;
+                    const bool ref_adjacent = std::abs(zone_index(ZoneType::REF) - zone_index(ZoneType::GRAPH)) == 1;
                     node_edge += ref_left ? -node_half : node_half;
                     const float line_y = inner_top + px(head_row ? 10.f : 11.f);
-                    const float line_min_x = ref_left ? z.ref_x : node_edge;
-                    const float line_max_x = ref_left ? node_edge : z.ref_x;
+                    const float body_left = lanes_x(z);
+                    const float body_right = body_left + z.graph_w;
+                    const float line_min_x = ref_left ? (ref_adjacent ? z.ref_x : body_left) : node_edge;
+                    const float line_max_x = ref_left ? node_edge : (ref_adjacent ? z.ref_x : body_right);
                     ref_line = RefLine{ImVec2(line_min_x, line_y),
                                        ImVec2(line_max_x, line_y + px(head_row ? 2.f : 1.f)),
                                        theme::u32(theme::with_alpha(lane_color, head_row ? alpha : 0.25f * alpha))};
                     // Outside the graph zone now; over it after the gutters, which it crosses (.ref-line is z4).
-                    const float body_left = lanes_x(z);
-                    const float body_right = body_left + z.graph_w;
                     if (line_min_x < body_left)
                     {
                         rows_draw->AddRectFilled(ref_line->min,
@@ -2563,6 +2565,8 @@ namespace imgit::ui
             const float visible_top = ImGui::GetWindowPos().y;
             const float visible_bottom = visible_top + ImGui::GetWindowHeight();
             const float rows_right = origin.x + size.x - scrollbar;
+            // The label keeps clear of the ref pills: before the ref zone when that is the last one.
+            const float label_right = g_zones.zones.back().type == ZoneType::REF ? z.ref_x : rows_right;
             const float label_h = px(12.f);
             for (const TimelineMarker& marker : timeline)
             {
@@ -2579,7 +2583,7 @@ namespace imgit::ui
                 }
                 const float label_y = marker.row > 0 ? y : y + label_h / 2.f;
                 const ImVec2 label_size = text_size(fonts().regular, 10.f, marker.label.c_str());
-                const ImVec2 label_max(rows_right - px(8.f), std::round(label_y + label_h / 2.f));
+                const ImVec2 label_max(label_right - px(8.f), std::round(label_y + label_h / 2.f));
                 const ImVec2 label_min(std::round(label_max.x - label_size.x - px(10.f)), label_max.y - label_h);
                 rows_draw->AddRectFilled(label_min, label_max, theme::u32(p.panel_bg0), px(3.f));
                 draw_text(rows_draw, fonts().regular, 10.f,
