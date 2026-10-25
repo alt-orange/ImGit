@@ -13,6 +13,10 @@ on:
         description: The version in the package names, such as v0.2.0 (the short sha when empty)
         type: string
         default: ''
+      upx:
+        description: Compress the Windows and Linux executables with UPX (macOS has no working UPX target)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -170,6 +174,31 @@ jobs:
           path: smoke.bmp
           if-no-files-found: ignore
 
+      # A pinned UPX release, checked against its SHA-256, so every release packs with the same compressor
+      - name: Install UPX
+        if: inputs.upx && runner.os != 'macOS'
+        shell: bash
+        env:
+          UPX_VERSION: 5.0.2
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          if [ "$RUNNER_OS" = Windows ]; then
+            asset="upx-$UPX_VERSION-win64.zip"
+            sha256=1cff6d6ee01c404d4a1ae56003056bd4cfa28d0a5cea1d0950daaf872a4facc9
+          else
+            asset="upx-$UPX_VERSION-amd64_linux.tar.xz"
+            sha256=ddc2654063fe4dc80d95b420788494e4db078ebb01a650692d623b5a9906e61e
+          fi
+          curl -sSLf -o "$temp/$asset" "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$asset"
+          echo "$sha256  $temp/$asset" | sha256sum -c -
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z x -o"$temp" "$temp/$asset" > /dev/null
+            echo "$temp/upx-$UPX_VERSION-win64" >> "$GITHUB_PATH"
+          else
+            tar -xJf "$temp/$asset" -C "$temp"
+            echo "$temp/upx-$UPX_VERSION-amd64_linux" >> "$GITHUB_PATH"
+          fi
+
       - name: Package
         id: package
         shell: bash
@@ -180,6 +209,10 @@ jobs:
           mkdir -p "dist/$name/licenses"
           if [ "$RUNNER_OS" = Windows ]; then
             cp build/${{ matrix.preset }}/imgit.exe "dist/$name/"
+            if [ "${{ inputs.upx }}" = true ]; then
+              upx --best --lzma "dist/$name/imgit.exe"
+              upx -t "dist/$name/imgit.exe"
+            fi
           elif [ "$RUNNER_OS" = macOS ]; then
             cp -R build/${{ matrix.preset }}/ImGit.app "dist/$name/"
             strip -x "dist/$name/ImGit.app/Contents/MacOS/ImGit"
@@ -188,6 +221,14 @@ jobs:
           else
             cp build/${{ matrix.preset }}/imgit "dist/$name/"
             strip "dist/$name/imgit"
+            if [ "${{ inputs.upx }}" = true ]; then
+              upx --best --lzma "dist/$name/imgit"
+              upx -t "dist/$name/imgit"
+              # the smoke test above ran the unpacked build, so run the packed one too before it ships
+              timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+                "dist/$name/imgit" . --screenshot "$RUNNER_TEMP/smoke-upx.bmp"
+              test -s "$RUNNER_TEMP/smoke-upx.bmp"
+            fi
           fi
           cp README.md "dist/$name/"
           # assets/ is compiled in, so its notices ship next to the binary, with every statically linked library's

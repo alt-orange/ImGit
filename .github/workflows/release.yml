@@ -24,6 +24,7 @@ jobs:
     with:
       ref: ${{ github.event.release.tag_name || inputs.tag }}
       version: ${{ github.event.release.tag_name || inputs.tag }}
+      upx: true
 
   publish:
     name: Attach to the release
