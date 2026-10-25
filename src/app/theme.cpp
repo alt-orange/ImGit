@@ -110,14 +110,16 @@ namespace imgit::theme
         {
             p.blue = rgb(0x2776D0); // the toggles
 
+            // The chrome is as dark as the content: the title bar and sidebar one step darker than the window,
+            // the toolbar the window itself, and only inputs, popovers and dropdowns a step lighter.
             p.app_bg0 = rgb(0x151515);
-            p.toolbar_bg0 = rgb(0x1A1A18);
-            p.toolbar_bg1 = rgb(0x1F1F1F);
-            p.toolbar_bg2 = rgb(0x2B2B29);
+            p.toolbar_bg0 = rgb(0x101010); // the tabs bar
+            p.toolbar_bg1 = rgb(0x151515); // the toolbar
+            p.toolbar_bg2 = rgb(0x1F1F1F); // popovers
             p.panel_bg0 = rgb(0x101010); // the sidebar
-            p.panel_bg1 = rgb(0x1F1F1F); // the prompt box, popups
-            p.panel_bg2 = rgb(0x2B2B29); // dropdowns, segmented controls
-            p.input_bg = rgb(0x1F1F1F);
+            p.panel_bg1 = rgb(0x1A1A18); // the preferences sidebar, popups, toasts
+            p.panel_bg2 = rgb(0x1F1F1F); // dropdowns, segmented controls
+            p.input_bg = rgb(0x1F1F1F); // the prompt box
             p.panel_border = rgb(0x2F2F2F);
             p.section_border = rgb(0x2C2D2A);
             p.subtle_border = rgb(0x222222);
