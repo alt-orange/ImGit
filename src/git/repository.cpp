@@ -1516,6 +1516,27 @@ namespace imgit::git
             IMGIT_TRY(git_branch_create(local.out(), repo, name.c_str(), commit, 0), "could not create branch");
             IMGIT_TRY(git_branch_set_upstream(local, remote_name.c_str()), "could not set upstream");
         }
+        else
+        {
+            // A local branch behind the remote one is fast-forwarded, so HEAD lands on the commit that was clicked.
+            // The tree is checked out first: a conflict with the working directory then leaves the branch alone.
+            const git_oid* local_id = git_reference_target(local);
+            const git_oid* remote_id = git_reference_target(remote_ref);
+            if (local_id != nullptr && remote_id != nullptr && git_oid_cmp(local_id, remote_id) != 0
+                && git_graph_descendant_of(repo, remote_id, local_id) == 1)
+            {
+                ObjectHandle target;
+                IMGIT_TRY(git_object_lookup(target.out(), repo, remote_id, GIT_OBJECT_COMMIT),
+                          "could not resolve remote branch");
+                git_checkout_options opts = safe_checkout_options();
+                IMGIT_TRY(git_checkout_tree(repo, target, &opts), "checkout failed");
+                ReferenceHandle moved;
+                IMGIT_TRY(git_reference_set_target(moved.out(), local, remote_id, "checkout: fast-forward"),
+                          "could not move branch");
+                IMGIT_TRY(git_repository_set_head(repo, git_reference_name(moved)), "could not update HEAD");
+                return {};
+            }
+        }
         return checkout_branch(name);
     }
 

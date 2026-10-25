@@ -67,6 +67,16 @@ namespace imgit::ui
             }
 
             ImDrawList* draw = ImGui::GetWindowDrawList();
+            // Hovered, the button darkens to toolbar-bg0 (the whole item, or just its caret half on a split button).
+            if (hovered && enabled)
+            {
+                const float split_x = pos.x + px(BUTTON_WIDTH);
+                const bool on_caret = dropdown && ImGui::GetIO().MousePos.x >= split_x;
+                const float left = on_caret ? split_x : pos.x;
+                const float right = dropdown && !on_caret ? split_x : pos.x + width;
+                draw->AddRectFilled(ImVec2(left, pos.y + 1.f), ImVec2(right, pos.y + height + 1.f),
+                                    theme::u32(p.toolbar_bg0));
+            }
             // The glyph brightens from 90% white to text-selected on hover; disabled buttons fade to 20% / 30%.
             const float hover_t = smooth(id, hovered && enabled, 0.12f);
             const ImVec4 icon_color =
