@@ -2261,7 +2261,7 @@ namespace imgit::ui
                                  app.reopen_closed_tab();
                              },
                              !app.closed_tabs.empty());
-                     reopen.accelerator = "Ctrl+Shift+T";
+                     reopen.accelerator = shortcut_label("Ctrl+Shift+T");
                      return reopen;
                  }()},
         });
@@ -2478,9 +2478,9 @@ namespace imgit::ui
 
     MenuItems terminal_menu(app::Application& app)
     {
-        const auto with_accelerator = [](MenuItem entry, const char* accelerator)
+        const auto with_accelerator = [](MenuItem entry, std::string accelerator)
         {
-            entry.accelerator = accelerator;
+            entry.accelerator = std::move(accelerator);
             return entry;
         };
         return separated_menu({
@@ -2491,13 +2491,13 @@ namespace imgit::ui
                                               terminal_copy(app);
                                           },
                                           terminal_has_selection(app)),
-                                  "Ctrl+C"),
+                                  shortcut_label("Ctrl+C")),
                  with_accelerator(item("Paste",
                                        [&app]
                                        {
                                            terminal_paste(app);
                                        }),
-                                  "Ctrl+V"),
+                                  shortcut_label("Ctrl+V")),
                  item("Select All",
                       [&app]
                       {
@@ -2515,7 +2515,7 @@ namespace imgit::ui
                                        {
                                            terminal_clear(app);
                                        }),
-                                  "Ctrl+L")},
+                                  "Ctrl+L")}, // the shell's own key: the Control key on macOS too
                 {item("Minimize Terminal",
                       [&app]
                       {
@@ -2569,13 +2569,13 @@ namespace imgit::ui
                 {
                     // Ctrl chords only reach a field whose window has focus (the menu took it).
                     ImGui::SetWindowFocus();
-                    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                    io.AddKeyEvent(shortcut_modifier_event(), true);
                 }
                 io.AddKeyEvent(pending.key, true);
                 io.AddKeyEvent(pending.key, false);
                 if (pending.ctrl)
                 {
-                    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                    io.AddKeyEvent(shortcut_modifier_event(), false);
                 }
             }
             pending = {};
@@ -2618,7 +2618,7 @@ namespace imgit::ui
                     cut_keys();
                 },
                 has_selection);
-        cut.accelerator = "Ctrl+X";
+        cut.accelerator = shortcut_label("Ctrl+X");
         MenuItem copy = item(
                 "Copy",
                 [selected, id]
@@ -2627,7 +2627,7 @@ namespace imgit::ui
                     refocus_field(id);
                 },
                 has_selection);
-        copy.accelerator = "Ctrl+C";
+        copy.accelerator = shortcut_label("Ctrl+C");
         // Paste types the clipboard into the field (replacing the selection), like Ctrl+V.
         MenuItem paste = item(
                 "Paste",
@@ -2638,9 +2638,9 @@ namespace imgit::ui
                     pending = {id, ImGuiKey_None, false, text != nullptr ? text : ""};
                 },
                 clipboard != nullptr && *clipboard != '\0');
-        paste.accelerator = "Ctrl+V";
+        paste.accelerator = shortcut_label("Ctrl+V");
         MenuItem select_all = item("Select All", keys(ImGuiKey_A, true), !value.empty());
-        select_all.accelerator = "Ctrl+A";
+        select_all.accelerator = shortcut_label("Ctrl+A");
         popup_menu({std::move(cut), std::move(copy), std::move(paste), std::move(select_all)});
     }
 
@@ -2652,10 +2652,10 @@ namespace imgit::ui
             return [key]
             {
                 ImGuiIO& io = ImGui::GetIO();
-                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(shortcut_modifier_event(), true);
                 io.AddKeyEvent(key, true);
                 io.AddKeyEvent(key, false);
-                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                io.AddKeyEvent(shortcut_modifier_event(), false);
             };
         };
         if (read_only)

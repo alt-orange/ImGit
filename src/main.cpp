@@ -105,7 +105,8 @@ namespace
         {
             if (name == n)
             {
-                return key;
+                // The shortcut modifier as ImGui takes it from a backend (Super on macOS, which it reads as Ctrl).
+                return key == ImGuiMod_Ctrl ? imgit::ui::shortcut_modifier_event() : key;
             }
         }
         if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z')
@@ -632,6 +633,7 @@ int main(int argc, char** argv)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+    imgit::platform::apply_window_hints();
     const DevOptions options = parse_args(argc, argv);
     GLFWwindow* window = glfwCreateWindow(options.width, options.height, "ImGit Desktop", nullptr, nullptr);
     if (window == nullptr)
@@ -643,8 +645,7 @@ int main(int argc, char** argv)
     imgit::platform::init_window(window);
     glfwSwapInterval(1);
 
-    float dpi_scale = 1.f;
-    glfwGetWindowContentScale(window, &dpi_scale, nullptr);
+    const float dpi_scale = imgit::platform::layout_scale(window);
     imgit::ui::set_dpi_scale(dpi_scale);
     // The minimum window (950x675 outside its frame) leaves a 934x610 page; ImGit's client area also holds
     // the 26px menu bar.

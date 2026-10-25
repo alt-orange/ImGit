@@ -140,7 +140,7 @@ namespace imgit::ui
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::PushStyleColor(ImGuiCol_Text, p.text_selected);
-            ImGui::TextUnformatted(keys);
+            ImGui::TextUnformatted(shortcut_label(keys).c_str());
             ImGui::PopStyleColor();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(what);

@@ -1,4 +1,4 @@
-# Builds ImGit for Windows and Linux and uploads one package per platform as a workflow artifact.
+# Builds ImGit for Windows, Linux and macOS and uploads one package per platform as a workflow artifact.
 # Called by ci.yml (every push / pull request) and release.yml (attaches the packages to a release).
 name: Build
 
@@ -35,6 +35,11 @@ jobs:
             preset: ci-linux
             triplet: x64-linux
             platform: linux-x64
+          - name: macOS arm64
+            os: macos-15
+            preset: ci-macos
+            triplet: arm64-osx
+            platform: macos-arm64
     env:
       VCPKG_DISABLE_METRICS: 1
 
@@ -53,6 +58,11 @@ jobs:
             libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
             xvfb xauth libgl1-mesa-dri
           printf 'CC=gcc-14\nCXX=g++-14\n' >> "$GITHUB_ENV"
+
+      # Ninja for the presets; pkg-config and the autotools for the vcpkg ports that configure with them
+      - name: Install macOS packages
+        if: runner.os == 'macOS'
+        run: brew install ninja pkg-config autoconf automake libtool
 
       # cl, link, the Windows SDK and Ninja on PATH for clang-cl (and for vcpkg's own port builds)
       - name: Set up the MSVC environment
@@ -76,8 +86,8 @@ jobs:
           git clone --quiet --filter=blob:none https://github.com/microsoft/vcpkg "$temp/vcpkg"
           git -C "$temp/vcpkg" checkout --quiet "$baseline"
 
-      - name: Bootstrap vcpkg (Linux)
-        if: runner.os == 'Linux'
+      - name: Bootstrap vcpkg (Linux, macOS)
+        if: runner.os != 'Windows'
         run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
 
       - name: Bootstrap vcpkg (Windows)
@@ -92,9 +102,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_CACHE_DIR }}
-          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**') }}-${{ github.run_id }}
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**', 'vcpkg-triplets/**') }}-${{ github.run_id }}
           restore-keys: |
-            vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**') }}-
+            vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**', 'vcpkg-triplets/**') }}-
             vcpkg-${{ matrix.triplet }}-
 
       - name: Count cached ports
@@ -102,7 +112,7 @@ jobs:
         shell: bash
         run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
 
-      # pwsh on both runners: Git Bash would put its own `link` ahead of MSVC's.
+      # pwsh on every runner: Git Bash on Windows would put its own `link` ahead of MSVC's.
       - name: Configure (installs the vcpkg dependencies)
         shell: pwsh
         run: cmake --preset ${{ matrix.preset }}
@@ -142,11 +152,21 @@ jobs:
             build/${{ matrix.preset }}/imgit . --screenshot smoke.bmp
           test -s smoke.bmp
 
+      # The macOS runner has a window server and a software GL; whether the virtual GPU gives a 3.3 core context
+      # is not guaranteed, so a failure here is reported but does not fail the build.
+      - name: Smoke test on macOS (screenshot of this repository)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          perl -e 'alarm shift; exec @ARGV' 120 \
+            build/${{ matrix.preset }}/ImGit.app/Contents/MacOS/ImGit . --screenshot smoke.bmp
+          test -s smoke.bmp
+
       - name: Upload the smoke test screenshot
-        if: runner.os == 'Linux' && !cancelled()
+        if: runner.os != 'Windows' && !cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-screenshot
+          name: smoke-screenshot-${{ matrix.platform }}
           path: smoke.bmp
           if-no-files-found: ignore
 
@@ -160,6 +180,11 @@ jobs:
           mkdir -p "dist/$name/licenses"
           if [ "$RUNNER_OS" = Windows ]; then
             cp build/${{ matrix.preset }}/imgit.exe "dist/$name/"
+          elif [ "$RUNNER_OS" = macOS ]; then
+            cp -R build/${{ matrix.preset }}/ImGit.app "dist/$name/"
+            strip -x "dist/$name/ImGit.app/Contents/MacOS/ImGit"
+            # strip drops the linker's ad-hoc signature, without which Apple silicon refuses to run the binary
+            codesign --force --deep --sign - "dist/$name/ImGit.app"
           else
             cp build/${{ matrix.preset }}/imgit "dist/$name/"
             strip "dist/$name/imgit"
@@ -177,6 +202,10 @@ jobs:
           cd dist
           if [ "$RUNNER_OS" = Windows ]; then
             7z a -tzip "$name.zip" "$name" > /dev/null
+            echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
+          elif [ "$RUNNER_OS" = macOS ]; then
+            # ditto keeps the bundle's structure and attributes the way Finder's Compress does
+            ditto -c -k --keepParent "$name" "$name.zip"
             echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
           else
             tar -czf "$name.tar.gz" "$name"

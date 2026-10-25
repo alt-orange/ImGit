@@ -367,7 +367,8 @@ namespace imgit::ui
             {
                 ImGui::SetKeyboardFocusHere();
             }
-            input_text("##repo_search", filter, "Search repositories (Ctrl + Alt + F)", 0, max.x - min.x - px(25.f));
+            input_text("##repo_search", filter, shortcut_label("Search repositories (Ctrl + Alt + F)").c_str(), 0,
+                       max.x - min.x - px(25.f));
             const bool focused = ImGui::IsItemActive();
             ImGui::PopFont();
             ImGui::PopStyleColor(3);

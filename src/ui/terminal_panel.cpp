@@ -302,7 +302,10 @@ namespace imgit::ui
         void handle_keyboard(app::Application& app, app::TerminalSession& session)
         {
             ImGuiIO& io = ImGui::GetIO();
-            const bool ctrl = io.KeyCtrl;
+            // ImGui swaps Ctrl and Super on macOS: io.KeyCtrl is the shortcut modifier (Cmd there), and the Control
+            // key itself, which the shell's control sequences need, reads as Super.
+            const bool cmd = io.KeyCtrl;
+            const bool ctrl = io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl;
             const bool shift = io.KeyShift;
             const bool alt = io.KeyAlt;
             std::string out;
@@ -315,7 +318,7 @@ namespace imgit::ui
                 }
                 // The app's own chords (command palette, zoom, tabs, terminal tabs) are not typed.
                 const bool app_chord =
-                        ctrl
+                        cmd
                         && (key == ImGuiKey_P || key == ImGuiKey_Tab || key == ImGuiKey_GraveAccent
                             || key == ImGuiKey_PageUp || key == ImGuiKey_PageDown || key == ImGuiKey_Equal
                             || key == ImGuiKey_Minus || (!shift && key == ImGuiKey_0)
@@ -326,14 +329,14 @@ namespace imgit::ui
                 {
                     continue;
                 }
-                // Ctrl+C copies a selection (else interrupts); Ctrl+V pastes.
-                if (ctrl && !shift && key == ImGuiKey_C && session.has_selection)
+                // Ctrl+C (Cmd+C) copies a selection (Ctrl+C else interrupts); Ctrl+V (Cmd+V) pastes.
+                if (cmd && !shift && key == ImGuiKey_C && session.has_selection)
                 {
                     app.copy_to_clipboard(selection_text(session));
                     session.has_selection = false;
                     continue;
                 }
-                if (ctrl && key == ImGuiKey_V)
+                if (cmd && key == ImGuiKey_V)
                 {
                     if (const char* text = ImGui::GetClipboardText(); text != nullptr)
                     {

@@ -1409,7 +1409,7 @@ namespace imgit::app
                 [](const char* label, const char* accelerator, std::function<void()> click, bool enabled = true)
         {
             ui::MenuItem result = ui::menu_item(label, std::move(click), enabled);
-            result.accelerator = accelerator;
+            result.accelerator = ui::shortcut_label(accelerator);
             return result;
         };
         const auto checkbox = [&](const char* label, const char* accelerator, std::function<void()> click)
@@ -1432,10 +1432,10 @@ namespace imgit::app
             return [key]
             {
                 ImGuiIO& io = ImGui::GetIO();
-                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(ui::shortcut_modifier_event(), true);
                 io.AddKeyEvent(key, true);
                 io.AddKeyEvent(key, false);
-                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                io.AddKeyEvent(ui::shortcut_modifier_event(), false);
             };
         };
         switch (index)

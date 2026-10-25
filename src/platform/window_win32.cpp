@@ -121,6 +121,10 @@ namespace imgit::platform
         }
     } // namespace
 
+    void apply_window_hints()
+    {
+    }
+
     void init_window(GLFWwindow* window)
     {
         g_window = window;
@@ -136,6 +140,13 @@ namespace imgit::platform
     GLFWwindow* main_window()
     {
         return g_window;
+    }
+
+    float layout_scale(GLFWwindow* window)
+    {
+        float scale = 1.f;
+        glfwGetWindowContentScale(window, &scale, nullptr);
+        return scale > 0.f ? scale : 1.f;
     }
 
     void set_cursor(GLFWwindow* window, CursorShape shape)

@@ -510,9 +510,9 @@ namespace imgit::ui
             }
             for (const auto& [icon, label] : {std::pair{"fas:arrow-up", "Move Up"}, {"fas:arrow-down", "Move Down"}})
             {
-                const char* ctrl = "Ctrl + ";
-                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, ctrl);
-                x += text_w(fonts().semibold, 12.f, ctrl);
+                const std::string ctrl = shortcut_label("Ctrl + ");
+                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, ctrl.c_str());
+                x += text_w(fonts().semibold, 12.f, ctrl.c_str());
                 draw_fa_icon(draw, icon, ImVec2(x + px(5.25f), line2 + px(8.5f)), px(12.f), normal, 0.f);
                 x += px(10.5f) + px(5.f);
                 line_text(draw, fonts().regular, 12.f, x, line2, line_h, secondary, label);

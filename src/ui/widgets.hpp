@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <imgui.h>
 #include <string>
+#include <string_view>
 
 namespace imgit::ui
 {
@@ -32,6 +33,13 @@ namespace imgit::ui
     void set_dpi_scale(float scale) noexcept;
     [[nodiscard]] float dpi_scale() noexcept;
     [[nodiscard]] float px(float logical) noexcept;
+
+    // Keyboard shortcuts are written for Windows ("Ctrl+Shift+T", "Ctrl + Alt + F"); ImGui reads the same chords
+    // as Cmd and Option on macOS, so there the words Ctrl and Alt in `label` become Cmd and Option.
+    [[nodiscard]] std::string shortcut_label(std::string_view label);
+    // The modifier to feed io.AddKeyEvent() for a synthesized shortcut chord: ImGui swaps Ctrl and Super as a
+    // backend's events arrive on macOS, so the event that reads as Ctrl (Cmd) there is Super.
+    [[nodiscard]] ImGuiKey shortcut_modifier_event() noexcept;
 
     // OS cursors ImGui has no shape for (main.cpp shows them): during a drag the system drag-and-drop cursors,
     // MOVE over a drop target and NO_DROP elsewhere; over a resize handle Chromium's col-resize / row-resize. Set

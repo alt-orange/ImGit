@@ -1,4 +1,4 @@
-# Publishing a GitHub release builds ImGit for Windows and Linux and attaches the packages and their
+# Publishing a GitHub release builds ImGit for Windows, Linux and macOS and attaches the packages and their
 # SHA256SUMS.txt to the release. Run it by hand (Actions → Release → Run workflow) to rebuild the
 # packages of an existing release; files with the same names are replaced.
 name: Release
