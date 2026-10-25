@@ -110,6 +110,12 @@ real build. What the port consists of:
 - **Window.** `window_mac.mm` gives the NSWindow the dark appearance (`NSAppearanceNameDarkAqua`), so the title bar
   matches the dark UI whatever the system setting. GLFW ignores `glfwSetWindowIcon` on macOS; the bundle's icon is
   used instead.
+- **Title bar.** The system title bar is hidden (`titlebarAppearsTransparent`, `NSWindowStyleMaskFullSizeContentView`,
+  an empty compact-style toolbar for the traffic lights' inset, as Electron's `hiddenInset`), so the tabs bar is
+  the top of the window with the traffic lights over its left end; `platform::title_bar_inset()` (56 px) keeps the
+  folder icon and the tabs clear of them. A press on the bar's empty part calls `platform::drag_window()`
+  (`performWindowDragWithEvent:` with the current event) and a double-click `title_bar_double_click()` (zoom or
+  minimise per `AppleActionOnDoubleClick`); ImGui is handed the release itself, since AppKit keeps it.
 - **Menu bar.** `platform/app_menu.hpp`: on macOS (`app_menu_mac.mm`) the File / Edit / View / Help menus are
   NSMenus between the application menu and the Window menu GLFW creates, and the app draws no bar of its own
   (`has_native_menu_bar()`; the prompt bars and the minimum window height follow the viewport's work area).

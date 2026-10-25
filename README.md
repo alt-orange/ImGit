@@ -113,8 +113,9 @@ cmake --build --preset macos-release
 build/macos-release/ImGit.app/Contents/MacOS/ImGit path/to/repository   # or open build/macos-release/ImGit.app
 ```
 
-The build is an app bundle, `ImGit.app`, with the Dock icon (`res/imgit.icns`), a dark title bar and the File /
-Edit / View / Help menus in the system menu bar. vcpkg picks
+The build is an app bundle, `ImGit.app`, with the Dock icon (`res/imgit.icns`), the traffic lights in the tabs bar
+(no separate title bar; drag the bar's empty part to move the window) and the File / Edit / View / Help menus in
+the system menu bar. vcpkg picks
 `arm64-osx` on Apple silicon and `x64-osx` on Intel; `vcpkg-triplets/` holds both with the deployment target
 (macOS 12, the same as `CMAKE_OSX_DEPLOYMENT_TARGET` in `CMakeLists.txt`). Shortcuts use `Cmd` where the labels
 say `Ctrl`, and `Option` for `Alt`; in the terminal panel the Control key still sends control sequences. A

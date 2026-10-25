@@ -2,6 +2,7 @@
 #include "app/theme.hpp"
 #include "git/types.hpp"
 #include "platform/shell.hpp"
+#include "platform/window.hpp"
 #include "ui/avatars.hpp"
 #include "ui/popover.hpp"
 #include "ui/panels.hpp"
@@ -158,13 +159,15 @@ namespace imgit::ui
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), theme::u32(p.toolbar_bg0));
 
-        // Left: open-repo folder, repository tabs, +
-        if (bar_icon("##open_repo", Icon::FOLDER, ImVec2(origin.x + px(21.f), mid), 14.f, p.text_secondary,
+        // Left: the window's own controls where the bar is the title bar (macOS), open-repo folder, repository
+        // tabs, +
+        const float left = origin.x + px(platform::title_bar_inset());
+        if (bar_icon("##open_repo", Icon::FOLDER, ImVec2(left + px(21.f), mid), 14.f, p.text_secondary,
                      "Repository Management", app.repo_management_open))
         {
             app.repo_management_open = !app.repo_management_open;
         }
-        float x = origin.x + px(41.f);
+        float x = left + px(41.f);
         int close_request = -1;
         const int tab_count = static_cast<int>(app.tabs.size());
         for (int i = 0; i < tab_count; ++i)
@@ -264,6 +267,22 @@ namespace imgit::ui
             open_popover("##tabs_list");
         }
         draw_tabs_list_popover(app, ImVec2(right - px(90.5f) + px(14.f), origin.y + px(31.f)));
+
+        // Where the bar is the title bar (macOS), a press on its empty part moves the window and a double-click
+        // does what one on a title bar does; the release then goes to the system, so ImGui is told of it here.
+        if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive()
+            && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
+        {
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                platform::title_bar_double_click(platform::main_window());
+            }
+            else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && platform::title_bar_inset() > 0.f)
+            {
+                platform::drag_window(platform::main_window());
+                ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            }
+        }
         ImGui::EndChild();
 
         if (close_request >= 0)
