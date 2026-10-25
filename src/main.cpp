@@ -849,6 +849,17 @@ int main(int argc, char** argv)
                 ImGui_ImplGlfw_NewFrame();
             }
             ImGui::NewFrame();
+            // A font given to ImDrawList::AddText (ui::draw_text: the bold and semibold labels) bakes its glyphs at
+            // its own CurrentRasterizerDensity, which ImGui keeps current only for the font PushFont() made
+            // current; on a Retina framebuffer the others would bake at 1x and be drawn pixel-doubled. Every font
+            // follows the framebuffer's scale.
+            if (io.DisplayFramebufferScale.x > 0.f)
+            {
+                for (ImFont* font : io.Fonts->Fonts)
+                {
+                    font->CurrentRasterizerDensity = io.DisplayFramebufferScale.x;
+                }
+            }
 
             if (!options.screenshot.empty() && frame == 2)
             {

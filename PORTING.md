@@ -133,7 +133,10 @@ real build. What the port consists of:
   grey coverage per texel) came out smeared a third of a pixel to each side with red and cyan fringes, most
   visibly on bold text; it is now drawn like any other texture (this also applies to Linux). The FreeType
   coverage gamma follows the framebuffer density (`freetype_gamma()` in `main.cpp`: 3.0 at 1x, 1.5 on Retina,
-  `IMGIT_FREETYPE_GAMMA` to try others), since the 1x boost makes bold stems soft at 2x.
+  `IMGIT_FREETYPE_GAMMA` to try others), since the 1x boost makes bold stems soft at 2x. ImGui 1.92 bakes a font
+  at the framebuffer's density only while it is the current font; the fonts `ui::draw_text` hands to
+  `ImDrawList::AddText` (bold, semibold) kept density 1 and came out pixel-doubled on Retina, so `main.cpp` sets
+  every font's `CurrentRasterizerDensity` to the framebuffer scale each frame.
 - **System.** `system_font_file` tries San Francisco (`SFNS.ttf`), Helvetica Neue and Helvetica for the UI face,
   Menlo, SF Mono and Monaco for the monospace one, and Arial (Supplemental) for the tooltips. The shell is `$SHELL
   -l` (zsh), *Open External Terminal* is `open -a Terminal`, *Show in Folder* is `open -R`. Settings live in
