@@ -76,7 +76,12 @@ namespace imgit::platform
             GetIconInfo(cursor, &info);
             const int size = GetSystemMetrics(SM_CXCURSOR);
             BITMAPINFO bitmap_info{};
-            bitmap_info.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB};
+            bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bitmap_info.bmiHeader.biWidth = size;
+            bitmap_info.bmiHeader.biHeight = -size; // top-down
+            bitmap_info.bmiHeader.biPlanes = 1;
+            bitmap_info.bmiHeader.biBitCount = 32;
+            bitmap_info.bmiHeader.biCompression = BI_RGB;
             HDC screen = GetDC(nullptr);
             HDC dc = CreateCompatibleDC(screen);
             const unsigned char* pixels[2] = {};

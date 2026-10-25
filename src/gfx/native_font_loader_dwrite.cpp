@@ -59,7 +59,17 @@ namespace imgit::gfx
             {
                 return true;
             }
-            if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5),
+            // __uuidof is the COM way to name the interface (the DWrite headers export no IID_ constant for it);
+            // clang-cl's -Wpedantic calls it an extension.
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#endif
+            const IID& factory_iid = __uuidof(IDWriteFactory5);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+            if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, factory_iid,
                                            reinterpret_cast<IUnknown**>(&g_factory))))
             {
                 return false;
