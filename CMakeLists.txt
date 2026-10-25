@@ -118,11 +118,12 @@ target_include_directories(imgit PRIVATE src ${Stb_INCLUDE_DIR})
 target_link_libraries(imgit PRIVATE imgui::imgui glfw libgit2::libgit2package cpr::cpr nfd::nfd OpenGL::GL)
 
 # Every warning the compilers offer short of the style-level ones, and all of them errors: /W4 /WX on MSVC and
-# clang-cl, -Wall -Wextra -Wpedantic -Werror elsewhere (clang-cl takes those too, for what /W4 leaves out).
+# clang-cl, -Wall -Wextra -Wpedantic -Werror elsewhere. clang-cl takes the GNU flags too, for what /W4 leaves
+# out, through /clang: (a bare -Wall there is MSVC's /Wall, which clang-cl reads as -Weverything).
 if(MSVC)
     target_compile_options(imgit PRIVATE /utf-8 /EHsc /W4 /WX)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(imgit PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(imgit PRIVATE /clang:-Wall /clang:-Wextra /clang:-Wpedantic)
     endif()
     # a GUI subsystem in Release keeps the console window away; Debug keeps it for logs
     set_target_properties(imgit PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
