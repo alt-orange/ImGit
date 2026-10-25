@@ -777,10 +777,10 @@ namespace imgit::ui
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::BeginChild("##left_panel", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        // panel__bg0 with a 1px panel border (8% white over the app background) on the right.
+        // panel__bg0 with a 1px panel border (composited over the app background) on the right.
         draw->AddRectFilled(origin, ImVec2(origin.x + size.x - 1.f, origin.y + size.y), theme::u32(p.panel_bg0));
         draw->AddRectFilled(ImVec2(origin.x + size.x - 1.f, origin.y), ImVec2(origin.x + size.x, origin.y + size.y),
-                            theme::u32(theme::mix(p.white, p.app_bg0, p.panel_border.w)));
+                            theme::u32(theme::mix(p.panel_border, p.app_bg0, p.panel_border.w)));
         const float inner_w = size.x - 1.f;
 
         if (!open)
