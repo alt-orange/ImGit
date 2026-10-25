@@ -1439,6 +1439,10 @@ namespace imgit::app
             ImGui::SetCursorScreenPos(ImVec2(center_x, origin.y + upper_h));
             ui::draw_terminal_panel(*this, &state, ImVec2(center_width, terminal_h));
         }
+        if (!rebasing && !state.diff_target)
+        {
+            ui::draw_slide_panel(*this, state, ImVec2(center_x, origin.y), full_h);
+        }
 
         // Sizes follow the mouse while a handle is held and are saved when it is let go.
         bool resized = false;

@@ -43,8 +43,6 @@ namespace imgit::ui
                 return "Reset Branch";
             case app::Dialog::Kind::ADD_REMOTE:
                 return "Add Remote";
-            case app::Dialog::Kind::ADD_SUBMODULE:
-                return "Add Submodule";
             case app::Dialog::Kind::EDIT_REMOTE:
                 return "Edit Remote";
             case app::Dialog::Kind::REWORD_COMMIT:
@@ -1021,6 +1019,143 @@ namespace imgit::ui
         }
     } // namespace
 
+    // The Add Submodule form in a 400px panel sliding out of the left panel over the graph (.panel-slide, 0.25s):
+    // the section icon and the 18px title with a close cross in a 50px header, then the Remote URL and Name/Path
+    // fields under their labels and the Add Submodule button, 20px in.
+    void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height)
+    {
+        app::Dialog& d = app.dialog;
+        const bool open = d.kind == app::Dialog::Kind::ADD_SUBMODULE
+                          && (d.workdir.empty() ? app.active() == &state : d.workdir == state.repo.workdir());
+        const float t = smooth("##slide_panel", open, 0.25f);
+        if (t <= 0.f)
+        {
+            return;
+        }
+        // The form keeps its last values for the way out, once the dialog is gone.
+        static std::string url;
+        static std::string path;
+        if (open)
+        {
+            url = d.text_a;
+            path = d.text_b;
+        }
+        const theme::Palette& p = theme::palette();
+        const float width = px(400.f);
+        const float shadow = px(10.f);
+        const float visible = std::round(width * t);
+        // The child holds the panel's shown part and its shadow over the graph.
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::BeginChild("##slide_panel", ImVec2(visible + shadow, height), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const float x = origin.x + visible - width; // slides in from under the left panel
+        const ImVec2 min(x, origin.y);
+        const ImVec2 max(x + width, origin.y + height);
+        draw->AddRectFilled(min, max, theme::u32(p.panel_bg1));
+        // The shadow on its right edge (box-shadow 0 0 10px rgba(0,0,0,.5)), over the graph.
+        for (float i = 0.f; i < shadow; i += 1.f)
+        {
+            const float alpha = 0.15f * (1.f - i / shadow);
+            draw->AddRectFilled(ImVec2(max.x + i, min.y), ImVec2(max.x + i + 1.f, max.y),
+                                theme::u32(ImVec4(0.f, 0.f, 0.f, alpha)));
+        }
+        draw->AddRectFilled(ImVec2(max.x - 1.f, min.y), max, theme::u32(p.panel_border));
+
+        const float pad = px(20.f);
+        // Header
+        draw_fa_icon(draw, "far:layer-group", ImVec2(x + pad + px(8.f), origin.y + px(25.f)), px(16.f),
+                     theme::u32(p.text_secondary));
+        {
+            const float text_h = text_size(fonts().regular, 18.f, "A").y;
+            draw_text(draw, fonts().regular, 18.f, ImVec2(x + pad + px(27.f), origin.y + px(25.f) - text_h / 2.f),
+                      theme::u32(p.text_selected), "Add Submodule");
+        }
+        bool close = false;
+        {
+            const ImVec2 cmin(max.x - pad - px(16.f), origin.y + px(17.f));
+            ImGui::SetCursorScreenPos(cmin);
+            if (ImGui::InvisibleButton("##slide_close", ImVec2(px(16.f), px(16.f))))
+            {
+                close = true;
+            }
+            draw_fa_icon(draw, "fas:times", ImVec2(cmin.x + px(8.f), cmin.y + px(8.f)), px(14.f),
+                         theme::u32(ImGui::IsItemHovered() ? p.text_selected : p.text_normal));
+        }
+
+        // The path defaults to the repository's name, as `git submodule add` picks it.
+        std::string name = url;
+        while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
+        {
+            name.pop_back();
+        }
+        if (name.ends_with(".git"))
+        {
+            name.resize(name.size() - 4);
+        }
+        if (const auto slash = name.find_last_of("/\\:"); slash != std::string::npos)
+        {
+            name = name.substr(slash + 1);
+        }
+
+        const float field_w = width - 2.f * pad;
+        const auto label = [&](const char* text, float y)
+        {
+            draw_text(draw, fonts().regular, 14.f, ImVec2(x + pad, origin.y + y), theme::u32(p.text_normal), text);
+        };
+        const auto field = [&](const char* id, std::string& value, const char* hint, float y, bool focus)
+        {
+            ImGui::SetCursorScreenPos(ImVec2(x + pad, origin.y + y));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(px(8.f), (px(32.f) - text_size(fonts().regular, 14.f, "A").y) / 2.f));
+            push_font(fonts().regular, 14.f);
+            if (focus)
+            {
+                ImGui::SetKeyboardFocusHere();
+            }
+            const bool entered = input_text(id, value, hint, ImGuiInputTextFlags_EnterReturnsTrue, field_w);
+            ImGui::PopFont();
+            ImGui::PopStyleVar();
+            return entered;
+        };
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, p.input_bg);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, p.input_bg);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, p.input_bg);
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, p.text_disabled);
+        const bool focus = open && d.just_opened;
+        if (open)
+        {
+            d.just_opened = false;
+        }
+        label("Remote URL", 58.f);
+        bool submit = field("##submodule_url", url, "https://github.com/owner/repo.git", 82.f, focus);
+        label("Name/Path", 132.f);
+        submit |= field("##submodule_path", path, name.empty() ? "path/in/this/repository" : name.c_str(), 156.f,
+                        false);
+        ImGui::PopStyleColor(4);
+        ImGui::SetCursorScreenPos(ImVec2(x + pad, origin.y + px(206.f)));
+        submit |= success_button("Add Submodule", ImVec2(px(112.f), px(28.f)), !url.empty());
+        if (open)
+        {
+            d.text_a = url;
+            d.text_b = path;
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape))
+            {
+                close = true;
+            }
+            if (submit && !url.empty())
+            {
+                app.run_git_cli(state, "Add submodule", {"submodule", "add", "--", url, path.empty() ? name : path});
+                close = true;
+            }
+            if (close)
+            {
+                d.close();
+            }
+        }
+        ImGui::EndChild();
+    }
+
     void draw_dialogs(app::Application& app)
     {
         if (app.credential_prompt)
@@ -1060,6 +1195,11 @@ namespace imgit::ui
         if (state == nullptr && (needs_repo || (d.kind == app::Dialog::Kind::CONFIRM && !d.workdir.empty())))
         {
             d.close();
+            return;
+        }
+        // Adding a submodule is the panel sliding out of the left panel (draw_slide_panel).
+        if (d.kind == app::Dialog::Kind::ADD_SUBMODULE)
+        {
             return;
         }
         // Pushing a branch without an upstream asks for the remote branch in the prompt bar.
@@ -1697,39 +1837,6 @@ namespace imgit::ui
                     app.run_git_cli(*state, "Fetch", {"fetch", name});
                     ImGui::CloseCurrentPopup();
                 }
-            }
-            break;
-        }
-        case app::Dialog::Kind::ADD_SUBMODULE:
-        {
-            // The path defaults to the repository's name, as `git submodule add` picks it.
-            std::string name = d.text_a;
-            while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
-            {
-                name.pop_back();
-            }
-            if (name.ends_with(".git"))
-            {
-                name.resize(name.size() - 4);
-            }
-            if (const auto slash = name.find_last_of("/\\:"); slash != std::string::npos)
-            {
-                name = name.substr(slash + 1);
-            }
-            secondary_text("URL");
-            if (ImGui::IsWindowAppearing())
-            {
-                ImGui::SetKeyboardFocusHere();
-            }
-            input_text("##submodule_url", d.text_a, "https://github.com/owner/repo.git");
-            secondary_text("Path");
-            input_text("##submodule_path", d.text_b, name.empty() ? "path/in/this/repository" : name.c_str());
-            error_text(d.error);
-            if (buttons("Add Submodule", !d.text_a.empty(), false, true))
-            {
-                const std::string path = d.text_b.empty() ? name : d.text_b;
-                app.run_git_cli(*state, "Add submodule", {"submodule", "add", "--", d.text_a, path});
-                ImGui::CloseCurrentPopup();
             }
             break;
         }
