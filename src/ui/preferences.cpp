@@ -2584,7 +2584,7 @@ namespace imgit::ui
                     if (row_checkbox(r, "##push_after_commit", s.push_after_commit))
                     {
                         s.push_after_commit = !s.push_after_commit;
-                        for (auto& tab : app.tabs)
+                        for (app::RepoState* tab : app.repo_states())
                         {
                             tab->push_after_commit = s.push_after_commit;
                         }

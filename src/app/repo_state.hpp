@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -126,6 +127,8 @@ namespace imgit::app
         RepoState& operator=(const RepoState&) = delete;
 
         git::Repository repo;
+        // The repository this one is a submodule of, while the submodule is open in its tab.
+        std::unique_ptr<RepoState> parent;
         git::History history;
         git::WorkDirStatus status;
         graph::Layout layout;
@@ -232,6 +235,9 @@ namespace imgit::app
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
             std::optional<std::uint64_t> refs_signature{}; // Repository::refs_signature; none: it could not be read
+            // Read by the periodic poll only (a refresh loads them with the history): a checkout inside a submodule
+            // moves no ref here, yet changes whether it is in sync.
+            std::optional<std::vector<git::Submodule>> submodules{};
         };
 
         void refresh(); // history + status + layout
@@ -271,6 +277,11 @@ namespace imgit::app
             return async.has_value();
         }
         [[nodiscard]] const git::Ref* head_ref() const;
+        // The repository the tab was opened on: this one, or the top of the submodules opened in it.
+        [[nodiscard]] const RepoState& root() const noexcept
+        {
+            return parent != nullptr ? parent->root() : *this;
+        }
         [[nodiscard]] std::vector<const git::Ref*> refs_at(const git::Sha& sha) const;
         [[nodiscard]] const git::Ref* find_ref(const std::string& full_name) const;
         // The commits on HEAD's first-parent chain above `base_sha` (oldest first) for a rebase plan.

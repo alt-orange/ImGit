@@ -359,6 +359,7 @@ namespace imgit::ui
             int depth = 0;
             const char* icon = nullptr;
             bool checked_out = false;
+            bool synced = false; // a submodule at the commit its repository records: a green check
             bool hidden = false;
             bool selected = false;
             bool can_hide = true;
@@ -439,6 +440,10 @@ namespace imgit::ui
             if (options.checked_out)
             {
                 draw_fa_icon(draw, "fas:check-square", ImVec2(slot, mid), px(14.f), color(p.green));
+            }
+            else if (options.synced)
+            {
+                draw_fa_icon(draw, "fas:check", ImVec2(slot, mid), px(11.f), color(p.green));
             }
             else if (options.hidden)
             {
@@ -1087,8 +1092,26 @@ namespace imgit::ui
                                 {
                                     for (const git::Submodule& submodule : state.history.submodules)
                                     {
-                                        simple_row(ctx, submodule.path.c_str(), "far:layer-group", submodule.name,
-                                                   submodule.path);
+                                        // Double-click: the Edit Submodule panel sliding out over the graph.
+                                        const std::string key = "submodule:" + submodule.path;
+                                        RowOptions options;
+                                        options.icon = "far:layer-group";
+                                        options.can_hide = false;
+                                        options.synced = submodule.in_sync();
+                                        options.selected = state.left_selected == key;
+                                        options.tooltip = "Path: /" + submodule.path + "\nRemote URL: " + submodule.url;
+                                        const RowResult row =
+                                                panel_row(ctx, key.c_str(), RowLabel{submodule.name, {}}, options);
+                                        if (row.clicked)
+                                        {
+                                            state.left_selected = key;
+                                        }
+                                        if (row.double_clicked)
+                                        {
+                                            app.dialog.open(app::Dialog::Kind::EDIT_SUBMODULE);
+                                            app.dialog.text_a = submodule.url;
+                                            app.dialog.text_b = submodule.path;
+                                        }
                                     }
                                 }});
         }

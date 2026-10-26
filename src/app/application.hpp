@@ -75,6 +75,7 @@ namespace imgit::app
             PUSH_NEW_BRANCH,
             ADD_REMOTE,
             ADD_SUBMODULE,
+            EDIT_SUBMODULE, // text_a: the submodule's URL, text_b: its path
             EDIT_REMOTE,
             REWORD_COMMIT,
             SQUASH_COMMITS,
@@ -269,11 +270,21 @@ namespace imgit::app
         float base_dpi_scale = 1.f;
 
         [[nodiscard]] RepoState* active() noexcept;
+        // Every repository state: each tab's, and the repositories an open submodule waits in front of.
+        [[nodiscard]] std::vector<RepoState*> repo_states() const;
+        // The state of the repository at `workdir`, shown or behind an open submodule; nullptr when none.
+        [[nodiscard]] RepoState* find_repo_state(const std::string& workdir) const;
         void open_repository(const std::string& path);
         // Open Repo: a native folder picker starting at the last opened repository; a folder that is not
         // a repository gets an "Open Failed" toast.
         void browse_for_repository();
         void close_tab(int index);
+        // Opens the submodule at `path` (relative to the tab's working directory) in the tab of `state`, which
+        // waits behind it until close_submodule.
+        void open_submodule(RepoState& state, const std::string& path);
+        // Back from the submodule shown in `state`'s tab to the repository it belongs to (not while it runs a git
+        // command).
+        void close_submodule(RepoState& state);
         // Moves the repository tab `from` to `to` (a drag along the tabs bar), keeping the active tab active.
         void move_tab(int from, int to);
         void reopen_closed_tab();
@@ -358,5 +369,7 @@ namespace imgit::app
         void draw_repo_tab(RepoState& state, ImVec2 size);
 
         std::string m_pending_profile;
+        // Submodules closed this frame (close_submodule), released at the start of the next one.
+        std::vector<std::unique_ptr<RepoState>> m_closed_submodules;
     };
 } // namespace imgit::app

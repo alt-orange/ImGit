@@ -15,7 +15,8 @@ namespace imgit::app
 
         // Status plus each file's line counts. Slow on a big tree or a network share (WSL's /mnt/c takes seconds),
         // so the periodic poll runs it off the UI thread.
-        RepoState::StatusSnapshot read_status(const git::Repository& repo)
+        // `with_submodules`: also the submodules (each one opened to read its HEAD, as the status read does).
+        RepoState::StatusSnapshot read_status(const git::Repository& repo, bool with_submodules = false)
         {
             RepoState::StatusSnapshot snapshot{repo.load_status(), repo.state()};
             if (snapshot.status && snapshot.status->count() <= MAX_FILES_WITH_STATS)
@@ -26,6 +27,10 @@ namespace imgit::app
             if (auto signature = repo.refs_signature())
             {
                 snapshot.refs_signature = std::move(*signature);
+            }
+            if (with_submodules)
+            {
+                snapshot.submodules = repo.submodules();
             }
             return snapshot;
         }
@@ -178,7 +183,7 @@ namespace imgit::app
                                       {
                                           return StatusSnapshot{std::unexpected(worker.error())};
                                       }
-                                      return read_status(*worker);
+                                      return read_status(*worker, true);
                                   });
     }
 
@@ -196,6 +201,12 @@ namespace imgit::app
         {
             rebuild(std::move(snapshot)); // no second status read: this one already predates the history load
             return;
+        }
+        // A submodule moved (a checkout or commit inside it), was added or removed: only the list is stale, not the
+        // rows.
+        if (snapshot.submodules && *snapshot.submodules != history.submodules)
+        {
+            history.submodules = std::move(*snapshot.submodules);
         }
         const bool changed = !same_changes(snapshot.status->staged, status.staged)
                              || !same_changes(snapshot.status->unstaged, status.unstaged)

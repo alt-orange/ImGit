@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace imgit::ui
 {
@@ -71,6 +72,10 @@ namespace imgit::ui
     // transition (the toasts' slides, a progress bar fed from another thread).
     void keep_animating() noexcept;
 
+    // `text` broken into lines `width` device px wide at logical `size`: at its newlines (an empty line for each
+    // blank one), then between words; a word wider than the line is cut between two characters. The views point
+    // into `text`.
+    [[nodiscard]] std::vector<std::string_view> wrap_text(ImFont* font, float size, std::string_view text, float width);
     // Text drawn with `font` at logical `size`, clipped with an ellipsis to `max_width` device px.
     // Returns the width used.
     float draw_text_ellipsis(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, float max_width, ImU32 color,

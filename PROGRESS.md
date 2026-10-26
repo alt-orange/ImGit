@@ -46,7 +46,8 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Create branch / add remote / create tag | ✅ | From the context menus |
 | Double-click to checkout, right-click menus | ✅ | |
 | Drag branch onto branch → Merge / Rebase / Reset menu | ✅ | Fast-forward, merge, rebase, interactive rebase, push, reset; gold drop targets, the 75% drag image and the Windows drag cursors |
-| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | Worktrees are listed only; Add Submodule is the panel sliding out of the left panel (no remove) |
+| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | Worktrees are listed only; Add Submodule is the panel sliding out of the left panel |
+| Edit / open / delete a submodule | 🟡 | Double-click a submodule: the Edit Submodule panel slides out (Remote URL via `git submodule set-url`, in-sync / out of sync / not initialized with Update / Initialize, the checked-out commit, Open / Delete). Open shows it in the same tab, *repository › submodule ✕ › branch*; the cross goes back |
 | Gitflow | ⬜ | |
 | Branch cleanup | ⬜ | |
 

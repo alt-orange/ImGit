@@ -80,8 +80,9 @@ namespace imgit::ui
     // The merge tool for state.merge_tool, over the whole tab.
     void draw_merge_view(app::Application& app, app::RepoState& state, ImVec2 size);
     void draw_dialogs(app::Application& app);
-    // The Add Submodule panel sliding out of the left panel at `origin`, over the graph (nothing while closed).
-    void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height);
+    // The Add / Edit Submodule panel sliding out of the left panel at `origin`, over the graph (`max_width` wide)
+    // (nothing while closed).
+    void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height, float max_width);
     void draw_fuzzy_finder(app::Application& app);
     // The tabs bar popovers (ui/tab_popovers.cpp), anchored at their button's bottom-right corner.
     void draw_tabs_list_popover(app::Application& app, ImVec2 anchor_right_bottom);

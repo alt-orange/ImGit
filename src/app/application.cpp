@@ -417,7 +417,7 @@ namespace imgit::app
         if (profile.guid == profiles.current().guid)
         {
             apply_profile_identity(profiles.keep_git_config());
-            for (auto& tab : tabs)
+            for (RepoState* tab : repo_states())
             {
                 tab->refresh();
             }
@@ -443,6 +443,31 @@ namespace imgit::app
         return tabs[static_cast<std::size_t>(active_tab)].get();
     }
 
+    std::vector<RepoState*> Application::repo_states() const
+    {
+        std::vector<RepoState*> states;
+        for (const std::unique_ptr<RepoState>& tab : tabs)
+        {
+            for (RepoState* state = tab.get(); state != nullptr; state = state->parent.get())
+            {
+                states.push_back(state);
+            }
+        }
+        return states;
+    }
+
+    RepoState* Application::find_repo_state(const std::string& workdir) const
+    {
+        for (RepoState* state : repo_states())
+        {
+            if (state->repo.workdir() == workdir)
+            {
+                return state;
+            }
+        }
+        return nullptr;
+    }
+
     void Application::open_repository(const std::string& raw_path)
     {
         repo_management_open = false;
@@ -461,7 +486,8 @@ namespace imgit::app
         const std::string workdir = repo->workdir();
         for (std::size_t i = 0; i < tabs.size(); ++i)
         {
-            if (tabs[i]->repo.workdir() == workdir)
+            // A tab showing one of its submodules still holds the repository.
+            if (tabs[i]->repo.workdir() == workdir || tabs[i]->root().repo.workdir() == workdir)
             {
                 active_tab = static_cast<int>(i);
                 return;
@@ -503,6 +529,62 @@ namespace imgit::app
         open_repository(*picked);
     }
 
+    void Application::open_submodule(RepoState& state, const std::string& path)
+    {
+        const auto tab = std::ranges::find_if(tabs,
+                                              [&](const std::unique_ptr<RepoState>& t)
+                                              {
+                                                  return t.get() == &state;
+                                              });
+        if (tab == tabs.end())
+        {
+            return;
+        }
+        // A submodule that is not checked out has no .git of its own: opening its folder would find the parent.
+        const std::filesystem::path folder = std::filesystem::path(state.repo.workdir()) / path;
+        if (std::error_code ec; !std::filesystem::exists(folder / ".git", ec))
+        {
+            toasts.push(ToastKind::ERROR, "Could not open submodule", "'" + path + "' is not initialized.");
+            return;
+        }
+        auto repo = git::Repository::open(folder.string());
+        if (!repo)
+        {
+            toasts.push(ToastKind::ERROR, "Could not open submodule", repo.error().message);
+            return;
+        }
+        auto submodule = std::make_unique<RepoState>(std::move(*repo));
+        submodule->commit_limit = static_cast<std::size_t>(settings.initial_commits);
+        submodule->push_after_commit = settings.push_after_commit;
+        submodule->parent = std::move(*tab);
+        *tab = std::move(submodule);
+    }
+
+    void Application::close_submodule(RepoState& state)
+    {
+        const auto tab = std::ranges::find_if(tabs,
+                                              [&](const std::unique_ptr<RepoState>& t)
+                                              {
+                                                  return t.get() == &state;
+                                              });
+        // A command running in the submodule would finish with nowhere to report to.
+        if (tab == tabs.end() || state.parent == nullptr || state.busy())
+        {
+            return;
+        }
+        // A dialog opened for the submodule goes with it.
+        if (dialog.kind != Dialog::Kind::NONE && dialog.workdir == state.repo.workdir())
+        {
+            dialog.close();
+        }
+        std::unique_ptr<RepoState> submodule = std::move(*tab);
+        *tab = std::move(submodule->parent);
+        // The submodule may have moved meanwhile (a checkout, a commit).
+        (*tab)->refresh();
+        // The submodule's state goes at the end of the frame, once nothing drawing it refers to it.
+        m_closed_submodules.push_back(std::move(submodule));
+    }
+
     void Application::close_tab(int index)
     {
         if (index < 0 || index >= static_cast<int>(tabs.size()))
@@ -510,7 +592,7 @@ namespace imgit::app
             return;
         }
         const std::string workdir = tabs[static_cast<std::size_t>(index)]->repo.workdir();
-        closed_tabs.push_back(workdir);
+        closed_tabs.push_back(tabs[static_cast<std::size_t>(index)]->root().repo.workdir());
         // A dialog opened for this repository (its on_confirm may hold the tab) goes with it.
         if (dialog.kind != Dialog::Kind::NONE && dialog.workdir == workdir)
         {
@@ -604,7 +686,7 @@ namespace imgit::app
         style.ScaleAllSizes(scale);
         style.FontScaleDpi = base_dpi_scale;
         style.FontScaleMain = settings.zoom;
-        for (auto& tab : tabs)
+        for (RepoState* tab : repo_states())
         {
             tab->commit_limit = static_cast<std::size_t>(settings.initial_commits);
         }
@@ -699,13 +781,9 @@ namespace imgit::app
         args.insert(args.begin() + 1, "--force-with-lease");
         dialog.on_confirm = [this, workdir = state.repo.workdir(), args = std::move(args)]
         {
-            for (auto& tab : tabs)
+            if (RepoState* tab = find_repo_state(workdir); tab != nullptr)
             {
-                if (tab->repo.workdir() == workdir)
-                {
-                    run_git_cli(*tab, "Push", args);
-                    break;
-                }
+                run_git_cli(*tab, "Push", args);
             }
         };
         return true;
@@ -945,7 +1023,8 @@ namespace imgit::app
 
     void Application::poll_async()
     {
-        for (auto& tab : tabs)
+        // A repository behind an open submodule still hears back from the command it started.
+        for (RepoState* tab : repo_states())
         {
             if (!tab->async || tab->async->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             {
@@ -981,13 +1060,9 @@ namespace imgit::app
                                           [this, workdir = tab->repo.workdir(), title,
                                            args = args](git::cli::Credential credential)
                                           {
-                                              for (auto& other : tabs)
+                                              if (RepoState* other = find_repo_state(workdir); other != nullptr)
                                               {
-                                                  if (other->repo.workdir() == workdir)
-                                                  {
-                                                      run_git_cli(*other, title, args, false, std::move(credential));
-                                                      break;
-                                                  }
+                                                  run_git_cli(*other, title, args, false, std::move(credential));
                                               }
                                           }))
             {
@@ -1344,6 +1419,7 @@ namespace imgit::app
 
     void Application::draw_frame()
     {
+        m_closed_submodules.clear();
         apply_profile_switch();
         poll_async();
 
@@ -1497,7 +1573,7 @@ namespace imgit::app
         }
         if (!rebasing && !state.diff_target)
         {
-            ui::draw_slide_panel(*this, state, ImVec2(center_x, origin.y), full_h);
+            ui::draw_slide_panel(*this, state, ImVec2(center_x, origin.y), full_h, center_width);
         }
 
         // Sizes follow the mouse while a handle is held and are saved when it is let go.
@@ -2164,7 +2240,7 @@ namespace imgit::app
         std::string text;
         for (const auto& tab : tabs)
         {
-            text += tab->repo.workdir() + '\n';
+            text += tab->root().repo.workdir() + '\n';
         }
         text += "#active=" + std::to_string(active_tab) + '\n';
         (void)write_text_file(config_path("tabs.txt"), text);

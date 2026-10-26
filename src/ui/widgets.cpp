@@ -329,6 +329,48 @@ namespace imgit::ui
         return font->CalcTextSizeA(font_px(font, size), FLT_MAX, 0.f, text, text_end);
     }
 
+    std::vector<std::string_view> wrap_text(ImFont* font, float size, std::string_view text, float width)
+    {
+        const float glyph_h = font_px(font, size);
+        std::vector<std::string_view> lines;
+        std::size_t start = 0;
+        while (start <= text.size())
+        {
+            std::size_t end = text.find('\n', start);
+            if (end == std::string_view::npos)
+            {
+                end = text.size();
+            }
+            const char* line = text.data() + start;
+            const char* line_end = text.data() + end;
+            if (line == line_end)
+            {
+                lines.emplace_back();
+            }
+            while (line < line_end)
+            {
+                const char* wrap = font->CalcWordWrapPosition(glyph_h, line, line_end, width);
+                if (wrap == line)
+                {
+                    // Not even one character fits: take one whole UTF-8 character (never half of one).
+                    wrap = line + 1;
+                    while (wrap < line_end && (static_cast<unsigned char>(*wrap) & 0xC0) == 0x80)
+                    {
+                        ++wrap;
+                    }
+                }
+                lines.emplace_back(line, static_cast<std::size_t>(wrap - line));
+                line = wrap;
+                while (line < line_end && *line == ' ')
+                {
+                    ++line;
+                }
+            }
+            start = end + 1;
+        }
+        return lines;
+    }
+
     void draw_text(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
                    const char* text_end)
     {

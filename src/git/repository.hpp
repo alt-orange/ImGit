@@ -82,6 +82,10 @@ namespace imgit::git
         [[nodiscard]] Result<Blame> blame_file(const std::string& path, const Sha& sha = {}) const;
         [[nodiscard]] Result<Author> default_author() const;
         [[nodiscard]] Result<std::string> head_commit_message() const;
+        // The submodules as load_history lists them (each one's own HEAD is read, so it opens each one).
+        [[nodiscard]] std::vector<Submodule> submodules() const;
+        // One commit, read without the history walk (a submodule's checked-out commit).
+        [[nodiscard]] Result<Commit> load_commit(const Sha& sha) const;
 
         // Index
         [[nodiscard]] Result<void> stage(const std::vector<std::string>& paths) const;

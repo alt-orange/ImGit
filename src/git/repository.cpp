@@ -152,6 +152,40 @@ namespace imgit::git
             return commit;
         }
 
+        // The submodules with the commit the repository records for each and the one each has checked out.
+        std::vector<Submodule> read_submodules(git_repository* repo)
+        {
+            std::vector<Submodule> submodules;
+            auto callback = [](git_submodule* submodule, const char* name, void* data) -> int
+            {
+                auto* out = static_cast<std::vector<Submodule>*>(data);
+                Submodule entry;
+                entry.name = name != nullptr ? name : "";
+                const char* path = git_submodule_path(submodule);
+                entry.path = path != nullptr ? path : "";
+                const char* url = git_submodule_url(submodule);
+                entry.url = url != nullptr ? url : "";
+                const git_oid* recorded = git_submodule_index_id(submodule);
+                if (recorded == nullptr)
+                {
+                    recorded = git_submodule_head_id(submodule);
+                }
+                if (recorded != nullptr)
+                {
+                    entry.recorded = oid_str(recorded);
+                }
+                // Reads the submodule's own HEAD; null while it is not checked out.
+                if (const git_oid* checked_out = git_submodule_wd_id(submodule); checked_out != nullptr)
+                {
+                    entry.checked_out = oid_str(checked_out);
+                }
+                out->push_back(std::move(entry));
+                return 0;
+            };
+            git_submodule_foreach(repo, callback, &submodules);
+            return submodules;
+        }
+
         std::vector<char*> c_strings(const std::vector<std::string>& strings)
         {
             std::vector<char*> result;
@@ -710,14 +744,7 @@ namespace imgit::git
 
         // Submodules and worktrees (left panel sections)
         {
-            auto callback = [](git_submodule* submodule, const char* name, void* data) -> int
-            {
-                auto* out = static_cast<std::vector<Submodule>*>(data);
-                const char* path = git_submodule_path(submodule);
-                out->push_back(Submodule{name != nullptr ? name : "", path != nullptr ? path : ""});
-                return 0;
-            };
-            git_submodule_foreach(repo, callback, &history.submodules);
+            history.submodules = read_submodules(repo);
 
             git_strarray names = {};
             if (git_worktree_list(&names, repo) == 0)
@@ -1487,6 +1514,21 @@ namespace imgit::git
             return std::unexpected(sig.error());
         }
         return Author{sig->get()->name, sig->get()->email};
+    }
+
+    std::vector<Submodule> Repository::submodules() const
+    {
+        return read_submodules(m_repo.get());
+    }
+
+    Result<Commit> Repository::load_commit(const Sha& sha) const
+    {
+        auto commit = lookup_commit(m_repo.get(), sha);
+        if (!commit)
+        {
+            return std::unexpected(commit.error());
+        }
+        return read_commit(*commit, sha);
     }
 
     Result<std::string> Repository::head_commit_message() const
