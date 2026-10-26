@@ -19,7 +19,8 @@ namespace imgit::ui
         constexpr float TOOLBAR_H = 53.f;
         constexpr float LIST_W = 432.f;
         constexpr float ROW_H = 44.f;
-        constexpr float NODE_X = 32.f; // the node's centre
+        constexpr float NODE_X = 30.f; // the avatar's centre
+        constexpr float NODE_DIAMETER = 24.f;
         constexpr float ROW_TEXT_X = 54.f;
         constexpr float LIST_TOP_PADDING = 4.f;
 
@@ -55,27 +56,17 @@ namespace imgit::ui
             return theme::graph_color(sha_color_index(sha));
         }
 
-        // The commit node of a list row: the 22px lane-coloured ring around the 18px avatar (a 12px disc for a
-        // merge), as in the graph.
-        void draw_list_node(ImDrawList* draw, ImVec2 center, const git::Commit& commit, ImVec4 color)
-        {
-            if (commit.type == git::NodeType::MERGE)
-            {
-                draw->AddCircleFilled(center, px(theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f, theme::u32(color), 16);
-                return;
-            }
-            draw->AddCircleFilled(center, px(theme::COMMIT_NODE_DIAMETER) / 2.f, theme::u32(color), 32);
-            draw_avatar(draw, center, px(theme::COMMIT_ZONE_AVATAR_DIAMETER), commit.author);
-        }
-
-        // The commit list: one 44px row per entry (node, summary, short sha; "<age> by <author>" under it), the
-        // lane line through the nodes, then the file's status at its oldest entry and "End of History".
+        // The commit list: one 44px row per entry (the author's avatar, the summary, the short sha; "<age> by
+        // <author>" under it), then a line in the colour of what the oldest entry did to the file with its label,
+        // and "End of History".
         void draw_list(app::Application& app, app::RepoState& state, ImVec2 min, ImVec2 max)
         {
             const theme::Palette& p = theme::palette();
             app::FileHistoryView& view = *state.file_history;
             ImGui::SetCursorScreenPos(min);
             ImGui::BeginChild("##file_history_list", ImVec2(max.x - min.x, max.y - min.y));
+            // The rows are laid out by the clipper at exactly their height: no item spacing.
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
             ImDrawList* draw = ImGui::GetWindowDrawList();
             const float width = max.x - min.x;
             const float row_h = px(ROW_H);
@@ -89,6 +80,7 @@ namespace imgit::ui
                 draw_text(draw, fonts().regular, 12.f,
                           ImVec2(top.x + std::round((width - w) / 2.f), css_text_y(12.f, top.y + px(20.f))),
                           theme::u32(view.history_error.empty() ? p.text_secondary : p.red), message);
+                ImGui::PopStyleVar();
                 ImGui::EndChild();
                 return;
             }
@@ -119,13 +111,7 @@ namespace imgit::ui
                 }
             }
             ImGui::Dummy(ImVec2(width, px(LIST_TOP_PADDING)));
-            const float first_y = top.y + px(LIST_TOP_PADDING);
-            const float lane_x = std::round(top.x + px(NODE_X));
-            const ImVec4 lane = commit_color(state, entries.front().commit.sha);
-            // The lane line: from the newest node down to the status label under the oldest.
-            const float line_bottom = first_y + static_cast<float>(count) * row_h + px(6.f);
-            draw->AddRectFilled(ImVec2(lane_x - 1.f, first_y + row_h / 2.f), ImVec2(lane_x + 1.f, line_bottom),
-                                theme::u32(lane));
+            const float node_x = std::round(top.x + px(NODE_X));
             ImGuiListClipper clipper;
             clipper.Begin(count, row_h);
             while (clipper.Step())
@@ -159,11 +145,12 @@ namespace imgit::ui
                         state.close_file_history();
                         jump_to_commit(state, sha.c_str());
                         ImGui::PopID();
+                        ImGui::PopStyleVar();
                         ImGui::EndChild();
                         return;
                     }
                     ImGui::PopID();
-                    draw_list_node(draw, ImVec2(lane_x, pos.y + row_h / 2.f), entry.commit, lane);
+                    draw_avatar(draw, ImVec2(node_x, pos.y + row_h / 2.f), px(NODE_DIAMETER), entry.commit.author);
                     // The short sha, right-aligned; the summary fills up to it.
                     const std::string sha = git::short_sha(entry.commit.sha).substr(0, 6);
                     const float sha_w = text_size(fonts().regular, 12.f, sha.c_str()).x;
@@ -185,28 +172,29 @@ namespace imgit::ui
                 }
             }
             clipper.End();
-            // Under the oldest entry: what it did to the file, then the end of the history.
+            // Under the oldest entry: a line in the colour of what it did to the file, "ADDED <path>" under it, then
+            // the end of the history.
             {
                 const ImVec2 pos = ImGui::GetCursorScreenPos();
                 const git::FileHistoryEntry& oldest = entries.back();
                 const ImVec4 tone = status_color(oldest.status);
-                draw->AddRectFilled(ImVec2(pos.x + px(10.f), pos.y + px(6.f)), ImVec2(pos.x + width, pos.y + px(7.f)),
-                                    theme::u32(theme::with_alpha(tone, 0.6f)));
+                draw->AddRectFilled(ImVec2(pos.x, pos.y + px(4.f)), ImVec2(pos.x + width, pos.y + px(5.f)),
+                                    theme::u32(tone));
                 const char* word = status_word(oldest.status);
-                draw_text(draw, fonts().semibold, 11.f, ImVec2(pos.x + px(10.f), css_text_y(11.f, pos.y + px(10.f))),
+                draw_text(draw, fonts().semibold, 11.f, ImVec2(pos.x + px(10.f), css_text_y(11.f, pos.y + px(8.f))),
                           theme::u32(tone), word);
                 const float word_w = text_size(fonts().semibold, 11.f, word).x;
-                const std::string name = file_name(oldest.path);
                 draw_text_ellipsis(draw, fonts().regular, 11.f,
-                                   ImVec2(pos.x + px(10.f) + word_w + px(8.f), css_text_y(11.f, pos.y + px(10.f))),
-                                   width - px(36.f) - word_w, theme::u32(p.text_normal), name.c_str());
+                                   ImVec2(pos.x + px(10.f) + word_w + px(8.f), css_text_y(11.f, pos.y + px(8.f))),
+                                   width - px(36.f) - word_w, theme::u32(p.text_normal), oldest.path.c_str());
                 const char* end = view.history.has_more ? "History cut short at the walk limit" : "End of History";
                 const float end_w = text_size(fonts().regular, 12.f, end).x;
                 draw_text(draw, fonts().regular, 12.f,
-                          ImVec2(pos.x + std::round((width - end_w) / 2.f), css_text_y(12.f, pos.y + px(30.f))),
+                          ImVec2(pos.x + std::round((width - end_w) / 2.f), css_text_y(12.f, pos.y + px(26.f))),
                           theme::u32(p.text_secondary), end);
-                ImGui::Dummy(ImVec2(width, px(60.f)));
+                ImGui::Dummy(ImVec2(width, px(56.f)));
             }
+            ImGui::PopStyleVar();
             ImGui::EndChild();
         }
     } // namespace
@@ -226,23 +214,16 @@ namespace imgit::ui
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), theme::u32(p.app_bg0));
 
-        // Header: "File History: <name>", the encoding and the close cross.
+        // Header: "File History: <path>", the encoding and the close cross.
         {
             const float h = px(HEADER_H);
             draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + h), theme::u32(p.panel_bg0));
             draw->AddRectFilled(ImVec2(origin.x, origin.y + h - 1.f), ImVec2(origin.x + size.x, origin.y + h),
                                 theme::u32(p.section_border));
-            const std::string title = "File History: " + file_name(view.path);
+            const std::string title = "File History: " + view.path;
             draw_text_ellipsis(draw, fonts().regular, 14.f,
                                ImVec2(origin.x + px(10.f), css_text_y(14.f, origin.y + px(7.5f))), size.x * 0.6f,
                                theme::u32(p.text_selected), title.c_str());
-            const float title_w = text_size(fonts().regular, 14.f, title.c_str()).x;
-            if (ImGui::IsMouseHoveringRect(ImVec2(origin.x + px(10.f), origin.y),
-                                           ImVec2(origin.x + px(10.f) + title_w, origin.y + h)))
-            {
-                styled_tooltip(ImVec2(origin.x + px(10.f), origin.y + px(7.f)),
-                               ImVec2(origin.x + px(10.f) + title_w, origin.y + px(28.f)), view.path.c_str());
-            }
             const ImVec2 cmin(origin.x + size.x - px(30.f), origin.y + px(7.5f));
             ImGui::SetCursorScreenPos(cmin);
             if (ImGui::InvisibleButton("##close_file_history", ImVec2(px(20.f), px(20.f))))
