@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <fcntl.h>
 #include <filesystem>
 #include <mutex>
 #include <poll.h>
@@ -158,6 +159,8 @@ namespace imgit::platform
             _exit(127);
         }
         impl->pid = pid;
+        // forkpty leaves our side inheritable: every git ImGit spawns afterwards would hold the terminal open.
+        fcntl(impl->master, F_SETFD, FD_CLOEXEC);
 
         Impl* raw = impl.get();
         impl->reader = std::thread(
