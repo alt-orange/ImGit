@@ -24,7 +24,7 @@ if(IMGIT_VALGRIND)
             --show-leak-kinds=definite,indirect
             --errors-for-leak-kinds=definite,indirect
             --track-origins=yes
-            --suppressions=${CMAKE_CURRENT_SOURCE_DIR}/valgrind.supp
+            --suppressions=${PROJECT_SOURCE_DIR}/tools/memcheck/valgrind.supp
             $<TARGET_FILE:imgit_tests>)
     set_tests_properties(imgit_tests.valgrind PROPERTIES LABELS valgrind)
 endif()

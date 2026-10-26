@@ -63,6 +63,15 @@
       }
     },
     {
+      "name": "linux-asan",
+      "displayName": "Linux Debug, AddressSanitizer + LeakSanitizer + UBSan",
+      "inherits": "linux-debug",
+      "cacheVariables": {
+        "IMGIT_BUILD_TESTS": "ON",
+        "IMGIT_SANITIZE": "address,undefined"
+      }
+    },
+    {
       "name": "macos-debug",
       "displayName": "macOS Debug",
       "generator": "Ninja",
@@ -116,7 +125,8 @@
     { "name": "x64-release", "configurePreset": "x64-release" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-release", "configurePreset": "linux-release" },
-    { "name": "linux-valgrind", "configurePreset": "linux-valgrind", "targets": [ "imgit_tests" ] },
+    { "name": "linux-valgrind", "configurePreset": "linux-valgrind" },
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" },
     { "name": "ci-windows", "configurePreset": "ci-windows" },
@@ -129,6 +139,15 @@
       "configurePreset": "linux-valgrind",
       "filter": { "include": { "label": "valgrind" } },
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1"
+      }
     }
   ]
 }

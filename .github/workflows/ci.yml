@@ -21,15 +21,27 @@ jobs:
   build:
     uses: ./.github/workflows/build.yml
 
-  # The unit tests on Linux, plain and under Valgrind memcheck (the linux-valgrind presets): an invalid access, a
-  # read of uninitialised memory or a definite / indirect leak fails the run.
-  valgrind:
-    name: Unit tests (Valgrind)
+  # Memory checks on Linux: the unit tests and the app itself (headless, under Xvfb and Mesa's llvmpipe), once built
+  # with AddressSanitizer + LeakSanitizer + UBSan and once under Valgrind memcheck. An invalid access, a read of
+  # uninitialised memory, undefined behaviour or a definite / indirect leak fails the run (tools/memcheck/).
+  memcheck:
+    name: Memory check (${{ matrix.tool }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: asan
+            preset: linux-asan
+          - tool: valgrind
+            preset: linux-valgrind
     env:
       VCPKG_DISABLE_METRICS: 1
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # a real history for the graph and File History views
 
       # the same compiler as build.yml, so the vcpkg ports' ABI hashes match its binary cache
       - name: Install packages
@@ -38,7 +50,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build g++-14 pkg-config \
             libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
-            valgrind
+            xvfb xauth libgl1-mesa-dri valgrind
           printf 'CC=gcc-14\nCXX=g++-14\n' >> "$GITHUB_ENV"
 
       - name: Check out vcpkg
@@ -55,6 +67,7 @@ jobs:
           "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
 
       # Falls back on build.yml's x64-linux cache for the app's ports; saves its own entry when it built GoogleTest.
+      # (The sanitizers instrument ImGit only, so both tools share the same ports.)
       - name: Restore the vcpkg binary cache
         id: vcpkg-restore
         uses: actions/cache/restore@v4
@@ -71,24 +84,24 @@ jobs:
         run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
 
       - name: Configure (installs the vcpkg dependencies)
-        run: cmake --preset linux-valgrind
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Check for newly built ports
         id: cached-after
         run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
 
       - name: Save the vcpkg binary cache
-        if: steps.cached-after.outputs.count != steps.cached-before.outputs.count
+        if: matrix.tool == 'asan' && steps.cached-after.outputs.count != steps.cached-before.outputs.count
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_CACHE_DIR }}
           key: ${{ steps.vcpkg-restore.outputs.cache-primary-key }}
 
-      - name: Build the unit tests
-        run: cmake --build --preset linux-valgrind
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Unit tests
-        run: ctest --test-dir build/linux-valgrind -LE valgrind --output-on-failure
+        run: ctest --preset ${{ matrix.preset }}
 
-      - name: Unit tests under Valgrind
-        run: ctest --preset linux-valgrind
+      - name: The app, headless
+        run: tools/memcheck/run_app.sh ${{ matrix.tool }} build/${{ matrix.preset }}/imgit .

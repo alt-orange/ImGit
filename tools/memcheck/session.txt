@@ -1,0 +1,91 @@
+# A keyboard-driven tour of ImGit for the memory checks (tools/memcheck/run_app.sh): it opens and closes the
+# panels, dialogs and views that allocate the most (diffs, file lists, the terminal, the command palette, a second
+# tab) so their teardown runs before exit, where LeakSanitizer / Valgrind take their count. Nothing here writes to
+# the repository or goes to the network. The app exits when the script ends.
+
+# history: walk the graph, extend a selection, back to the top
+row 0
+wait 10
+key down
+key down
+key shift+down
+key shift+down
+wait 10
+key end
+wait 10
+key home
+wait 10
+row 1
+wait 20
+
+# panels on and off
+key ctrl+k
+wait 5
+key ctrl+k
+key ctrl+j
+wait 5
+key ctrl+j
+wait 5
+
+# the command palette: type, scroll the matches, dismiss
+key ctrl+p
+wait 5
+type branch
+wait 5
+key down
+key down
+wait 5
+key escape
+wait 5
+
+# commit search
+key ctrl+f
+wait 5
+type memcheck
+wait 10
+key escape
+wait 5
+
+# the create-branch prompt, dismissed
+key ctrl+b
+wait 5
+type memcheck-branch
+wait 5
+key escape
+wait 5
+
+# the tabs list, a new tab and closing it again
+key ctrl+shift+a
+wait 5
+key escape
+key ctrl+t
+wait 10
+key ctrl+w
+wait 10
+
+# the terminal panel: a shell started, run, and ended
+key ctrl+`
+wait 30
+type echo memcheck
+key enter
+wait 30
+type exit
+key enter
+wait 30
+key ctrl+`
+wait 10
+
+# zoom (rebuilds the font atlas), then reset
+key ctrl+=
+wait 5
+key ctrl+-
+wait 5
+key ctrl+0
+wait 5
+
+# reload the window: the repository state is read again from scratch
+key f5
+wait 60
+row 2
+wait 20
+shot memcheck

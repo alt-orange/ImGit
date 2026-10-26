@@ -1,3 +1,78 @@
-# Valgrind suppressions for imgit_tests.valgrind (test/CMakeLists.txt): reports from third-party code that are
-# not ImGit's to fix. Generate an entry with `valgrind --gen-suppressions=all build/<preset>/test/imgit_tests`,
-# and say above it which library it belongs to and why it is harmless.
+# Valgrind suppressions for ImGit's memory checks (test/CMakeLists.txt's imgit_tests.valgrind and
+# tools/memcheck/run_app.sh): reports from third-party code that are not ImGit's to fix. An entry matches when the
+# report's stack passes through the library it names, so memory ImGit allocates itself is never hidden; memory such
+# a library hands ImGit to free would be, so keep entries to libraries whose results ImGit does not own. Generate new
+# entries with `--gen-suppressions=all` and say above each which library it belongs to and why it is harmless.
+
+# Mesa's GL driver (llvmpipe on the headless CI runner): per-process driver state it keeps until exit, and the
+# llvmpipe JIT's code, which Valgrind cannot see into.
+{
+   mesa-leak
+   Memcheck:Leak
+   ...
+   obj:*/libgallium*
+}
+{
+   mesa-dri-leak
+   Memcheck:Leak
+   ...
+   obj:*/dri/*
+}
+{
+   mesa-glx-leak
+   Memcheck:Leak
+   ...
+   obj:*/libGLX_mesa.so*
+}
+{
+   llvm-leak
+   Memcheck:Leak
+   ...
+   obj:*/libLLVM*
+}
+{
+   llvmpipe-jit-cond
+   Memcheck:Cond
+   ...
+   obj:*/libgallium*
+}
+{
+   llvmpipe-jit-value
+   Memcheck:Value8
+   ...
+   obj:*/libgallium*
+}
+
+# Xlib / XCB, fontconfig and D-Bus (through GLFW and the native file dialog): caches held for the process's life.
+{
+   x11-leak
+   Memcheck:Leak
+   ...
+   obj:*/libX11.so*
+}
+{
+   xcb-leak
+   Memcheck:Leak
+   ...
+   obj:*/libxcb*.so*
+}
+{
+   fontconfig-leak
+   Memcheck:Leak
+   ...
+   obj:*/libfontconfig.so*
+}
+{
+   dbus-leak
+   Memcheck:Leak
+   ...
+   obj:*/libdbus-1.so*
+}
+
+# The dynamic loader: libraries dlopen()ed by the GL dispatch (libglvnd) stay loaded until exit.
+{
+   dlopen-leak
+   Memcheck:Leak
+   ...
+   fun:_dl_open
+}

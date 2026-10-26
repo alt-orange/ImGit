@@ -51,16 +51,29 @@ The build treats every warning as an error on every platform (`/W4 /WX` on MSVC 
 `-Wall -Wextra -Wpedantic -Werror` elsewhere), so a change must compile cleanly on all three before it can merge.
 
 The unit tests (`test/`, GoogleTest) cover the plain C++ code; build them with `-DIMGIT_BUILD_TESTS=ON` and run
-`ctest --test-dir build/<preset>`. On Linux the `linux-valgrind` preset also runs them under Valgrind memcheck, as CI
-does, and fails on any invalid access, read of uninitialised memory or definite / indirect leak:
+`ctest --test-dir build/<preset>`.
+
+### Memory checks
+
+CI hunts memory errors and leaks on Linux with two tools, over both the unit tests and the app itself (run headless
+through a screenshot, the File History view with blame, and the scripted tour in `tools/memcheck/session.txt`):
+
+- `linux-asan` builds everything with AddressSanitizer, LeakSanitizer and UBSan: fast enough for the whole tour.
+- `linux-valgrind` runs the same binaries, uninstrumented, under Valgrind memcheck: slower, so the app runs without
+  the tour, but it also sees reads of uninitialised memory.
+
+Either fails on an invalid access, a definite or indirect leak, or (ASan) undefined behaviour. To run them locally:
 
 ```bash
-cmake --preset linux-valgrind
-cmake --build --preset linux-valgrind
-ctest --preset linux-valgrind
+cmake --preset linux-asan               # or linux-valgrind
+cmake --build --preset linux-asan
+ctest --preset linux-asan
+tools/memcheck/run_app.sh asan build/linux-asan/imgit .            # valgrind build/linux-valgrind/imgit
 ```
 
-Suppressions for reports in third-party code go in `test/valgrind.supp`.
+A dynamic check only sees the code a run reaches, so when you add a view or a dialog that allocates, add a few steps
+that open and close it to `session.txt`. Suppressions for reports in system libraries (Mesa, X11, fontconfig, ...)
+go in `tools/memcheck/lsan.supp` and `valgrind.supp`; never suppress a stack that is ImGit's own.
 
 For everything else, verify your change by running it against a real repository, and for the UI use the headless mode
 CI relies on:

@@ -156,11 +156,12 @@ downloaded `ImGit.app` is only ad-hoc signed, so the first launch needs a right-
 **CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
 every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, vcpkg at the manifest's baseline, its binary
 cache in the Actions cache) and takes a screenshot as a smoke test under Xvfb on Linux and, best effort, on the macOS
-runner; it also runs the unit tests on Linux under Valgrind memcheck (the `linux-valgrind` presets). Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
-`imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt`
-to it; run it by hand with a tag to rebuild an existing release's packages. The release executables for Windows and
-Linux are compressed with UPX (macOS has no working UPX target); some antivirus scanners flag UPX-packed files, and
-`upx -d` restores the original binary.
+runner; it also runs the memory checks on Linux, the unit tests and the app under AddressSanitizer + LeakSanitizer and
+under Valgrind (the `linux-asan` / `linux-valgrind` presets, `tools/memcheck/`). Publishing a GitHub release runs
+`release.yml`, which attaches `imgit-<tag>-windows-x64.zip`, `imgit-<tag>-linux-x64.tar.gz`,
+`imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt` to it; run it by hand with a tag to
+rebuild an existing release's packages. The release executables for Windows and Linux are compressed with UPX (macOS has
+no working UPX target); some antivirus scanners flag UPX-packed files, and `upx -d` restores the original binary.
 
 **Warnings** — the build treats every warning as an error on every platform (`/W4 /WX` on MSVC and clang-cl,
 `-Wall -Wextra -Wpedantic -Werror` elsewhere), so a new warning fails the build rather than piling up.

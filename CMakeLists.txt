@@ -9,6 +9,9 @@
 #
 #   imgit_tests  the unit tests (test/, GoogleTest), with -DIMGIT_BUILD_TESTS=ON; then `ctest --test-dir <build>`
 #                (-DIMGIT_VALGRIND=ON also runs them under Valgrind: `ctest -L valgrind`, or the linux-valgrind preset)
+#
+# Memory checks: -DIMGIT_SANITIZE=address,undefined (the linux-asan preset) builds everything with AddressSanitizer
+# (LeakSanitizer included) and UBSan; tools/memcheck/run_app.sh drives the app headless under either tool.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -16,6 +19,7 @@ cmake_minimum_required(VERSION 3.25)
 # project().
 option(IMGIT_BUILD_TESTS "Build the unit tests (test/)" OFF)
 option(IMGIT_VALGRIND "Also run the unit tests under Valgrind memcheck (ctest -L valgrind)" OFF)
+set(IMGIT_SANITIZE "" CACHE STRING "Sanitizers for the GCC / Clang build, such as address,undefined (empty: none)")
 if(IMGIT_BUILD_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()
@@ -33,6 +37,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 # the static CRT of the x64-windows-static triplet (/MT, /MTd)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+# Every ImGit target (the app, the syntax library, the tests) is instrumented; the vcpkg libraries are not, but their
+# allocations still go through the sanitizer's malloc, so what they leak on ImGit's behalf is reported too.
+if(IMGIT_SANITIZE AND NOT MSVC)
+    add_compile_options(-fsanitize=${IMGIT_SANITIZE} -fno-sanitize-recover=all -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=${IMGIT_SANITIZE})
+endif()
 
 find_package(imgui CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
