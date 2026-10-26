@@ -1302,7 +1302,6 @@ namespace imgit::git
             TreeEntryHandle entry;
             if (git_tree_entry_bypath(entry.out(), tree, tracked.c_str()) < 0)
             {
-                git_error_clear();
                 return std::nullopt;
             }
             return *git_tree_entry_id(entry);
@@ -1360,7 +1359,6 @@ namespace imgit::git
                 TreeHandle parent_tree;
                 if (git_commit_parent(parent.out(), commit, i) < 0 || git_commit_tree(parent_tree.out(), parent) < 0)
                 {
-                    git_error_clear();
                     continue;
                 }
                 const std::optional<git_oid> theirs = entry_id(parent_tree, tracked);
@@ -1415,7 +1413,6 @@ namespace imgit::git
                         }
                     }
                 }
-                git_error_clear();
             }
             result.entries.push_back(std::move(entry));
         }
@@ -1465,7 +1462,6 @@ namespace imgit::git
                 {
                     commit = read_commit(handle, out.sha);
                 }
-                git_error_clear();
                 known = commits.emplace(out.sha, std::move(commit)).first;
             }
             out.author = known->second.author;
