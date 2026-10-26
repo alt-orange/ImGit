@@ -184,6 +184,12 @@ namespace imgit::syntax
 
     const DiffSpans* DiffCache::get(const git::FileDiff& diff)
     {
+        if (diff.revision != 0 && diff.revision == m_revision)
+        {
+            return m_highlighted ? &m_spans : nullptr;
+        }
+        m_revision = diff.revision;
+        m_highlighted = false;
         if (diff.binary || diff.hunks.empty())
         {
             return nullptr;
@@ -199,19 +205,26 @@ namespace imgit::syntax
         {
             return nullptr;
         }
-        if (!m_valid || hash != m_hash || language != m_language || diff.path != m_path)
+        if (!m_tokenized || hash != m_hash || language != m_language)
         {
             m_spans = tokenize_diff(*language, diff);
-            m_valid = true;
+            m_tokenized = true;
             m_hash = hash;
             m_language = language;
-            m_path = diff.path;
         }
+        m_highlighted = true;
         return &m_spans;
     }
 
-    const LineSpans* TextCache::get(std::string_view path, std::span<const std::string> lines)
+    const LineSpans* TextCache::get(std::string_view path, std::span<const std::string> lines, std::uint64_t revision)
     {
+        if (revision != 0 && revision == m_revision && path == m_path)
+        {
+            return m_highlighted ? &m_spans : nullptr;
+        }
+        m_revision = revision;
+        m_path = path;
+        m_highlighted = false;
         const Language* language = language_for_path(path, lines.empty() ? std::string_view() : lines[0]);
         if (language == nullptr)
         {
@@ -223,14 +236,14 @@ namespace imgit::syntax
         {
             return nullptr;
         }
-        if (!m_valid || hash != m_hash || language != m_language || path != m_path)
+        if (!m_tokenized || hash != m_hash || language != m_language)
         {
             m_spans = tokenize_lines(*language, lines);
-            m_valid = true;
+            m_tokenized = true;
             m_hash = hash;
             m_language = language;
-            m_path = path;
         }
+        m_highlighted = true;
         return &m_spans;
     }
 } // namespace imgit::syntax

@@ -777,3 +777,108 @@ TEST(SyntaxDiff, TextCacheForMergePanes)
     EXPECT_EQ(cache.get("scripts/run", lines), spans);
     EXPECT_EQ(cache.get("README", {}), nullptr);
 }
+
+// ---- regressions from review ----
+
+TEST(SyntaxRegressions, ShellHereStringsAndShiftsOpenNoHeredoc)
+{
+    const Highlighted h = highlight("shell", {"read -r a <<< hello", "echo $a", "x=$(( 1 << n ))", "echo done",
+                                              "cat << EOF", "body", "EOF", "echo after"});
+    EXPECT_EQ(h.at(1, "echo"), Token::TYPE);
+    EXPECT_EQ(h.at(1, "$a"), Token::VARIABLE);
+    EXPECT_EQ(h.at(3, "echo"), Token::TYPE);
+    EXPECT_EQ(h.at(5, "body"), Token::STRING); // a real heredoc still opens
+    EXPECT_EQ(h.at(7, "echo"), Token::TYPE);
+}
+
+TEST(SyntaxRegressions, NestedTemplateLiteralsKeepTheOuterOne)
+{
+    const Highlighted h = highlight("javascript", {"const a = `x ${ `y ${z}` } w`;", "let b = 1; // after"});
+    EXPECT_EQ(h.at(0, "`y"), Token::STRING);
+    EXPECT_EQ(h.at(0, "z"), Token::TEXT);
+    EXPECT_EQ(h.at(0, "w`"), Token::STRING);
+    EXPECT_EQ(h.at(0, ";"), Token::PUNCTUATION);
+    EXPECT_EQ(h.at(1, "let"), Token::KEYWORD);
+    EXPECT_EQ(h.at(1, "// after"), Token::COMMENT);
+}
+
+TEST(SyntaxRegressions, CommentsDoNotResetBraceDepth)
+{
+    const Highlighted css = highlight("css", {"a {", "/* c", "*/", "color: red", "}"});
+    EXPECT_EQ(css.at(3, "color"), Token::ATTRIBUTE);
+    EXPECT_EQ(css.at(3, "red"), Token::STRING);
+
+    const Highlighted js = highlight("javascript", {"const t = `${ {a: 1, /* c", "*/ b: 2}.a } x`;", "let y;"});
+    EXPECT_EQ(js.at(1, "b"), Token::TEXT);
+    EXPECT_EQ(js.at(1, "x`"), Token::STRING);
+    EXPECT_EQ(js.at(2, "let"), Token::KEYWORD);
+}
+
+TEST(SyntaxRegressions, YamlBlockScalarEndsAtTheKeysSiblings)
+{
+    const Highlighted h = highlight(
+            "yaml", {"steps:", "  - run: |", "      echo hi", "    name: foo", "  - |", "    text", "  - k: v"});
+    EXPECT_EQ(h.at(2, "echo"), Token::STRING);
+    EXPECT_EQ(h.at(3, "name"), Token::TYPE);
+    EXPECT_EQ(h.at(3, "foo"), Token::STRING);
+    EXPECT_EQ(h.at(5, "text"), Token::STRING);
+    EXPECT_EQ(h.at(6, "k"), Token::TYPE);
+}
+
+TEST(SyntaxRegressions, MarkdownFenceClosesOnALongerRun)
+{
+    const Highlighted h = highlight("markdown", {"```python", "x = 1", "````", "y and `z`"});
+    EXPECT_EQ(h.at(1, "1"), Token::NUMBER);
+    EXPECT_EQ(h.at(2, "````"), Token::STRING);
+    EXPECT_EQ(h.at(3, "and"), Token::TEXT);
+    EXPECT_EQ(h.at(3, "`z`"), Token::VARIABLE);
+}
+
+TEST(SyntaxRegressions, HtmlInAFenceHighlightsItsScript)
+{
+    const Highlighted h =
+            highlight("markdown", {"```html", "<script>", "var x = 1;", "</script>", "<p>t</p>", "```", "after"});
+    EXPECT_EQ(h.at(1, "script"), Token::TAG);
+    EXPECT_EQ(h.at(2, "var"), Token::KEYWORD);
+    EXPECT_EQ(h.at(2, "1"), Token::NUMBER);
+    EXPECT_EQ(h.at(3, "script"), Token::TAG);
+    EXPECT_EQ(h.at(4, "p"), Token::TAG);
+    EXPECT_EQ(h.at(6, "after"), Token::TEXT);
+}
+
+TEST(SyntaxRegressions, CachesTrustTheRevision)
+{
+    imgit::git::FileDiff diff;
+    diff.revision = imgit::git::new_revision();
+    diff.path = "main.py";
+    imgit::git::DiffHunk hunk;
+    hunk.lines = {{'+', -1, 1, "x = 1"}};
+    diff.hunks.push_back(hunk);
+    imgit::syntax::DiffCache cache;
+    const imgit::syntax::DiffSpans* first = cache.get(diff);
+    ASSERT_NE(first, nullptr);
+    // The same revision is not looked at again (a loaded diff does not change).
+    diff.hunks[0].lines[0].text = "x = 'one'";
+    EXPECT_EQ(cache.get(diff), first);
+    EXPECT_EQ(first->line(diff, 0, &diff.hunks[0].lines[0]).back().token, Token::NUMBER);
+    // A new revision is.
+    diff.revision = imgit::git::new_revision();
+    const imgit::syntax::DiffSpans* second = cache.get(diff);
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(second->line(diff, 0, &diff.hunks[0].lines[0]).back().token, Token::STRING);
+    // A plain result is remembered too.
+    diff.revision = imgit::git::new_revision();
+    diff.path = "notes.txt";
+    EXPECT_EQ(cache.get(diff), nullptr);
+    EXPECT_EQ(cache.get(diff), nullptr);
+
+    std::vector<std::string> lines = {"x = 1"};
+    imgit::syntax::TextCache text;
+    const std::uint64_t revision = imgit::git::new_revision();
+    const LineSpans* spans = text.get("a.py", lines, revision);
+    ASSERT_NE(spans, nullptr);
+    lines[0] = "x = 'one'";
+    EXPECT_EQ(text.get("a.py", lines, revision)->line(0).back().token, Token::NUMBER);
+    EXPECT_EQ(text.get("a.py", lines, imgit::git::new_revision())->line(0).back().token, Token::STRING);
+    EXPECT_EQ(text.get("b.txt", lines, revision), nullptr); // another path is another text
+}

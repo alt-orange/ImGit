@@ -56,6 +56,7 @@ namespace imgit::app
         std::string ours_label, theirs_label; // "Commit <sha6> on <branch>" parts: short sha and branch
         std::string ours_sha, theirs_sha;
         std::vector<std::string> base, ours, theirs;
+        std::uint64_t revision = 0; // git::new_revision() at each load()
         std::vector<MergeChunk> chunks;
         std::vector<int> conflicts; // indices into chunks
         // Per conflict, the picked lines in the order they were picked.

@@ -12,7 +12,7 @@ namespace imgit::syntax
         enum Mode : std::uint8_t
         {
             NONE,
-            DELIM, // inside code.delims[state.delim]; depth: its nesting
+            DELIM, // inside code.delims[state.delim], nested state.nesting deep
             RAW, // a string or comment ending at state.close, no escapes; delim: its Token
             HEREDOC_BODY, // lines up to the one that is state.close; depth 1: that line may be indented
             TEMPLATE_TEXT, // the text of a template literal
@@ -28,7 +28,6 @@ namespace imgit::syntax
         enum Outer : std::uint8_t
         {
             OUTER_NONE,
-            OUTER_TEMPLATE, // inside a template literal's ${ }; depth counts its braces
             OUTER_CONTINUED, // a Dockerfile instruction continued by a backslash
         };
 
@@ -207,34 +206,37 @@ namespace imgit::syntax
             tokenize_range(*language, s.substr(begin, end - begin), fresh, out.at(begin));
         }
 
-        // An embedded language's part of a line, with its own fields of `state` (the region's are kept apart, so an
-        // embedded HTML does not take over the fence it sits in).
+        // An embedded language's part of a line. The region's own fields of `state` are kept apart, so an embedded
+        // HTML does not take over the fence it sits in; that HTML's own <script> / <style> region is the inner one.
         void tokenize_embedded(const Language& language, std::string_view s, std::size_t begin, std::size_t end,
                                State& state, Out& out)
         {
             State inner;
             inner.mode = state.mode;
             inner.delim = state.delim;
+            inner.nesting = state.nesting;
             inner.depth = state.depth;
             inner.outer = state.outer;
             inner.close = std::move(state.close);
+            inner.templates = std::move(state.templates);
+            inner.embedded = state.inner_embedded;
+            inner.end_marker = std::move(state.inner_end_marker);
             tokenize_range(language, s.substr(begin, end - begin), inner, out.at(begin));
             state.mode = inner.mode;
             state.delim = inner.delim;
+            state.nesting = inner.nesting;
             state.depth = inner.depth;
             state.outer = inner.outer;
             state.close = std::move(inner.close);
+            state.templates = std::move(inner.templates);
+            state.inner_embedded = inner.embedded;
+            state.inner_end_marker = std::move(inner.end_marker);
         }
 
+        // The end of an embedded region: nothing of it is left open.
         void leave_embedded(State& state)
         {
-            state.mode = NONE;
-            state.delim = 0;
-            state.depth = 0;
-            state.outer = OUTER_NONE;
-            state.close.clear();
-            state.embedded = nullptr;
-            state.end_marker.clear();
+            state = {};
         }
 
         // ---- the code scanner ----
@@ -433,7 +435,7 @@ namespace imgit::syntax
             {
                 x.st.mode = DELIM;
                 x.st.delim = static_cast<std::uint8_t>(index);
-                x.st.depth = depth;
+                x.st.nesting = depth;
             }
             return npos;
         }
@@ -479,8 +481,7 @@ namespace imgit::syntax
                     x.emit(i, j, Token::STRING);
                     x.emit(j, j + 2, Token::PUNCTUATION);
                     x.st.mode = NONE;
-                    x.st.outer = OUTER_TEMPLATE;
-                    x.st.depth = 1;
+                    x.st.templates.push_back(1);
                     i = j + 2;
                     return true;
                 }
@@ -506,7 +507,7 @@ namespace imgit::syntax
                     return true;
                 }
                 const Delim& d = x.c.delims[st.delim];
-                const std::size_t end = find_close(x, 0, d, st.depth);
+                const std::size_t end = find_close(x, 0, d, st.nesting);
                 if (end == npos)
                 {
                     x.emit(0, s.size(), d.token);
@@ -515,13 +516,13 @@ namespace imgit::syntax
                     if (!continued)
                     {
                         st.mode = NONE;
-                        st.depth = 0;
+                        st.nesting = 0;
                     }
                     return false;
                 }
                 x.emit(0, end, d.token);
                 st.mode = NONE;
-                st.depth = 0;
+                st.nesting = 0;
                 i = end;
                 return true;
             }
@@ -567,9 +568,31 @@ namespace imgit::syntax
         std::size_t open_heredoc(Code& x, std::size_t i)
         {
             const std::string_view s = x.s;
+            const bool php = (x.c.hooks & PHP_TAGS) != 0;
+            // Not the inside of a longer run (the shell's <<< here-string), nor a shift: $(( 1 << n )).
+            if ((i > 0 && s[i - 1] == '<') || (!php && i + 2 < s.size() && s[i + 2] == '<'))
+            {
+                return i;
+            }
+            if ((x.c.hooks & HEREDOC_SPACED) != 0)
+            {
+                int arithmetic = 0;
+                for (std::size_t k = 0; k + 1 < i; ++k)
+                {
+                    if (s[k] == s[k + 1] && (s[k] == '(' || s[k] == ')'))
+                    {
+                        arithmetic += s[k] == '(' ? 1 : -1;
+                        ++k;
+                    }
+                }
+                if (arithmetic > 0)
+                {
+                    return i;
+                }
+            }
             std::size_t j = i + 2;
             bool indented = false;
-            if ((x.c.hooks & PHP_TAGS) != 0)
+            if (php)
             {
                 if (j >= s.size() || s[j] != '<')
                 {
@@ -853,23 +876,18 @@ namespace imgit::syntax
                     ++i;
                     continue;
                 }
-                // The braces of a template literal's ${ }.
-                if (st.outer == OUTER_TEMPLATE && (ch == '{' || ch == '}'))
+                // The braces of the innermost template literal's ${ }: its last } goes back to its text.
+                if (!st.templates.empty() && (ch == '{' || ch == '}'))
                 {
                     x.emit(i, i + 1, Token::PUNCTUATION);
                     ++i;
-                    if (ch == '{')
+                    const int braces = static_cast<unsigned char>(st.templates.back());
+                    if (ch == '{' || braces > 1)
                     {
-                        st.depth = static_cast<std::uint8_t>(std::min(st.depth + 1, 255));
+                        st.templates.back() = static_cast<char>(ch == '{' ? std::min(braces + 1, 255) : braces - 1);
                         continue;
                     }
-                    if (st.depth > 1)
-                    {
-                        --st.depth;
-                        continue;
-                    }
-                    st.outer = OUTER_NONE;
-                    st.depth = 0;
+                    st.templates.pop_back();
                     st.mode = TEMPLATE_TEXT;
                     if (!scan_template(x, i))
                     {
@@ -1282,7 +1300,7 @@ namespace imgit::syntax
             }
             else
             {
-                tokenize_piece(language_by_name(tag.code), s, i, stop, out);
+                tokenize_piece(lang.template_languages[t], s, i, stop, out);
             }
             if (close == npos)
             {
@@ -1322,7 +1340,7 @@ namespace imgit::syntax
                             continue;
                         }
                         out.add(j, inside, Token::PUNCTUATION);
-                        tokenize_piece(language_by_name(tag.code), s, inside, end, out, Token::VARIABLE);
+                        tokenize_piece(lang.template_languages[t], s, inside, end, out, Token::VARIABLE);
                         return end;
                     }
                     out.add(j, inside, tag.token == Token::COMMENT ? Token::COMMENT : Token::PUNCTUATION);
@@ -1798,6 +1816,8 @@ namespace imgit::syntax
         {
             const std::size_t n = s.size();
             const std::size_t indent = skip_blanks(s, 0);
+            // A block scalar's lines are those indented past its key (past the dash of a "- |" item).
+            std::size_t parent = indent;
             std::size_t i = 0;
             if (st.mode == BLOCK_SCALAR)
             {
@@ -1870,6 +1890,7 @@ namespace imgit::syntax
                     }
                     if (colon != npos)
                     {
+                        parent = i;
                         out.add(i, colon, Token::TYPE);
                         out.add(colon, colon + 1, Token::OPERATOR);
                         i = colon + 1;
@@ -1906,7 +1927,7 @@ namespace imgit::syntax
                             out.add(rest, n, Token::COMMENT);
                         }
                         st.mode = BLOCK_SCALAR;
-                        st.depth = static_cast<std::uint8_t>(std::min<std::size_t>(indent, 255));
+                        st.depth = static_cast<std::uint8_t>(std::min<std::size_t>(parent, 255));
                         return;
                     }
                 }
@@ -2104,8 +2125,14 @@ namespace imgit::syntax
             const std::size_t first = skip_blanks(s, 0);
             if (!st.end_marker.empty())
             {
-                // Inside a fenced code block: its closing fence, else the block's language.
-                if (starts_at(s, first, st.end_marker) && blank(s.substr(first + st.end_marker.size())))
+                // Inside a fenced code block: its closing fence (a run of its character at least as long, alone on
+                // the line), else the block's language.
+                std::size_t run = first;
+                while (run < n && s[run] == st.end_marker[0])
+                {
+                    ++run;
+                }
+                if (run - first >= st.end_marker.size() && blank(s.substr(run)))
                 {
                     out.add(first, n, Token::STRING);
                     leave_embedded(st);

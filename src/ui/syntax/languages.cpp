@@ -1058,9 +1058,19 @@ namespace imgit::syntax
                                       by_extension.emplace(word, language);
                                   });
                 }
+                // The template tags' code languages, once every language has its name.
+                for (Language& language : languages)
+                {
+                    for (const TemplateTag& tag : language.markup.templates)
+                    {
+                        const auto found = by_name.find(tag.code);
+                        language.template_languages.push_back(found != by_name.end() ? found->second : nullptr);
+                    }
+                }
             }
 
-            template<class Function> static void for_each_word(std::string_view words, Function function)
+            template<class Function>
+            static void for_each_word(std::string_view words, Function function)
             {
                 std::size_t i = 0;
                 while (i < words.size())

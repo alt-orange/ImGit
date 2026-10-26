@@ -48,11 +48,17 @@ namespace imgit::syntax
     {
         std::uint8_t mode = 0;
         std::uint8_t delim = 0; // the open delimiter (an index into the language's table) or the open token
-        std::uint8_t depth = 0; // nested comments, braces, a block scalar's indent, a tag's kind
-        std::uint8_t outer = 0; // the code's context: inside a template literal's ${ }, a continued instruction
+        std::uint8_t nesting = 0; // how deep the open delimiter is nested in itself: /* /* */ */
+        std::uint8_t depth = 0; // CSS braces, a block scalar's indent, a tag's kind, an indented heredoc
+        std::uint8_t outer = 0; // a Dockerfile instruction continued on the next line
         std::string close; // the text that ends the open construct
+        // The template literals whose ${ } the code is in, innermost last: each one's count of open braces.
+        std::string templates;
         const Language* embedded = nullptr; // the language of a <script> / <style> body or a code fence
         std::string end_marker; // what ends that embedded region; empty outside one
+        // An embedded region inside that one: a <script> in a fence's HTML.
+        const Language* inner_embedded = nullptr;
+        std::string inner_end_marker;
         bool operator==(const State&) const = default;
     };
 
@@ -113,30 +119,35 @@ namespace imgit::syntax
     [[nodiscard]] std::uint64_t fingerprint(const git::FileDiff& diff, bool& within_limits) noexcept;
     [[nodiscard]] std::uint64_t fingerprint(std::span<const std::string> lines, bool& within_limits) noexcept;
 
-    // The highlighting of the diff a view shows, re-tokenized only when the diff's path or text changes. One per
-    // view; get() returns null for plain text (unknown language, binary, over the limits).
+    // The highlighting of the diff a view shows. One per view; get() returns null for plain text (unknown language,
+    // binary, over the limits). A loaded diff is looked at once per revision; one without a revision (0) is
+    // fingerprinted each time and re-tokenized when its path or text changed.
     class DiffCache
     {
     public:
         [[nodiscard]] const DiffSpans* get(const git::FileDiff& diff);
 
     private:
-        bool m_valid = false;
-        std::string m_path;
+        std::uint64_t m_revision = 0; // the diff last looked at
+        bool m_highlighted = false; // whether get() returned m_spans for it
+        bool m_tokenized = false; // m_spans holds the text with m_hash in m_language
         std::uint64_t m_hash = 0;
         const Language* m_language = nullptr;
         DiffSpans m_spans;
     };
 
-    // The same for a whole text (a merge pane): `lines` of the file at `path`.
+    // The same for a whole text (a merge pane): `lines` of the file at `path`, at `revision` (0: fingerprinted).
     class TextCache
     {
     public:
-        [[nodiscard]] const LineSpans* get(std::string_view path, std::span<const std::string> lines);
+        [[nodiscard]] const LineSpans* get(std::string_view path, std::span<const std::string> lines,
+                                           std::uint64_t revision = 0);
 
     private:
-        bool m_valid = false;
+        std::uint64_t m_revision = 0;
         std::string m_path;
+        bool m_highlighted = false;
+        bool m_tokenized = false;
         std::uint64_t m_hash = 0;
         const Language* m_language = nullptr;
         LineSpans m_spans;

@@ -41,6 +41,7 @@ namespace imgit::app
         base = split_lines(base_text);
         ours = split_lines(ours_text);
         theirs = split_lines(theirs_text);
+        revision = git::new_revision();
         const std::string& reference = ours_text.empty() ? theirs_text : ours_text;
         eol = reference.find("\r\n") != std::string::npos ? "\r\n" : "\n";
         final_newline = reference.empty() || reference.back() == '\n';

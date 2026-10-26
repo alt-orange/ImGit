@@ -229,7 +229,7 @@ namespace imgit::ui
             const std::vector<std::string>& lines = a ? tool.ours : tool.theirs;
             static syntax::TextCache syntax_caches[2];
             const syntax::LineSpans* colours =
-                    syntax_highlighting ? syntax_caches[a ? 0 : 1].get(tool.path, lines) : nullptr;
+                    syntax_highlighting ? syntax_caches[a ? 0 : 1].get(tool.path, lines, tool.revision) : nullptr;
             ImGui::SetCursorScreenPos(ImVec2(origin.x, hmax.y));
             ImGui::PushStyleColor(ImGuiCol_ChildBg, p.app_bg0);
             ImGui::BeginChild(a ? "##merge_a" : "##merge_b", ImVec2(size.x, size.y - px(PANE_HEADER_H)),

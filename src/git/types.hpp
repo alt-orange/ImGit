@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <iterator>
 #include <string>
@@ -178,8 +179,16 @@ namespace imgit::git
         std::vector<DiffLine> lines;
     };
 
+    // A number no text loaded before has had (never 0): the views key the work they cache on it.
+    [[nodiscard]] inline std::uint64_t new_revision() noexcept
+    {
+        static std::atomic<std::uint64_t> next{0};
+        return ++next;
+    }
+
     struct FileDiff
     {
+        std::uint64_t revision = 0; // new_revision() when loaded; 0 for one built by hand
         std::string path;
         std::vector<DiffHunk> hunks;
         bool binary = false;

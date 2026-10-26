@@ -6,6 +6,7 @@
 #include <span>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 // The tables behind a language (ui/syntax/languages.cpp) and the scanners that read them (ui/syntax/tokenizer.cpp).
 namespace imgit::syntax
@@ -120,5 +121,6 @@ namespace imgit::syntax
         WordSet types{{}, false};
         WordSet constants{{}, false};
         WordSet builtins{{}, false};
+        std::vector<const Language*> template_languages; // markup.templates' code languages, by index
     };
 } // namespace imgit::syntax
