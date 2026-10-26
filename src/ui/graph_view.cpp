@@ -1762,9 +1762,12 @@ namespace imgit::ui
                 }
                 ImGui::SetCursorScreenPos(ImVec2(x, header_y));
                 ImGui::InvisibleButton((std::string("##zone_header_") + zone_key(type)).c_str(), ImVec2(w, header_h));
-                if (ImGui::IsItemHovered())
+                // cursor: grab over the header cells. IsItemHovered() goes by the rectangle alone, so it would
+                // also say yes over the resize handle at the cell's edge, which was submitted first and owns the
+                // hover: only the cell that owns it shows the hand.
+                if (ImGui::IsItemHovered() && ImGui::GetHoveredID() == ImGui::GetItemID())
                 {
-                    set_drag_cursor(DragCursor::GRAB); // cursor: grab over the header cells
+                    set_drag_cursor(DragCursor::GRAB);
                 }
                 if (ImGui::IsItemActivated() && !g_zone_move.pressed)
                 {
