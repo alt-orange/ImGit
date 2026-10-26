@@ -76,6 +76,15 @@ namespace imgit::git
     {
         std::string name;
         std::string path;
+        std::string url;
+        Sha recorded; // the commit the repository records for it (the index's, else HEAD's); "" when none
+        Sha checked_out; // the commit its working directory has checked out; "" when it is not initialized
+
+        // Checked out at the commit the repository records.
+        [[nodiscard]] bool in_sync() const noexcept
+        {
+            return !checked_out.empty() && checked_out == recorded;
+        }
     };
 
     struct Worktree

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -126,6 +127,8 @@ namespace imgit::app
         RepoState& operator=(const RepoState&) = delete;
 
         git::Repository repo;
+        // The repository this one is a submodule of, while the submodule is open in its tab.
+        std::unique_ptr<RepoState> parent;
         git::History history;
         git::WorkDirStatus status;
         graph::Layout layout;
@@ -271,6 +274,11 @@ namespace imgit::app
             return async.has_value();
         }
         [[nodiscard]] const git::Ref* head_ref() const;
+        // The repository the tab was opened on: this one, or the top of the submodules opened in it.
+        [[nodiscard]] const RepoState& root() const noexcept
+        {
+            return parent != nullptr ? parent->root() : *this;
+        }
         [[nodiscard]] std::vector<const git::Ref*> refs_at(const git::Sha& sha) const;
         [[nodiscard]] const git::Ref* find_ref(const std::string& full_name) const;
         // The commits on HEAD's first-parent chain above `base_sha` (oldest first) for a rebase plan.

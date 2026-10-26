@@ -13,6 +13,7 @@
 #include <imgui_stdlib.h>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace imgit::ui
 {
@@ -1019,13 +1020,102 @@ namespace imgit::ui
         }
     } // namespace
 
-    // The Add Submodule form in a 400px panel sliding out of the left panel over the graph (.panel-slide, 0.25s):
-    // the section icon and the 18px title with a close cross in a 50px header, then the Remote URL and Name/Path
-    // fields under their labels and the Add Submodule button, 20px in.
+    namespace
+    {
+        // A button of the button families with a Font Awesome icon before its label, the two centred.
+        bool icon_label_button(bool (*button)(const char*, ImVec2, bool), const char* id, const char* icon,
+                               const char* label, ImVec2 size, bool enabled = true)
+        {
+            const theme::Palette& p = theme::palette();
+            const bool pressed = button(id, size, enabled);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            const float icon_w = fa_icon_width(icon, px(12.f));
+            const ImVec2 text = text_size(fonts().regular, 13.f, label);
+            const float x = std::round((min.x + max.x - icon_w - px(5.f) - text.x) / 2.f);
+            const float mid = (min.y + max.y) / 2.f;
+            ImVec4 color = enabled && ImGui::IsItemHovered() ? p.text_selected : p.text_normal;
+            if (!enabled)
+            {
+                color = theme::with_alpha(color, color.w * 0.5f);
+            }
+            draw_fa_icon(draw, icon, ImVec2(x + icon_w / 2.f, mid), px(12.f), theme::u32(color));
+            draw_text(draw, fonts().regular, 13.f, ImVec2(x + icon_w + px(5.f), std::round(mid - text.y / 2.f)),
+                      theme::u32(color), label);
+            return pressed;
+        }
+
+        // `text` broken into lines `width` device px wide (at its newlines, then between words).
+        std::vector<std::string> wrap_lines(ImFont* font, float size, const std::string& text, float width)
+        {
+            const float glyph_h = font_px(font, size);
+            std::vector<std::string> lines;
+            std::size_t start = 0;
+            while (start <= text.size())
+            {
+                std::size_t end = text.find('\n', start);
+                if (end == std::string::npos)
+                {
+                    end = text.size();
+                }
+                const char* line = text.c_str() + start;
+                const char* line_end = text.c_str() + end;
+                if (line == line_end)
+                {
+                    lines.emplace_back();
+                }
+                while (line < line_end)
+                {
+                    const char* wrap = font->CalcWordWrapPosition(glyph_h, line, line_end, width);
+                    if (wrap == line)
+                    {
+                        wrap = line + 1;
+                    }
+                    lines.emplace_back(line, wrap);
+                    line = wrap;
+                    while (line < line_end && *line == ' ')
+                    {
+                        ++line;
+                    }
+                }
+                start = end + 1;
+            }
+            return lines;
+        }
+
+        // The commit a submodule has checked out, read from the submodule itself (cached by folder and sha).
+        const git::Commit* submodule_commit(const std::string& folder, const git::Sha& sha)
+        {
+            static std::string cached_key;
+            static std::optional<git::Commit> cached;
+            const std::string key = folder + '\n' + sha;
+            if (key != cached_key)
+            {
+                cached_key = key;
+                cached.reset();
+                if (auto repo = git::Repository::open(folder); repo)
+                {
+                    if (auto commit = repo->load_commit(sha); commit)
+                    {
+                        cached = std::move(*commit);
+                    }
+                }
+            }
+            return cached ? &*cached : nullptr;
+        }
+    } // namespace
+
+    // The panel sliding out of the left panel over the graph (.panel-slide, 0.25s): the section icon and the 18px
+    // title with a close cross in a 50px header, then the form, 20px in.
+    // Add Submodule (400px): the Remote URL and Name/Path fields under their labels and the Add Submodule button.
+    // Edit Submodule (600px): the Remote URL (editable) and the Path, the Edit this submodule button, whether the
+    // submodule is checked out at the commit the repository records, the commit it has checked out, and the
+    // Open / Delete this submodule buttons.
     void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height)
     {
         app::Dialog& d = app.dialog;
-        const bool open = d.kind == app::Dialog::Kind::ADD_SUBMODULE
+        const bool open = (d.kind == app::Dialog::Kind::ADD_SUBMODULE || d.kind == app::Dialog::Kind::EDIT_SUBMODULE)
                           && (d.workdir.empty() ? app.active() == &state : d.workdir == state.repo.workdir());
         const float t = smooth("##slide_panel", open, 0.25f);
         if (t <= 0.f)
@@ -1033,15 +1123,33 @@ namespace imgit::ui
             return;
         }
         // The form keeps its last values for the way out, once the dialog is gone.
+        static bool editing = false;
         static std::string url;
         static std::string path;
+        static std::string original_url;
         if (open)
         {
+            editing = d.kind == app::Dialog::Kind::EDIT_SUBMODULE;
             url = d.text_a;
             path = d.text_b;
+            if (d.just_opened)
+            {
+                original_url = d.text_a;
+            }
+        }
+        const git::Submodule* submodule = nullptr;
+        if (editing)
+        {
+            for (const git::Submodule& entry : state.history.submodules)
+            {
+                if (entry.path == path)
+                {
+                    submodule = &entry;
+                }
+            }
         }
         const theme::Palette& p = theme::palette();
-        const float width = px(400.f);
+        const float width = px(editing ? 600.f : 400.f);
         const float shadow = px(10.f);
         const float visible = std::round(width * t);
         // The child holds the panel's shown part and its shadow over the graph.
@@ -1069,7 +1177,7 @@ namespace imgit::ui
         {
             const float text_h = text_size(fonts().regular, 18.f, "A").y;
             draw_text(draw, fonts().regular, 18.f, ImVec2(x + pad + px(27.f), origin.y + px(25.f) - text_h / 2.f),
-                      theme::u32(p.text_selected), "Add Submodule");
+                      theme::u32(p.text_selected), editing ? "Edit Submodule" : "Add Submodule");
         }
         bool close = false;
         {
@@ -1103,7 +1211,8 @@ namespace imgit::ui
         {
             draw_text(draw, fonts().regular, 14.f, ImVec2(x + pad, origin.y + y), theme::u32(p.text_normal), text);
         };
-        const auto field = [&](const char* id, std::string& value, const char* hint, float y, bool focus)
+        const auto field = [&](const char* id, std::string& value, const char* hint, float y, bool focus,
+                               ImGuiInputTextFlags flags = 0)
         {
             ImGui::SetCursorScreenPos(ImVec2(x + pad, origin.y + y));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
@@ -1113,7 +1222,7 @@ namespace imgit::ui
             {
                 ImGui::SetKeyboardFocusHere();
             }
-            const bool entered = input_text(id, value, hint, ImGuiInputTextFlags_EnterReturnsTrue, field_w);
+            const bool entered = input_text(id, value, hint, ImGuiInputTextFlags_EnterReturnsTrue | flags, field_w);
             ImGui::PopFont();
             ImGui::PopStyleVar();
             return entered;
@@ -1127,14 +1236,160 @@ namespace imgit::ui
         {
             d.just_opened = false;
         }
+        bool submit = false;
         label("Remote URL", 58.f);
-        bool submit = field("##submodule_url", url, "https://github.com/owner/repo.git", 82.f, focus);
-        label("Name/Path", 132.f);
-        submit |= field("##submodule_path", path, name.empty() ? "path/in/this/repository" : name.c_str(), 156.f,
-                        false);
+        if (editing)
+        {
+            submit |= field("##submodule_url", url, "https://github.com/owner/repo.git", 82.f, false);
+            label("Path", 132.f);
+            // The path is the submodule's identity here: shown, not edited.
+            ImGui::PushStyleColor(ImGuiCol_Text, p.text_disabled);
+            (void)field("##submodule_path", path, "", 156.f, false, ImGuiInputTextFlags_ReadOnly);
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            submit |= field("##submodule_url", url, "https://github.com/owner/repo.git", 82.f, focus);
+            label("Name/Path", 132.f);
+            submit |= field("##submodule_path", path, name.empty() ? "path/in/this/repository" : name.c_str(), 156.f,
+                            false);
+        }
         ImGui::PopStyleColor(4);
         ImGui::SetCursorScreenPos(ImVec2(x + pad, origin.y + px(206.f)));
-        submit |= success_button("Add Submodule", ImVec2(px(112.f), px(28.f)), !url.empty());
+        const bool url_changed = !url.empty() && url != original_url;
+        if (editing)
+        {
+            submit |= success_button("Edit this submodule", ImVec2(px(132.f), px(28.f)), url_changed);
+            submit = submit && url_changed;
+        }
+        else
+        {
+            submit |= success_button("Add Submodule", ImVec2(px(112.f), px(28.f)), !url.empty());
+            submit = submit && !url.empty();
+        }
+
+        // Edit Submodule: its state and revision, and what can be done with it.
+        bool open_submodule = false;
+        bool delete_submodule = false;
+        std::vector<std::string> sync_args; // initialize / update it to the recorded commit
+        if (editing && submodule != nullptr)
+        {
+            const auto divider = [&](float y)
+            {
+                draw->AddRectFilled(ImVec2(x + pad, y), ImVec2(x + pad + field_w, y + 1.f), theme::u32(p.panel_border));
+            };
+            float y = origin.y + px(254.f);
+            divider(y);
+            y += px(24.f);
+
+            // The status line: an icon and a sentence centred under the divider.
+            const bool initialized = !submodule->checked_out.empty();
+            const bool in_sync = submodule->in_sync();
+            const std::string sentence =
+                    !initialized ? "This submodule is not initialized."
+                    : in_sync    ? "This submodule is in-sync with your repository (" + state.repo.name() + ")."
+                                 : "This submodule is out of sync with your repository (" + state.repo.name() + ").";
+            const char* status_icon = in_sync ? "fas:check" : "fas:exclamation-triangle";
+            const ImVec4 status_color = in_sync ? p.green : p.yellow;
+            {
+                const float icon_w = fa_icon_width(status_icon, px(13.f));
+                const ImVec2 text = text_size(fonts().regular, 14.f, sentence.c_str());
+                const float sx = std::round(x + pad + (field_w - icon_w - px(5.f) - text.x) / 2.f);
+                draw_fa_icon(draw, status_icon, ImVec2(sx + icon_w / 2.f, y), px(13.f), theme::u32(status_color));
+                draw_text(draw, fonts().regular, 14.f, ImVec2(sx + icon_w + px(5.f), std::round(y - text.y / 2.f)),
+                          theme::u32(status_color), sentence.c_str());
+            }
+            y += px(18.f);
+            if (!in_sync)
+            {
+                // Checks out the commit the repository records (cloning the submodule first when needed).
+                const char* action = initialized ? "Update this submodule" : "Initialize this submodule";
+                const float button_w = text_size(fonts().regular, 13.f, action).x + px(24.f);
+                ImGui::SetCursorScreenPos(ImVec2(std::round(x + pad + (field_w - button_w) / 2.f), y + px(4.f)));
+                if (success_button(action, ImVec2(button_w, px(28.f)), !state.busy()))
+                {
+                    sync_args = initialized ? std::vector<std::string>{"submodule", "update", "--", path}
+                                            : std::vector<std::string>{"submodule", "update", "--init", "--", path};
+                }
+                y += px(44.f);
+            }
+
+            // Current Revision: the commit checked out in the submodule.
+            const std::filesystem::path folder = std::filesystem::path(state.repo.workdir()) / path;
+            const git::Commit* commit =
+                    initialized ? submodule_commit(folder.string(), submodule->checked_out) : nullptr;
+            if (initialized)
+            {
+                y += px(6.f);
+                const ImVec2 caption = text_size(fonts().regular, 14.f, "Current Revision");
+                draw_text(draw, fonts().regular, 14.f, ImVec2(x + pad, y), theme::u32(p.text_normal),
+                          "Current Revision");
+                if (commit != nullptr)
+                {
+                    const std::string date = "(" + format_date_time(commit->time) + ")";
+                    draw_text(draw, fonts().regular, 14.f, ImVec2(x + pad + caption.x + px(10.f), y),
+                              theme::u32(p.text_secondary), date.c_str());
+                }
+                y += caption.y + px(6.f);
+
+                // The box: "Commit" and "Commit Message" in bold monospace, their values beside them.
+                constexpr float MONO = 12.f;
+                const float line_h = px(19.f);
+                const float value_x = x + pad + px(125.f);
+                const float value_w = x + pad + field_w - px(10.f) - value_x;
+                std::string message = commit != nullptr ? commit->summary : std::string{};
+                if (commit != nullptr && !commit->body.empty())
+                {
+                    message += "\n\n" + commit->body;
+                }
+                while (!message.empty() && (message.back() == '\n' || message.back() == ' '))
+                {
+                    message.pop_back();
+                }
+                std::vector<std::string> lines = wrap_lines(fonts().mono, MONO, message, value_w);
+                constexpr std::size_t MAX_LINES = 12;
+                if (lines.size() > MAX_LINES)
+                {
+                    lines.resize(MAX_LINES);
+                    lines.back() += "...";
+                }
+                const float rows = 1.f + static_cast<float>(std::max<std::size_t>(lines.size(), 1));
+                const ImVec2 box_min(x + pad, y);
+                const ImVec2 box_max(x + pad + field_w, y + px(16.f) + line_h * rows);
+                draw->AddRectFilled(box_min, box_max, theme::u32(p.panel_bg0));
+                const float mono_h = text_size(fonts().mono, MONO, "A").y;
+                float row_y = y + px(8.f) + (line_h - mono_h) / 2.f;
+                const auto row_label = [&](const char* text)
+                {
+                    draw_text(draw, fonts().mono, MONO, ImVec2(box_min.x + px(5.f), row_y), theme::u32(p.text_normal),
+                              text);
+                };
+                row_label("Commit");
+                draw_text(draw, fonts().mono, MONO, ImVec2(value_x, row_y), theme::u32(p.text_selected),
+                          submodule->checked_out.c_str());
+                row_y += line_h;
+                row_label("Commit Message");
+                for (const std::string& line : lines)
+                {
+                    draw_text(draw, fonts().mono, MONO, ImVec2(value_x, row_y), theme::u32(p.text_selected),
+                              line.c_str());
+                    row_y += line_h;
+                }
+                y = box_max.y + px(11.f);
+                divider(y);
+                y += px(21.f);
+            }
+
+            // Open / Delete this submodule, side by side.
+            const float button_w = (field_w - px(10.f)) / 2.f;
+            ImGui::SetCursorScreenPos(ImVec2(x + pad, y));
+            open_submodule = icon_label_button(primary_button, "##open_submodule", "far:folder-open",
+                                               "Open this submodule", ImVec2(button_w, px(32.f)), initialized);
+            ImGui::SetCursorScreenPos(ImVec2(x + pad + button_w + px(10.f), y));
+            delete_submodule = icon_label_button(danger_button, "##delete_submodule", "far:trash-alt",
+                                                 "Delete this submodule", ImVec2(button_w, px(32.f)), !state.busy());
+        }
+
         if (open)
         {
             d.text_a = url;
@@ -1143,14 +1398,61 @@ namespace imgit::ui
             {
                 close = true;
             }
-            if (submit && !url.empty())
+            // The submodule is gone (deleted, or a checkout without it): nothing left to edit.
+            if (editing && submodule == nullptr)
+            {
+                close = true;
+            }
+            if (submit && editing)
+            {
+                app.run_git_cli(state, "Edit submodule", {"submodule", "set-url", "--", path, url});
+                close = true;
+            }
+            else if (submit)
             {
                 app.run_git_cli(state, "Add submodule", {"submodule", "add", "--", url, path.empty() ? name : path});
                 close = true;
             }
+            if (!sync_args.empty())
+            {
+                app.run_git_cli(state, sync_args[2] == "--init" ? "Initialize submodule" : "Update submodule",
+                                std::move(sync_args));
+            }
             if (close)
             {
                 d.close();
+            }
+            else if (delete_submodule)
+            {
+                // `git rm` drops the folder and its .gitmodules entry once deinit has emptied it.
+                const std::string target = path;
+                d.open(app::Dialog::Kind::CONFIRM);
+                d.workdir = state.repo.workdir();
+                d.title = "Delete submodule";
+                d.message = "Delete the submodule '" + target
+                            + "'? Its folder and its entry in .gitmodules are removed and the removal is staged.";
+                d.confirm_label = "Delete";
+                d.danger = true;
+                d.on_confirm = [&app, workdir = state.repo.workdir(), target]
+                {
+                    for (const std::unique_ptr<app::RepoState>& tab : app.tabs)
+                    {
+                        if (tab->repo.workdir() == workdir)
+                        {
+                            app.run_git_cli_sequence(
+                                    *tab, "Delete submodule",
+                                    {{"submodule", "deinit", "-f", "--", target}, {"rm", "-f", "--", target}});
+                            break;
+                        }
+                    }
+                };
+            }
+            else if (open_submodule)
+            {
+                const std::string target = path;
+                d.close();
+                // Last: the tab shows the submodule from the next frame on (this state stays alive behind it).
+                app.open_submodule(state, target);
             }
         }
         ImGui::EndChild();
@@ -1197,8 +1499,8 @@ namespace imgit::ui
             d.close();
             return;
         }
-        // Adding a submodule is the panel sliding out of the left panel (draw_slide_panel).
-        if (d.kind == app::Dialog::Kind::ADD_SUBMODULE)
+        // Adding or editing a submodule is the panel sliding out of the left panel (draw_slide_panel).
+        if (d.kind == app::Dialog::Kind::ADD_SUBMODULE || d.kind == app::Dialog::Kind::EDIT_SUBMODULE)
         {
             return;
         }
@@ -2091,6 +2393,7 @@ namespace imgit::ui
         case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
         case app::Dialog::Kind::PUSH_NEW_BRANCH:
         case app::Dialog::Kind::ADD_SUBMODULE: // the slide panel
+        case app::Dialog::Kind::EDIT_SUBMODULE:
             break;
         }
         ImGui::PopStyleVar();

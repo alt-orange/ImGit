@@ -461,7 +461,8 @@ namespace imgit::app
         const std::string workdir = repo->workdir();
         for (std::size_t i = 0; i < tabs.size(); ++i)
         {
-            if (tabs[i]->repo.workdir() == workdir)
+            // A tab showing one of its submodules still holds the repository.
+            if (tabs[i]->repo.workdir() == workdir || tabs[i]->root().repo.workdir() == workdir)
             {
                 active_tab = static_cast<int>(i);
                 return;
@@ -503,6 +504,61 @@ namespace imgit::app
         open_repository(*picked);
     }
 
+    void Application::open_submodule(RepoState& state, const std::string& path)
+    {
+        const auto tab = std::ranges::find_if(tabs,
+                                              [&](const std::unique_ptr<RepoState>& t)
+                                              {
+                                                  return t.get() == &state;
+                                              });
+        if (tab == tabs.end())
+        {
+            return;
+        }
+        // A submodule that is not checked out has no .git of its own: opening its folder would find the parent.
+        const std::filesystem::path folder = std::filesystem::path(state.repo.workdir()) / path;
+        if (std::error_code ec; !std::filesystem::exists(folder / ".git", ec))
+        {
+            toasts.push(ToastKind::ERROR, "Could not open submodule", "'" + path + "' is not initialized.");
+            return;
+        }
+        auto repo = git::Repository::open(folder.string());
+        if (!repo)
+        {
+            toasts.push(ToastKind::ERROR, "Could not open submodule", repo.error().message);
+            return;
+        }
+        auto submodule = std::make_unique<RepoState>(std::move(*repo));
+        submodule->commit_limit = static_cast<std::size_t>(settings.initial_commits);
+        submodule->push_after_commit = settings.push_after_commit;
+        submodule->parent = std::move(*tab);
+        *tab = std::move(submodule);
+    }
+
+    void Application::close_submodule(RepoState& state)
+    {
+        const auto tab = std::ranges::find_if(tabs,
+                                              [&](const std::unique_ptr<RepoState>& t)
+                                              {
+                                                  return t.get() == &state;
+                                              });
+        if (tab == tabs.end() || state.parent == nullptr)
+        {
+            return;
+        }
+        // A dialog opened for the submodule goes with it.
+        if (dialog.kind != Dialog::Kind::NONE && dialog.workdir == state.repo.workdir())
+        {
+            dialog.close();
+        }
+        std::unique_ptr<RepoState> submodule = std::move(*tab);
+        *tab = std::move(submodule->parent);
+        // The submodule may have moved meanwhile (a checkout, a commit).
+        (*tab)->refresh();
+        // The submodule's state goes at the end of the frame, once nothing drawing it refers to it.
+        m_closed_submodules.push_back(std::move(submodule));
+    }
+
     void Application::close_tab(int index)
     {
         if (index < 0 || index >= static_cast<int>(tabs.size()))
@@ -510,7 +566,7 @@ namespace imgit::app
             return;
         }
         const std::string workdir = tabs[static_cast<std::size_t>(index)]->repo.workdir();
-        closed_tabs.push_back(workdir);
+        closed_tabs.push_back(tabs[static_cast<std::size_t>(index)]->root().repo.workdir());
         // A dialog opened for this repository (its on_confirm may hold the tab) goes with it.
         if (dialog.kind != Dialog::Kind::NONE && dialog.workdir == workdir)
         {
@@ -1344,6 +1400,7 @@ namespace imgit::app
 
     void Application::draw_frame()
     {
+        m_closed_submodules.clear();
         apply_profile_switch();
         poll_async();
 
@@ -2164,7 +2221,7 @@ namespace imgit::app
         std::string text;
         for (const auto& tab : tabs)
         {
-            text += tab->repo.workdir() + '\n';
+            text += tab->root().repo.workdir() + '\n';
         }
         text += "#active=" + std::to_string(active_tab) + '\n';
         (void)write_text_file(config_path("tabs.txt"), text);
