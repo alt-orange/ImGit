@@ -270,6 +270,10 @@ namespace imgit::app
         float base_dpi_scale = 1.f;
 
         [[nodiscard]] RepoState* active() noexcept;
+        // Every repository state: each tab's, and the repositories an open submodule waits in front of.
+        [[nodiscard]] std::vector<RepoState*> repo_states() const;
+        // The state of the repository at `workdir`, shown or behind an open submodule; nullptr when none.
+        [[nodiscard]] RepoState* find_repo_state(const std::string& workdir) const;
         void open_repository(const std::string& path);
         // Open Repo: a native folder picker starting at the last opened repository; a folder that is not
         // a repository gets an "Open Failed" toast.
@@ -278,7 +282,8 @@ namespace imgit::app
         // Opens the submodule at `path` (relative to the tab's working directory) in the tab of `state`, which
         // waits behind it until close_submodule.
         void open_submodule(RepoState& state, const std::string& path);
-        // Back from the submodule shown in `state`'s tab to the repository it belongs to.
+        // Back from the submodule shown in `state`'s tab to the repository it belongs to (not while it runs a git
+        // command).
         void close_submodule(RepoState& state);
         // Moves the repository tab `from` to `to` (a drag along the tabs bar), keeping the active tab active.
         void move_tab(int from, int to);

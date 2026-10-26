@@ -295,7 +295,7 @@ namespace imgit::ui
         std::vector<std::string> open_paths;
         for (const auto& tab : app.tabs)
         {
-            open_paths.push_back(tab->repo.workdir());
+            open_paths.push_back(tab->root().repo.workdir()); // the repository, not a submodule open in its tab
         }
         std::vector<std::string> recent = app.recent_repos;
         std::vector<std::string> favorite_paths(favorites.begin(), favorites.end());
@@ -646,7 +646,7 @@ namespace imgit::ui
         {
             for (std::size_t i = 0; i < app.tabs.size(); ++i)
             {
-                if (normalized(app.tabs[i]->repo.workdir()) == normalized(*close_request))
+                if (normalized(app.tabs[i]->root().repo.workdir()) == normalized(*close_request))
                 {
                     app.close_tab(static_cast<int>(i));
                     break;

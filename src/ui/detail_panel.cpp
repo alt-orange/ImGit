@@ -1122,36 +1122,14 @@ namespace imgit::ui
             const float line_h = css_line_height(size);
             const float glyph_h = font_px(font, size);
             float y = pos.y;
-            std::size_t start = 0;
-            while (start <= text.size())
+            for (const std::string_view line : wrap_text(font, size, text, width))
             {
-                std::size_t end = text.find('\n', start);
-                if (end == std::string::npos)
+                if (!line.empty()) // a blank line's view has no data, and AddText reads a null end to the NUL
                 {
-                    end = text.size();
+                    draw->AddText(font, glyph_h, ImVec2(pos.x, y + (line_h - glyph_h) / 2.f), color, line.data(),
+                                  line.data() + line.size());
                 }
-                const char* line = text.c_str() + start;
-                const char* line_end = text.c_str() + end;
-                if (line == line_end)
-                {
-                    y += line_h;
-                }
-                while (line < line_end)
-                {
-                    const char* wrap = font->CalcWordWrapPosition(glyph_h, line, line_end, width);
-                    if (wrap == line)
-                    {
-                        wrap = line + 1;
-                    }
-                    draw->AddText(font, glyph_h, ImVec2(pos.x, y + (line_h - glyph_h) / 2.f), color, line, wrap);
-                    y += line_h;
-                    line = wrap;
-                    while (line < line_end && *line == ' ')
-                    {
-                        ++line;
-                    }
-                }
-                start = end + 1;
+                y += line_h;
             }
             return y - pos.y;
         }

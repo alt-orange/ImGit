@@ -85,6 +85,7 @@ namespace imgit::git
         {
             return !checked_out.empty() && checked_out == recorded;
         }
+        [[nodiscard]] bool operator==(const Submodule&) const = default;
     };
 
     struct Worktree

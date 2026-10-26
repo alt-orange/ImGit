@@ -61,9 +61,8 @@ namespace imgit::git
         [[nodiscard]] Result<WorkDirStatus> load_status() const;
         [[nodiscard]] Result<RepoSummary> summary() const;
         [[nodiscard]] RepoState state() const noexcept;
-        // A fingerprint of HEAD, every reference, the stash list and the submodules: it changes whenever a ref moves,
-        // appears or disappears (a commit, checkout, fetch, tag or stash made outside ImGit) or a submodule moves,
-        // without walking the history.
+        // A fingerprint of HEAD, every reference and the stash list: it changes whenever a ref moves, appears or
+        // disappears (a commit, checkout, fetch, tag or stash made outside ImGit) without walking the history.
         [[nodiscard]] Result<std::uint64_t> refs_signature() const;
         [[nodiscard]] Result<std::vector<FileChange>> commit_changes(const Sha& sha) const;
         // Fills additions / deletions of `changes` (matched by path) from the given diff source.
@@ -83,6 +82,8 @@ namespace imgit::git
         [[nodiscard]] Result<Blame> blame_file(const std::string& path, const Sha& sha = {}) const;
         [[nodiscard]] Result<Author> default_author() const;
         [[nodiscard]] Result<std::string> head_commit_message() const;
+        // The submodules as load_history lists them (each one's own HEAD is read, so it opens each one).
+        [[nodiscard]] std::vector<Submodule> submodules() const;
         // One commit, read without the history walk (a submodule's checked-out commit).
         [[nodiscard]] Result<Commit> load_commit(const Sha& sha) const;
 

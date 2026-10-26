@@ -417,7 +417,7 @@ namespace imgit::app
         if (profile.guid == profiles.current().guid)
         {
             apply_profile_identity(profiles.keep_git_config());
-            for (auto& tab : tabs)
+            for (RepoState* tab : repo_states())
             {
                 tab->refresh();
             }
@@ -441,6 +441,31 @@ namespace imgit::app
             return nullptr;
         }
         return tabs[static_cast<std::size_t>(active_tab)].get();
+    }
+
+    std::vector<RepoState*> Application::repo_states() const
+    {
+        std::vector<RepoState*> states;
+        for (const std::unique_ptr<RepoState>& tab : tabs)
+        {
+            for (RepoState* state = tab.get(); state != nullptr; state = state->parent.get())
+            {
+                states.push_back(state);
+            }
+        }
+        return states;
+    }
+
+    RepoState* Application::find_repo_state(const std::string& workdir) const
+    {
+        for (RepoState* state : repo_states())
+        {
+            if (state->repo.workdir() == workdir)
+            {
+                return state;
+            }
+        }
+        return nullptr;
     }
 
     void Application::open_repository(const std::string& raw_path)
@@ -542,7 +567,8 @@ namespace imgit::app
                                               {
                                                   return t.get() == &state;
                                               });
-        if (tab == tabs.end() || state.parent == nullptr)
+        // A command running in the submodule would finish with nowhere to report to.
+        if (tab == tabs.end() || state.parent == nullptr || state.busy())
         {
             return;
         }
@@ -660,7 +686,7 @@ namespace imgit::app
         style.ScaleAllSizes(scale);
         style.FontScaleDpi = base_dpi_scale;
         style.FontScaleMain = settings.zoom;
-        for (auto& tab : tabs)
+        for (RepoState* tab : repo_states())
         {
             tab->commit_limit = static_cast<std::size_t>(settings.initial_commits);
         }
@@ -755,13 +781,9 @@ namespace imgit::app
         args.insert(args.begin() + 1, "--force-with-lease");
         dialog.on_confirm = [this, workdir = state.repo.workdir(), args = std::move(args)]
         {
-            for (auto& tab : tabs)
+            if (RepoState* tab = find_repo_state(workdir); tab != nullptr)
             {
-                if (tab->repo.workdir() == workdir)
-                {
-                    run_git_cli(*tab, "Push", args);
-                    break;
-                }
+                run_git_cli(*tab, "Push", args);
             }
         };
         return true;
@@ -1001,7 +1023,8 @@ namespace imgit::app
 
     void Application::poll_async()
     {
-        for (auto& tab : tabs)
+        // A repository behind an open submodule still hears back from the command it started.
+        for (RepoState* tab : repo_states())
         {
             if (!tab->async || tab->async->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             {
@@ -1037,13 +1060,9 @@ namespace imgit::app
                                           [this, workdir = tab->repo.workdir(), title,
                                            args = args](git::cli::Credential credential)
                                           {
-                                              for (auto& other : tabs)
+                                              if (RepoState* other = find_repo_state(workdir); other != nullptr)
                                               {
-                                                  if (other->repo.workdir() == workdir)
-                                                  {
-                                                      run_git_cli(*other, title, args, false, std::move(credential));
-                                                      break;
-                                                  }
+                                                  run_git_cli(*other, title, args, false, std::move(credential));
                                               }
                                           }))
             {

@@ -258,7 +258,7 @@ namespace imgit::ui
                 changed |= checkbox("Push after each commit", &s.push_after_commit);
                 if (changed)
                 {
-                    for (auto& tab : app.tabs)
+                    for (app::RepoState* tab : app.repo_states())
                     {
                         tab->push_after_commit = s.push_after_commit;
                     }
@@ -976,14 +976,8 @@ namespace imgit::ui
             {
                 return app.active();
             }
-            for (const std::unique_ptr<app::RepoState>& tab : app.tabs)
-            {
-                if (tab->repo.workdir() == d.workdir)
-                {
-                    return tab.get();
-                }
-            }
-            return nullptr;
+            // Also a repository behind an open submodule: a command it ran may ask (force push?) on its return.
+            return app.find_repo_state(d.workdir);
         }
 
         // Undo for a history rewrite: a hard reset to the previous tip, with the uncommitted changes present at
@@ -1044,44 +1038,6 @@ namespace imgit::ui
             draw_text(draw, fonts().regular, 13.f, ImVec2(x + icon_w + px(5.f), std::round(mid - text.y / 2.f)),
                       theme::u32(color), label);
             return pressed;
-        }
-
-        // `text` broken into lines `width` device px wide (at its newlines, then between words).
-        std::vector<std::string> wrap_lines(ImFont* font, float size, const std::string& text, float width)
-        {
-            const float glyph_h = font_px(font, size);
-            std::vector<std::string> lines;
-            std::size_t start = 0;
-            while (start <= text.size())
-            {
-                std::size_t end = text.find('\n', start);
-                if (end == std::string::npos)
-                {
-                    end = text.size();
-                }
-                const char* line = text.c_str() + start;
-                const char* line_end = text.c_str() + end;
-                if (line == line_end)
-                {
-                    lines.emplace_back();
-                }
-                while (line < line_end)
-                {
-                    const char* wrap = font->CalcWordWrapPosition(glyph_h, line, line_end, width);
-                    if (wrap == line)
-                    {
-                        wrap = line + 1;
-                    }
-                    lines.emplace_back(line, wrap);
-                    line = wrap;
-                    while (line < line_end && *line == ' ')
-                    {
-                        ++line;
-                    }
-                }
-                start = end + 1;
-            }
-            return lines;
         }
 
         // The commit a submodule has checked out, read from the submodule itself (cached by folder and sha).
@@ -1367,7 +1323,11 @@ namespace imgit::ui
                 {
                     message.pop_back();
                 }
-                std::vector<std::string> lines = wrap_lines(fonts().mono, MONO, message, value_w);
+                std::vector<std::string> lines;
+                for (const std::string_view line : wrap_text(fonts().mono, MONO, message, value_w))
+                {
+                    lines.emplace_back(line);
+                }
                 constexpr std::size_t MAX_LINES = 12;
                 if (lines.size() > MAX_LINES)
                 {
@@ -1404,8 +1364,10 @@ namespace imgit::ui
             // Open / Delete this submodule, side by side.
             const float button_w = (field_w - px(10.f)) / 2.f;
             ImGui::SetCursorScreenPos(ImVec2(x + pad, y));
-            open_submodule = icon_label_button(primary_button, "##open_submodule", "far:folder-open",
-                                               "Open this submodule", ImVec2(button_w, px(32.f)), initialized);
+            // Not while a command runs here: this repository goes behind the submodule.
+            open_submodule =
+                    icon_label_button(primary_button, "##open_submodule", "far:folder-open", "Open this submodule",
+                                      ImVec2(button_w, px(32.f)), initialized && !state.busy());
             ImGui::SetCursorScreenPos(ImVec2(x + pad + button_w + px(10.f), y));
             delete_submodule = icon_label_button(danger_button, "##delete_submodule", "far:trash-alt",
                                                  "Delete this submodule", ImVec2(button_w, px(32.f)), !state.busy());
@@ -1446,31 +1408,44 @@ namespace imgit::ui
             {
                 // `git rm` drops the folder and its .gitmodules entry once deinit has emptied it, and stages the
                 // whole .gitmodules; it refuses while .gitmodules has unstaged changes, so those are staged first.
+                // A submodule only in .gitmodules is known to neither: its section is dropped from the file, and
+                // its folder (if any) stays.
                 const std::string target = path;
-                std::vector<std::vector<std::string>> runs = {{"submodule", "deinit", "-f", "--", target}};
+                const bool recorded = !submodule->recorded.empty();
+                std::vector<std::vector<std::string>> runs;
+                if (recorded)
+                {
+                    runs.push_back({"submodule", "deinit", "-f", "--", target});
+                }
+                else
+                {
+                    runs.push_back({"config", "-f", ".gitmodules", "--remove-section", "submodule." + submodule->name});
+                }
                 if (std::error_code ec;
                     std::filesystem::exists(std::filesystem::path(state.repo.workdir()) / ".gitmodules", ec))
                 {
                     runs.push_back({"add", "--", ".gitmodules"});
                 }
-                runs.push_back({"rm", "-f", "--", target});
+                if (recorded)
+                {
+                    runs.push_back({"rm", "-f", "--", target});
+                }
                 d.open(app::Dialog::Kind::CONFIRM);
                 d.workdir = state.repo.workdir();
                 d.title = "Delete submodule";
-                d.message = "Delete the submodule '" + target
-                            + "'? Its folder and its entry in .gitmodules are removed, and the removal is staged "
-                              "with .gitmodules.";
+                d.message = recorded ? "Delete the submodule '" + target
+                                               + "'? Its folder and its entry in .gitmodules are removed, and the "
+                                                 "removal is staged with .gitmodules."
+                                     : "Delete the submodule '" + target
+                                               + "'? Its entry in .gitmodules is removed and staged; its folder is "
+                                                 "left as it is.";
                 d.confirm_label = "Delete";
                 d.danger = true;
                 d.on_confirm = [&app, workdir = state.repo.workdir(), runs = std::move(runs)]
                 {
-                    for (const std::unique_ptr<app::RepoState>& tab : app.tabs)
+                    if (app::RepoState* tab = app.find_repo_state(workdir); tab != nullptr)
                     {
-                        if (tab->repo.workdir() == workdir)
-                        {
-                            app.run_git_cli_sequence(*tab, "Delete submodule", runs);
-                            break;
-                        }
+                        app.run_git_cli_sequence(*tab, "Delete submodule", runs);
                     }
                 };
             }

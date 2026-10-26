@@ -551,11 +551,6 @@ namespace imgit::git
             };
             IMGIT_TRY(git_stash_foreach(repo, callback, &add), "could not list stashes");
         }
-        // Submodules: a checkout inside one moves no ref here, yet changes whether it is in sync.
-        for (const Submodule& submodule : read_submodules(repo))
-        {
-            add("submodule " + submodule.path, submodule.url + ' ' + submodule.recorded + ' ' + submodule.checked_out);
-        }
         return signature;
     }
 
@@ -1519,6 +1514,11 @@ namespace imgit::git
             return std::unexpected(sig.error());
         }
         return Author{sig->get()->name, sig->get()->email};
+    }
+
+    std::vector<Submodule> Repository::submodules() const
+    {
+        return read_submodules(m_repo.get());
     }
 
     Result<Commit> Repository::load_commit(const Sha& sha) const

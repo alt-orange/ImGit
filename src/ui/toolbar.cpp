@@ -11,6 +11,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <string>
+#include <vector>
 
 namespace imgit::ui
 {
@@ -236,8 +237,9 @@ namespace imgit::ui
             return ImGui::IsItemClicked(ImGuiMouseButton_Left);
         }
 
-        // The open submodule's crumb: the "submodule" caption over a cross and its name. The cross closes it.
-        bool submodule_crumb(ImDrawList* draw, const std::string& name, float height)
+        // An open submodule's crumb: the "submodule" caption over a cross and its name. The cross closes it, unless
+        // `can_close` is false (dimmed: a command still runs in it).
+        bool submodule_crumb(ImDrawList* draw, const std::string& name, float height, bool can_close)
         {
             const theme::Palette& p = theme::palette();
             const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -259,19 +261,23 @@ namespace imgit::ui
             }
             if (cross_hovered)
             {
-                styled_tooltip(cross_min, cross_max, "Close submodule");
+                styled_tooltip(cross_min, cross_max,
+                               can_close ? "Close submodule" : "Wait for the running command to finish");
             }
             const float caption_ascent = font_px(fonts().regular, 10.f) * 2189.f / 2789.f;
             draw_text(draw, fonts().regular, 10.f, ImVec2(pos.x + px(20.f), pos.y + px(12.7f) - caption_ascent),
                       theme::u32(p.text_secondary), "submodule");
+            const ImVec4 cross_color = !can_close      ? p.text_disabled
+                                       : cross_hovered ? p.text_selected
+                                                       : p.text_secondary;
             draw_fa_icon(draw, "fas:times", ImVec2(cross_min.x + cross_w / 2.f, pos.y + px(30.f)), px(12.f),
-                         theme::u32(cross_hovered ? p.text_selected : p.text_secondary));
+                         theme::u32(cross_color));
             const float value_ascent = font_px(fonts().regular, VALUE_FONT) * 2189.f / 2789.f;
             draw_text_ellipsis(draw, fonts().regular, VALUE_FONT,
                                ImVec2(cross_max.x + gap, pos.y + px(34.4f) - value_ascent), value_w + 1.f,
                                theme::u32(p.text_selected), name.c_str());
             ImGui::SameLine(0.f, 0.f);
-            return cross_hovered && ImGui::IsItemClicked(ImGuiMouseButton_Left);
+            return can_close && cross_hovered && ImGui::IsItemClicked(ImGuiMouseButton_Left);
         }
 
         // ImGit shows its LFS button only for repositories that use Git LFS.
@@ -359,7 +365,8 @@ namespace imgit::ui
 
         // Breadcrumb: repository > branch. Their dropdowns open under the bar (1px over its border), 250px wide:
         // a search box, then the recent repositories / local branches.
-        // An open submodule shows its repository first, then "submodule" with a cross that goes back to it.
+        // An open submodule shows the repository the tab was opened on first, then a "submodule" crumb per level
+        // with a cross that goes back to the level above it.
         static std::string crumb_search;
         const float dropdown_y = origin.y + height - 1.f;
         const auto chevron = [&]
@@ -372,8 +379,12 @@ namespace imgit::ui
         };
         ImGui::SetCursorScreenPos(origin);
         const float repo_x = ImGui::GetCursorScreenPos().x;
-        const app::RepoState& crumb_repo = state.parent != nullptr ? *state.parent : state;
-        if (breadcrumb(draw, "##repo_crumb", "repository", crumb_repo.repo.name(), item_h, true,
+        std::vector<app::RepoState*> levels; // the tab's repository first, this one last
+        for (app::RepoState* level = &state; level != nullptr; level = level->parent.get())
+        {
+            levels.insert(levels.begin(), level);
+        }
+        if (breadcrumb(draw, "##repo_crumb", "repository", levels.front()->repo.name(), item_h, true,
                        ImGui::IsPopupOpen("##repo_crumb_menu")))
         {
             crumb_search.clear();
@@ -430,13 +441,26 @@ namespace imgit::ui
             }
         }
         chevron();
-        if (state.parent != nullptr)
+        for (std::size_t i = 1; i < levels.size(); ++i)
         {
-            if (submodule_crumb(draw, state.repo.name(), item_h))
+            // Closing a level closes the ones open in it too: not while one of them runs a command, whose result
+            // would have nowhere to go.
+            bool busy = false;
+            for (std::size_t j = i; j < levels.size(); ++j)
             {
-                // Drawn on from the submodule's state this frame; close_submodule keeps it until the next.
-                app.close_submodule(state);
+                busy |= levels[j]->busy();
             }
+            ImGui::PushID(static_cast<int>(i));
+            if (submodule_crumb(draw, levels[i]->repo.name(), item_h, !busy))
+            {
+                // Innermost first, each the tab's state when closed. This frame goes on drawing `state`;
+                // close_submodule keeps the closed ones until the next.
+                for (std::size_t j = levels.size(); j-- > i;)
+                {
+                    app.close_submodule(*levels[j]);
+                }
+            }
+            ImGui::PopID();
             chevron();
         }
         std::string branch_text = state.history.detached ? "detached HEAD" : state.history.head_branch;

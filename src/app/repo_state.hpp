@@ -235,6 +235,9 @@ namespace imgit::app
             git::Result<git::WorkDirStatus> status;
             git::RepoState operation_state = git::RepoState::NONE;
             std::optional<std::uint64_t> refs_signature{}; // Repository::refs_signature; none: it could not be read
+            // Read by the periodic poll only (a refresh loads them with the history): a checkout inside a submodule
+            // moves no ref here, yet changes whether it is in sync.
+            std::optional<std::vector<git::Submodule>> submodules{};
         };
 
         void refresh(); // history + status + layout
