@@ -511,8 +511,8 @@ namespace imgit::ui
                 const float right_reach = header ? px(4.f) : px(5.f);
                 const std::string id = std::string(header ? "##zone_header_resize_" : "##zone_resize_")
                                        + zone_key(g_zones.zones[static_cast<std::size_t>(i)].type);
-                const ResizeHandle handle = resize_handle(id.c_str(), ImVec2(right - left_reach, top),
-                                                          ImVec2(right + right_reach, bottom));
+                const ResizeHandle handle =
+                        resize_handle(id.c_str(), ImVec2(right - left_reach, top), ImVec2(right + right_reach, bottom));
                 if (handle.activated)
                 {
                     g_zone_drag = {i, g_zones.zones[static_cast<std::size_t>(i)].current, ImGui::GetIO().MousePos.x};
