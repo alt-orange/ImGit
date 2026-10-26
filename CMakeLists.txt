@@ -8,12 +8,14 @@
 # (imgit on Linux, ImGit.app on macOS) runs on its own.
 #
 #   imgit_tests  the unit tests (test/, GoogleTest), with -DIMGIT_BUILD_TESTS=ON; then `ctest --test-dir <build>`
+#                (-DIMGIT_VALGRIND=ON also runs them under Valgrind: `ctest -L valgrind`, or the linux-valgrind preset)
 
 cmake_minimum_required(VERSION 3.25)
 
 # The tests need GoogleTest: vcpkg installs it with the manifest's "tests" feature, which must be chosen before
 # project().
 option(IMGIT_BUILD_TESTS "Build the unit tests (test/)" OFF)
+option(IMGIT_VALGRIND "Also run the unit tests under Valgrind memcheck (ctest -L valgrind)" OFF)
 if(IMGIT_BUILD_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()

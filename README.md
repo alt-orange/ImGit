@@ -156,7 +156,7 @@ downloaded `ImGit.app` is only ad-hoc signed, so the first launch needs a right-
 **CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
 every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, vcpkg at the manifest's baseline, its binary
 cache in the Actions cache) and takes a screenshot as a smoke test under Xvfb on Linux and, best effort, on the macOS
-runner. Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
+runner; it also runs the unit tests on Linux under Valgrind memcheck (the `linux-valgrind` presets). Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
 `imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt`
 to it; run it by hand with a tag to rebuild an existing release's packages. The release executables for Windows and
 Linux are compressed with UPX (macOS has no working UPX target); some antivirus scanners flag UPX-packed files, and

@@ -1,0 +1,3 @@
+# Valgrind suppressions for imgit_tests.valgrind (test/CMakeLists.txt): reports from third-party code that are
+# not ImGit's to fix. Generate an entry with `valgrind --gen-suppressions=all build/<preset>/test/imgit_tests`,
+# and say above it which library it belongs to and why it is harmless.

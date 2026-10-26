@@ -20,3 +20,75 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+
+  # The unit tests on Linux, plain and under Valgrind memcheck (the linux-valgrind presets): an invalid access, a
+  # read of uninitialised memory or a definite / indirect leak fails the run.
+  valgrind:
+    name: Unit tests (Valgrind)
+    runs-on: ubuntu-24.04
+    env:
+      VCPKG_DISABLE_METRICS: 1
+    steps:
+      - uses: actions/checkout@v5
+
+      # the same compiler as build.yml, so the vcpkg ports' ABI hashes match its binary cache
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build g++-14 pkg-config \
+            libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
+            valgrind
+          printf 'CC=gcc-14\nCXX=g++-14\n' >> "$GITHUB_ENV"
+
+      - name: Check out vcpkg
+        run: |
+          {
+            echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg"
+            echo "VCPKG_CACHE_DIR=$RUNNER_TEMP/vcpkg-cache"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$RUNNER_TEMP/vcpkg-cache,readwrite"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/vcpkg-cache"
+          baseline=$(grep -o '"builtin-baseline": *"[0-9a-f]*"' vcpkg.json | grep -o '[0-9a-f]\{40\}')
+          git clone --quiet --filter=blob:none https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --quiet "$baseline"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+
+      # Falls back on build.yml's x64-linux cache for the app's ports; saves its own entry when it built GoogleTest.
+      - name: Restore the vcpkg binary cache
+        id: vcpkg-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_CACHE_DIR }}
+          key: vcpkg-x64-linux-tests-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**', 'vcpkg-triplets/**') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-x64-linux-tests-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlays/**', 'vcpkg-triplets/**') }}-
+            vcpkg-x64-linux-tests-
+            vcpkg-x64-linux-
+
+      - name: Count cached ports
+        id: cached-before
+        run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure (installs the vcpkg dependencies)
+        run: cmake --preset linux-valgrind
+
+      - name: Check for newly built ports
+        id: cached-after
+        run: echo "count=$(find "$VCPKG_CACHE_DIR" -type f | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Save the vcpkg binary cache
+        if: steps.cached-after.outputs.count != steps.cached-before.outputs.count
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_CACHE_DIR }}
+          key: ${{ steps.vcpkg-restore.outputs.cache-primary-key }}
+
+      - name: Build the unit tests
+        run: cmake --build --preset linux-valgrind
+
+      - name: Unit tests
+        run: ctest --test-dir build/linux-valgrind -LE valgrind --output-on-failure
+
+      - name: Unit tests under Valgrind
+        run: ctest --preset linux-valgrind
