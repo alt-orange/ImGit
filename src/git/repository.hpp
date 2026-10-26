@@ -74,6 +74,12 @@ namespace imgit::git
                                                         int context_lines = 3, bool ignore_whitespace = false) const;
         [[nodiscard]] Result<FileDiff> workdir_file_diff(const std::string& path, bool staged,
                                                          int context_lines = 3, bool ignore_whitespace = false) const;
+        // The commits from `from` (HEAD when empty) that changed `path`, newest first, following the file across
+        // renames; `max_commits` caps the walk (has_more when it stopped there).
+        [[nodiscard]] Result<FileHistory> file_history(const std::string& path, const Sha& from = {},
+                                                       std::size_t max_commits = 20000) const;
+        // The blame of `path` as of `sha` (HEAD when empty): which commit last changed each line.
+        [[nodiscard]] Result<Blame> blame_file(const std::string& path, const Sha& sha = {}) const;
         [[nodiscard]] Result<Author> default_author() const;
         [[nodiscard]] Result<std::string> head_commit_message() const;
 

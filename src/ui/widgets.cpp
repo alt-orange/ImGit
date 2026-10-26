@@ -903,6 +903,14 @@ namespace imgit::ui
         return buffer;
     }
 
+    std::string format_date(std::int64_t unix_seconds)
+    {
+        const std::tm tm = local_time(unix_seconds);
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%d/%d/%d", tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900);
+        return buffer;
+    }
+
     std::string format_date_long(std::int64_t unix_seconds)
     {
         const std::tm tm = local_time(unix_seconds);

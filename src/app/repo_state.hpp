@@ -90,6 +90,30 @@ namespace imgit::app
         }
     };
 
+    // The File History view (over the whole tab): the commits that touched one file, the file as the selected one
+    // left it (with the blame of its lines) or that commit's diff of it.
+    struct FileHistoryView
+    {
+        std::string path; // as asked for, at `from`
+        git::Sha from; // the commit the walk starts at, "" for HEAD
+        git::FileHistory history;
+        std::string history_error;
+        bool history_loading = true;
+        int selected = -1; // index into history.entries
+        git::Sha selected_sha; // the entry to select once the history is loaded ("" for the newest)
+        bool file_view = true; // File View | Diff View
+        bool blame = false; // the blame columns (commit and date) next to the lines
+        std::optional<git::FileDiff> diff; // the selected entry's diff of the file
+        std::string diff_error;
+        std::optional<git::Blame> blame_data; // of the selected entry
+        git::Sha blame_sha; // the entry blame_data (or the blame job) is for
+        std::string blame_error;
+        bool blame_loading = false;
+        std::optional<std::size_t> scroll_to; // list row to bring into view
+        std::future<git::Result<git::FileHistory>> history_job;
+        std::future<git::Result<git::Blame>> blame_job;
+    };
+
     // Everything one repository tab holds: the loaded history, its graph layout, selection and panel state.
     class RepoState
     {
@@ -139,6 +163,7 @@ namespace imgit::app
         std::string commit_files_error;
         std::optional<DiffTarget> diff_target;
         std::optional<MergeTool> merge_tool; // a conflicted file being resolved
+        std::optional<FileHistoryView> file_history; // open over the tab
         std::optional<git::FileDiff> diff;
         // The diff editor modes: the hunk list, the whole file inline (default) or side by side; the
         // file view shows the file itself.
@@ -222,6 +247,16 @@ namespace imgit::app
         // Opens the merge tool on a conflicted file; false (with `error`) when its sides cannot be read.
         bool open_merge_tool(const std::string& path, std::string& error);
         void reload_diff();
+        // Opens the File History view of `path` from `from` (HEAD when empty), with the entry of `select` (the newest
+        // when empty) selected and the blame columns on when `blame`.
+        void open_file_history(std::string path, git::Sha from, git::Sha select, bool blame);
+        void close_file_history();
+        // Selects an entry of the file history: loads its diff and starts its blame.
+        void select_file_history_entry(int index);
+        // Reloads the selected entry's diff (after a mode change).
+        void reload_file_history_diff();
+        // Collects the file history's finished background jobs; call every frame the view is shown.
+        void poll_file_history();
         void run_search();
         void select_search_match(int direction);
         void push_undo(UndoEntry entry);

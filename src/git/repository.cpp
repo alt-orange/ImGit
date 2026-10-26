@@ -7,6 +7,7 @@
 #include <git2.h>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -254,6 +255,27 @@ namespace imgit::git
                 result.hunks.push_back(std::move(out));
             }
             return result;
+        }
+
+        Commit read_commit(git_commit* commit, const Sha& sha)
+        {
+            Commit out;
+            out.sha = sha;
+            const unsigned parent_count = git_commit_parentcount(commit);
+            out.parents.reserve(parent_count);
+            for (unsigned i = 0; i < parent_count; ++i)
+            {
+                out.parents.push_back(oid_str(git_commit_parent_id(commit, i)));
+            }
+            const git_signature* author = git_commit_author(commit);
+            out.author.name = author->name != nullptr ? author->name : "";
+            out.author.email = author->email != nullptr ? author->email : "";
+            out.time = static_cast<std::int64_t>(git_commit_time(commit));
+            out.author_time = static_cast<std::int64_t>(author->when.time);
+            out.summary = git_commit_summary(commit) != nullptr ? git_commit_summary(commit) : "";
+            out.body = git_commit_body(commit) != nullptr ? git_commit_body(commit) : "";
+            out.type = parent_count > 1 ? NodeType::MERGE : NodeType::COMMIT;
+            return out;
         }
 
         Result<TreeHandle> commit_tree(const git_commit* commit)
@@ -760,27 +782,6 @@ namespace imgit::git
             }
         }
 
-        const auto read_commit = [](git_commit* commit, const Sha& sha)
-        {
-            Commit out;
-            out.sha = sha;
-            const unsigned parent_count = git_commit_parentcount(commit);
-            out.parents.reserve(parent_count);
-            for (unsigned i = 0; i < parent_count; ++i)
-            {
-                out.parents.push_back(oid_str(git_commit_parent_id(commit, i)));
-            }
-            const git_signature* author = git_commit_author(commit);
-            out.author.name = author->name != nullptr ? author->name : "";
-            out.author.email = author->email != nullptr ? author->email : "";
-            out.time = static_cast<std::int64_t>(git_commit_time(commit));
-            out.author_time = static_cast<std::int64_t>(author->when.time);
-            out.summary = git_commit_summary(commit) != nullptr ? git_commit_summary(commit) : "";
-            out.body = git_commit_body(commit) != nullptr ? git_commit_body(commit) : "";
-            out.type = parent_count > 1 ? NodeType::MERGE : NodeType::COMMIT;
-            return out;
-        };
-
         // A stash commit's other parents (its index and untracked-files commits) are never rows.
         std::unordered_set<Sha> stash_internals;
         std::unordered_map<Sha, const Ref*> stash_by_sha;
@@ -1260,6 +1261,225 @@ namespace imgit::git
             IMGIT_TRY(git_diff_index_to_workdir(diff.out(), repo, index, &opts), "could not diff working directory");
         }
         return diff_to_file_diff(diff, 0, path);
+    }
+
+    Result<FileHistory> Repository::file_history(const std::string& path, const Sha& from,
+                                                 std::size_t max_commits) const
+    {
+        git_repository* repo = m_repo.get();
+        FileHistory result;
+        git_oid start;
+        if (from.empty())
+        {
+            auto head = head_commit(repo);
+            if (!head)
+            {
+                return std::unexpected(head.error());
+            }
+            if (head->get() == nullptr)
+            {
+                return result; // an unborn branch has no history
+            }
+            start = *git_commit_id(*head);
+        }
+        else
+        {
+            auto oid = parse_oid(from);
+            if (!oid)
+            {
+                return std::unexpected(oid.error());
+            }
+            start = *oid;
+        }
+        RevwalkHandle walk;
+        IMGIT_TRY(git_revwalk_new(walk.out(), repo), "could not create revision walker");
+        git_revwalk_sorting(walk, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
+        IMGIT_TRY(git_revwalk_push(walk, &start), "could not start the walk");
+
+        // The id of the blob (or tree) `tracked` names in `tree`, none when the tree has no such path.
+        const auto entry_id = [](git_tree* tree, const std::string& tracked) -> std::optional<git_oid>
+        {
+            TreeEntryHandle entry;
+            if (git_tree_entry_bypath(entry.out(), tree, tracked.c_str()) < 0)
+            {
+                git_error_clear();
+                return std::nullopt;
+            }
+            return *git_tree_entry_id(entry);
+        };
+        const auto same_entry = [](const std::optional<git_oid>& a, const std::optional<git_oid>& b)
+        {
+            if (!a || !b)
+            {
+                return !a && !b;
+            }
+            return git_oid_equal(&*a, &*b) != 0;
+        };
+
+        // The path followed back through renames: once a commit is found to have renamed the file, the older
+        // commits are searched for its previous name.
+        std::string tracked = path;
+        git_oid oid;
+        std::size_t walked = 0;
+        while (git_revwalk_next(&oid, walk) == 0)
+        {
+            if (walked >= max_commits)
+            {
+                result.has_more = true;
+                break;
+            }
+            ++walked;
+            CommitHandle commit;
+            if (git_commit_lookup(commit.out(), repo, &oid) < 0)
+            {
+                continue;
+            }
+            auto tree = commit_tree(commit);
+            if (!tree)
+            {
+                continue;
+            }
+            const std::optional<git_oid> own = entry_id(*tree, tracked);
+            const unsigned parent_count = git_commit_parentcount(commit);
+            if (parent_count == 0)
+            {
+                if (own)
+                {
+                    result.entries.push_back({read_commit(commit, oid_str(&oid)), FileStatus::ADDED, tracked, {}});
+                }
+                continue;
+            }
+            // Git's history simplification: a commit that leaves the file as one of its parents had it did not
+            // change it (a merge taking one side's version).
+            bool treesame = false;
+            std::optional<git_oid> first_parent_entry;
+            TreeHandle first_parent_tree;
+            for (unsigned i = 0; i < parent_count && !treesame; ++i)
+            {
+                CommitHandle parent;
+                TreeHandle parent_tree;
+                if (git_commit_parent(parent.out(), commit, i) < 0 || git_commit_tree(parent_tree.out(), parent) < 0)
+                {
+                    git_error_clear();
+                    continue;
+                }
+                const std::optional<git_oid> theirs = entry_id(parent_tree, tracked);
+                treesame = same_entry(own, theirs);
+                if (i == 0)
+                {
+                    first_parent_entry = theirs;
+                    first_parent_tree = std::move(parent_tree);
+                }
+            }
+            if (treesame)
+            {
+                continue;
+            }
+            FileHistoryEntry entry;
+            entry.commit = read_commit(commit, oid_str(&oid));
+            entry.path = tracked;
+            if (!own)
+            {
+                entry.status = FileStatus::DELETED;
+            }
+            else if (first_parent_entry || first_parent_tree.get() == nullptr)
+            {
+                entry.status = FileStatus::MODIFIED;
+            }
+            else
+            {
+                // New over the first parent: a rename when a file of the parent's went away with its content.
+                entry.status = FileStatus::ADDED;
+                git_diff_options opts;
+                git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+                DiffHandle diff;
+                if (git_diff_tree_to_tree(diff.out(), repo, first_parent_tree, *tree, &opts) == 0)
+                {
+                    git_diff_find_options find;
+                    git_diff_find_options_init(&find, GIT_DIFF_FIND_OPTIONS_VERSION);
+                    find.flags = GIT_DIFF_FIND_RENAMES;
+                    if (git_diff_find_similar(diff, &find) == 0)
+                    {
+                        const std::size_t count = git_diff_num_deltas(diff);
+                        for (std::size_t i = 0; i < count; ++i)
+                        {
+                            const git_diff_delta* delta = git_diff_get_delta(diff, i);
+                            if (delta->status == GIT_DELTA_RENAMED && delta->new_file.path != nullptr
+                                && tracked == delta->new_file.path && delta->old_file.path != nullptr)
+                            {
+                                entry.status = FileStatus::RENAMED;
+                                entry.old_path = delta->old_file.path;
+                                tracked = entry.old_path;
+                                break;
+                            }
+                        }
+                    }
+                }
+                git_error_clear();
+            }
+            result.entries.push_back(std::move(entry));
+        }
+        return result;
+    }
+
+    Result<Blame> Repository::blame_file(const std::string& path, const Sha& sha) const
+    {
+        git_repository* repo = m_repo.get();
+        git_blame_options opts;
+        git_blame_options_init(&opts, GIT_BLAME_OPTIONS_VERSION);
+        if (!sha.empty())
+        {
+            auto oid = parse_oid(sha);
+            if (!oid)
+            {
+                return std::unexpected(oid.error());
+            }
+            opts.newest_commit = *oid;
+        }
+        Handle<git_blame, git_blame_free> blame;
+        IMGIT_TRY(git_blame_file(blame.out(), repo, path.c_str(), &opts), "could not blame file");
+        Blame result;
+        // The commits' summaries, read once each.
+        std::unordered_map<Sha, Commit> commits;
+        const std::size_t count = git_blame_get_hunk_count(blame);
+        result.hunks.reserve(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const git_blame_hunk* hunk = git_blame_get_hunk_byindex(blame, static_cast<std::uint32_t>(i));
+            if (hunk == nullptr)
+            {
+                continue;
+            }
+            BlameHunk out;
+            out.start_line = static_cast<int>(hunk->final_start_line_number);
+            out.line_count = static_cast<int>(hunk->lines_in_hunk);
+            out.sha = oid_str(&hunk->final_commit_id);
+            out.orig_path = hunk->orig_path != nullptr ? hunk->orig_path : path;
+            out.orig_start_line = static_cast<int>(hunk->orig_start_line_number);
+            auto known = commits.find(out.sha);
+            if (known == commits.end())
+            {
+                Commit commit;
+                CommitHandle handle;
+                if (git_commit_lookup(handle.out(), repo, &hunk->final_commit_id) == 0)
+                {
+                    commit = read_commit(handle, out.sha);
+                }
+                git_error_clear();
+                known = commits.emplace(out.sha, std::move(commit)).first;
+            }
+            out.author = known->second.author;
+            out.time = known->second.author_time;
+            out.summary = known->second.summary;
+            if (hunk->final_signature != nullptr)
+            {
+                out.author.name = hunk->final_signature->name != nullptr ? hunk->final_signature->name : "";
+                out.author.email = hunk->final_signature->email != nullptr ? hunk->final_signature->email : "";
+                out.time = static_cast<std::int64_t>(hunk->final_signature->when.time);
+            }
+            result.hunks.push_back(std::move(out));
+        }
+        return result;
     }
 
     Result<Author> Repository::default_author() const

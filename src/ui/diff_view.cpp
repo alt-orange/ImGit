@@ -1,10 +1,12 @@
 #include "app/application.hpp"
 #include "app/theme.hpp"
+#include "git/repository.hpp"
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <imgui.h>
 #include <string>
 #include <vector>
@@ -23,6 +25,16 @@ namespace imgit::ui
         constexpr float TEXT_X = 76.f; // after the 10px +/- sign column
         constexpr float DIFF_RULER_W = 30.f; // .diffViewport: the original / modified overview rulers, 15px each
         constexpr float DECORATIONS_RULER_W = 14.f;
+        // The file view's blame gutter: the avatar column before the numbers, then (with the columns on) the
+        // commit's summary and date, then the 2px bar in the commit's colour before the text.
+        constexpr float BLAME_AVATAR_X = 14.f; // the avatar's centre
+        constexpr float BLAME_AVATAR_DIAMETER = 14.f;
+        constexpr float BLAME_NUMBERS_RIGHT = 61.f;
+        constexpr float BLAME_TEXT_X = 78.f;
+        constexpr float BLAME_SUMMARY_X = 71.f;
+        constexpr float BLAME_SUMMARY_W = 210.f;
+        constexpr float BLAME_DATE_X = 289.f;
+        constexpr float BLAME_COLUMNS_TEXT_X = 378.f;
 
         const ImVec4& INSERT_BG = theme::palette().added_line; // the current theme's, by reference
         const ImVec4& DELETE_BG = theme::palette().deleted_line;
@@ -224,6 +236,280 @@ namespace imgit::ui
             draw->PopClipRect();
         }
     } // namespace
+
+    int sha_color_index(const git::Sha& sha)
+    {
+        unsigned hash = 0;
+        for (const unsigned char c : sha)
+        {
+            hash = hash * 31u + c;
+        }
+        return static_cast<int>(hash % static_cast<unsigned>(theme::GRAPH_COLOR_COUNT));
+    }
+
+    bool view_toggle_button(const char* id, const char* label, const char* icon, ImVec2 pos, bool checked,
+                            const char* tip)
+    {
+        return toggle_button(id, label, icon, pos, checked, tip);
+    }
+
+    float view_toggle_width(const char* label, const char* icon)
+    {
+        return toggle_width(label, icon);
+    }
+
+    const git::BlameHunk* draw_diff_editor(const git::FileDiff* diff_ptr, const std::string& error, ImVec2 editor_min,
+                                           ImVec2 editor_max, const DiffEditorOptions& options)
+    {
+        const theme::Palette& p = theme::palette();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const bool split = options.mode == app::RepoState::DiffMode::SPLIT && !options.file_view;
+        if (!error.empty() || diff_ptr == nullptr || diff_ptr->binary || diff_ptr->hunks.empty())
+        {
+            const char* message =
+                    !error.empty()
+                            ? error.c_str()
+                            : (diff_ptr == nullptr ? "Loading..." : (diff_ptr->binary ? "Binary file" : "No Changes"));
+            draw_text(draw, fonts().regular, 14.f, ImVec2(editor_min.x, css_text_y(14.f, editor_min.y, false)),
+                      theme::u32(error.empty() ? p.text_normal : p.red), message);
+            return nullptr;
+        }
+        const git::FileDiff& diff = *diff_ptr;
+        const std::vector<Row> rows = build_rows(diff, options.mode, options.file_view);
+        const float line_h = px(LINE_H);
+        const float rulers_w = px(DIFF_RULER_W);
+        const float content_right = editor_max.x - rulers_w;
+        // The file view with a blame gutter: the avatar column, the numbers, the commit columns, the bar, the text.
+        const bool gutter = options.file_view && options.blame_gutter;
+        const float text_offset = gutter ? (options.blame_columns ? BLAME_COLUMNS_TEXT_X : BLAME_TEXT_X)
+                                         : (options.file_view ? 43.f : TEXT_X);
+        ImGui::SetCursorScreenPos(editor_min);
+        ImGui::BeginChild(options.id, ImVec2(content_right - editor_min.x, editor_max.y - editor_min.y),
+                          ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+        ImDrawList* body = ImGui::GetWindowDrawList();
+        const float view_h = ImGui::GetWindowHeight();
+        const float scroll_y = ImGui::GetScrollY();
+        const bool window_hovered = ImGui::IsWindowHovered();
+        // Change navigation: the first changed row above / below the top of the view.
+        if (options.scroll_prev || options.scroll_next)
+        {
+            const int top_row = static_cast<int>(scroll_y / line_h);
+            int target_row = -1;
+            for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+            {
+                const Row& row = rows[static_cast<std::size_t>(i)];
+                const bool changed = (row.left != nullptr && row.left->origin != ' ')
+                                     || (row.right != nullptr && row.right->origin != ' ');
+                const bool starts = changed
+                                    && (i == 0
+                                        || !((rows[static_cast<std::size_t>(i - 1)].left != nullptr
+                                              && rows[static_cast<std::size_t>(i - 1)].left->origin != ' ')
+                                             || (rows[static_cast<std::size_t>(i - 1)].right != nullptr
+                                                 && rows[static_cast<std::size_t>(i - 1)].right->origin != ' ')));
+                if (!starts)
+                {
+                    continue;
+                }
+                if (options.scroll_next && i > top_row)
+                {
+                    target_row = i;
+                    break;
+                }
+                if (options.scroll_prev && i < top_row)
+                {
+                    target_row = i;
+                }
+            }
+            if (target_row >= 0)
+            {
+                ImGui::SetScrollY(static_cast<float>(target_row) * line_h);
+            }
+        }
+        int new_cursor = 1;
+        for (const Row& row : rows)
+        {
+            if (row.left != nullptr && row.left->origin == '+')
+            {
+                new_cursor = row.left->new_lineno;
+                break;
+            }
+            if (row.right != nullptr && row.right->origin == '+')
+            {
+                new_cursor = row.right->new_lineno;
+                break;
+            }
+        }
+        const float half = (content_right - editor_min.x) / 2.f;
+        const float base_x = ImGui::GetCursorScreenPos().x;
+        float max_text = 0.f;
+        const git::BlameHunk* hovered_hunk = nullptr;
+        const git::BlameHunk* clicked_hunk = nullptr;
+        ImVec2 hovered_min, hovered_max;
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(rows.size()), line_h);
+        while (clipper.Step())
+        {
+            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+            {
+                const Row& row = rows[static_cast<std::size_t>(i)];
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                const float right = std::max(content_right, base_x + max_text + px(text_offset + 40.f));
+                if (row.hunk_header)
+                {
+                    body->AddRectFilled(ImVec2(base_x, pos.y), ImVec2(right, pos.y + line_h),
+                                        theme::u32(p.hunk_header));
+                    mono_text(body, base_x + px(TEXT_X), pos.y, theme::u32(p.text_secondary),
+                              diff.hunks[row.hunk].header.c_str());
+                }
+                else if (gutter)
+                {
+                    const int lineno = row.left->new_lineno;
+                    const git::BlameHunk* hunk =
+                            options.blame != nullptr && lineno > 0 ? options.blame->hunk_at(lineno) : nullptr;
+                    const float text_x = base_x + px(text_offset);
+                    if (hunk != nullptr)
+                    {
+                        const ImVec4 color = options.blame_color ? options.blame_color(hunk->sha)
+                                                                 : theme::graph_color(sha_color_index(hunk->sha));
+                        const bool first = lineno == hunk->start_line;
+                        if (first)
+                        {
+                            draw_avatar(body, ImVec2(base_x + px(BLAME_AVATAR_X), pos.y + line_h / 2.f),
+                                        px(BLAME_AVATAR_DIAMETER), hunk->author);
+                        }
+                        if (options.blame_columns && first)
+                        {
+                            const float y = css_text_y(12.f, pos.y + px(2.f), true);
+                            draw_text_ellipsis(body, fonts().mono, 12.f, ImVec2(base_x + px(BLAME_SUMMARY_X), y),
+                                               px(BLAME_SUMMARY_W), theme::u32(p.text_normal), hunk->summary.c_str());
+                            draw_text(body, fonts().mono, 12.f, ImVec2(base_x + px(BLAME_DATE_X), y),
+                                      theme::u32(p.text_normal), format_date(hunk->time).c_str());
+                        }
+                        body->AddRectFilled(ImVec2(text_x - px(7.f), pos.y), ImVec2(text_x - px(5.f), pos.y + line_h),
+                                            theme::u32(color));
+                        const ImVec2 hit_min(base_x, pos.y);
+                        const ImVec2 hit_max(text_x - px(5.f), pos.y + line_h);
+                        if (window_hovered && ImGui::IsMouseHoveringRect(hit_min, hit_max))
+                        {
+                            hovered_hunk = hunk;
+                            hovered_min = hit_min;
+                            hovered_max = hit_max;
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                            {
+                                clicked_hunk = hunk;
+                            }
+                        }
+                    }
+                    mono_number(body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, lineno);
+                    mono_text(body, text_x, pos.y, EDITOR_TEXT, row.left->text.c_str());
+                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
+                }
+                else if (options.file_view)
+                {
+                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, row.left->new_lineno);
+                    mono_text(body, base_x + px(43.f), pos.y, EDITOR_TEXT, row.left->text.c_str());
+                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
+                }
+                else if (split)
+                {
+                    // Each side: 33px numbers, the sign column, the text; the missing side is hatched.
+                    for (int side = 0; side < 2; ++side)
+                    {
+                        const git::DiffLine* line = side == 0 ? row.left : row.right;
+                        const float x0 = base_x + (side == 0 ? 0.f : half);
+                        const float x1 = side == 0 ? base_x + half : right;
+                        if (line == nullptr)
+                        {
+                            diagonal_fill(body, ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h));
+                            continue;
+                        }
+                        if (line->origin != ' ')
+                        {
+                            body->AddRectFilled(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h),
+                                                theme::u32(line->origin == '+' ? INSERT_BG : DELETE_BG));
+                            mono_text(body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
+                                      line->origin == '+' ? "+" : "-");
+                        }
+                        mono_number(body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
+                                    side == 0 ? line->old_lineno : line->new_lineno);
+                        body->PushClipRect(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h), true);
+                        mono_text(body, x0 + px(43.f), pos.y, EDITOR_TEXT, line->text.c_str());
+                        body->PopClipRect();
+                    }
+                }
+                else
+                {
+                    const git::DiffLine& line = *row.left;
+                    if (line.origin != ' ')
+                    {
+                        body->AddRectFilled(ImVec2(base_x + px(TEXT_X), pos.y), ImVec2(right, pos.y + line_h),
+                                            theme::u32(line.origin == '+' ? INSERT_BG : DELETE_BG));
+                        // codicon diff-insert / diff-remove in the 10px sign column.
+                        const float cx = std::floor(base_x + px(NEW_NUMBERS_RIGHT + 5.f));
+                        const float cy = std::floor(pos.y + line_h / 2.f);
+                        const ImU32 sign = theme::u32(p.text_normal);
+                        body->AddRectFilled(ImVec2(cx - px(5.f), cy), ImVec2(cx + px(5.f), cy + 1.f), sign);
+                        if (line.origin == '+')
+                        {
+                            body->AddRectFilled(ImVec2(cx, cy - px(5.f)), ImVec2(cx + 1.f, cy + px(5.f) + 1.f), sign);
+                        }
+                    }
+                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, line.old_lineno, line.old_lineno == 1);
+                    mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, line.new_lineno,
+                                line.new_lineno == new_cursor);
+                    mono_text(body, base_x + px(TEXT_X), pos.y, EDITOR_TEXT, line.text.c_str());
+                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, line.text.c_str()).x);
+                }
+                ImGui::Dummy(ImVec2(max_text + px(text_offset + 40.f), line_h));
+            }
+        }
+        clipper.End();
+        ImGui::PopStyleVar();
+        const float content_h = static_cast<float>(rows.size()) * line_h;
+        ImGui::EndChild();
+        if (hovered_hunk != nullptr)
+        {
+            const std::string tip = git::short_sha(hovered_hunk->sha) + "  " + hovered_hunk->summary + "\n"
+                                    + hovered_hunk->author.name + ", " + format_date_time(hovered_hunk->time);
+            styled_tooltip(hovered_min, hovered_max, tip.c_str());
+        }
+
+        // The modified editor's decorations ruler (14px, a 1px left border) and the diff overview: the visible
+        // range in rgba(121,121,121,.4), deletions in the original (left) half, insertions in the modified half.
+        {
+            const float ruler_x = content_right - px(DECORATIONS_RULER_W);
+            draw->AddRectFilled(ImVec2(ruler_x, editor_min.y), ImVec2(ruler_x + 1.f, editor_max.y),
+                                IM_COL32(127, 127, 127, 77));
+            const float area_h = editor_max.y - editor_min.y;
+            const float scale = content_h > area_h ? area_h / content_h : 1.f;
+            const float viewport_top = editor_min.y + scroll_y * scale;
+            const float viewport_h = std::min(area_h, view_h * scale);
+            draw->AddRectFilled(ImVec2(content_right, viewport_top), ImVec2(editor_max.x, viewport_top + viewport_h),
+                                IM_COL32(121, 121, 121, 102));
+            for (std::size_t i = 0; i < rows.size(); ++i)
+            {
+                const Row& row = rows[i];
+                const float y0 = editor_min.y + static_cast<float>(i) * line_h * scale;
+                const float y1 = y0 + std::max(1.f, line_h * scale);
+                const auto mark = [&](const git::DiffLine* line)
+                {
+                    if (line == nullptr || line->origin == ' ')
+                    {
+                        return;
+                    }
+                    const bool added = line->origin == '+';
+                    const float x0 = content_right + (added ? rulers_w / 2.f : 0.f);
+                    draw->AddRectFilled(
+                            ImVec2(x0, y0), ImVec2(x0 + rulers_w / 2.f, y1),
+                            theme::u32(added ? theme::with_alpha(p.green, 0.5f) : theme::with_alpha(p.red, 0.5f)));
+                };
+                mark(row.left);
+                mark(row.right);
+            }
+        }
+        return clicked_hunk;
+    }
 
     void draw_diff_view(app::Application& app, app::RepoState& state, ImVec2 size)
     {
@@ -450,8 +736,12 @@ namespace imgit::ui
                     }
                     else
                     {
-                        app.toasts.push(app::ToastKind::INFO, button.label,
-                                        std::string(button.label) + " for a file is not available in ImGit yet.");
+                        // Blame / History: the File History view of this file, at this commit (HEAD for the
+                        // working directory's files), the blame columns on for Blame.
+                        const git::Sha sha = commit_diff && target.sha != app::WIP_SHA ? target.sha : git::Sha{};
+                        state.open_file_history(target.path, sha, sha, id == "##blame");
+                        ImGui::EndChild();
+                        return;
                     }
                 }
                 x += toggle_width(button.label, button.icon);
@@ -461,195 +751,12 @@ namespace imgit::ui
         // The editor
         const ImVec2 editor_min(origin.x, origin.y + px(HEADER_H + TOOLBAR_H));
         const ImVec2 editor_max(origin.x + size.x - 1.f, origin.y + size.y);
-        const bool split = state.diff_mode == app::RepoState::DiffMode::SPLIT && !state.file_view;
-        if (!state.diff_error.empty() || !state.diff || state.diff->binary || state.diff->hunks.empty())
-        {
-            const char* message =
-                    !state.diff_error.empty()
-                            ? state.diff_error.c_str()
-                            : (!state.diff ? "Loading..." : (state.diff->binary ? "Binary file" : "No Changes"));
-            draw_text(draw, fonts().regular, 14.f, ImVec2(editor_min.x, css_text_y(14.f, editor_min.y, false)),
-                      theme::u32(state.diff_error.empty() ? p.text_normal : p.red), message);
-            ImGui::EndChild();
-            return;
-        }
-        const git::FileDiff& diff = *state.diff;
-        const std::vector<Row> rows = build_rows(diff, state.diff_mode, state.file_view);
-        const float line_h = px(LINE_H);
-        const float rulers_w = px(DIFF_RULER_W);
-        const float content_right = editor_max.x - rulers_w;
-        ImGui::SetCursorScreenPos(editor_min);
-        ImGui::BeginChild("##diff_lines", ImVec2(content_right - editor_min.x, editor_max.y - editor_min.y),
-                          ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
-        ImDrawList* body = ImGui::GetWindowDrawList();
-        const float view_h = ImGui::GetWindowHeight();
-        const float scroll_y = ImGui::GetScrollY();
-        // Change navigation: the first changed row above / below the top of the view.
-        if (scroll_prev || scroll_next)
-        {
-            const int top_row = static_cast<int>(scroll_y / line_h);
-            int target_row = -1;
-            for (int i = 0; i < static_cast<int>(rows.size()); ++i)
-            {
-                const Row& row = rows[static_cast<std::size_t>(i)];
-                const bool changed = (row.left != nullptr && row.left->origin != ' ')
-                                     || (row.right != nullptr && row.right->origin != ' ');
-                const bool starts = changed
-                                    && (i == 0
-                                        || !((rows[static_cast<std::size_t>(i - 1)].left != nullptr
-                                              && rows[static_cast<std::size_t>(i - 1)].left->origin != ' ')
-                                             || (rows[static_cast<std::size_t>(i - 1)].right != nullptr
-                                                 && rows[static_cast<std::size_t>(i - 1)].right->origin != ' ')));
-                if (!starts)
-                {
-                    continue;
-                }
-                if (scroll_next && i > top_row)
-                {
-                    target_row = i;
-                    break;
-                }
-                if (scroll_prev && i < top_row)
-                {
-                    target_row = i;
-                }
-            }
-            if (target_row >= 0)
-            {
-                ImGui::SetScrollY(static_cast<float>(target_row) * line_h);
-            }
-        }
-        int new_cursor = 1;
-        for (const Row& row : rows)
-        {
-            if (row.left != nullptr && row.left->origin == '+')
-            {
-                new_cursor = row.left->new_lineno;
-                break;
-            }
-            if (row.right != nullptr && row.right->origin == '+')
-            {
-                new_cursor = row.right->new_lineno;
-                break;
-            }
-        }
-        const float half = (content_right - editor_min.x) / 2.f;
-        const float base_x = ImGui::GetCursorScreenPos().x;
-        float max_text = 0.f;
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(rows.size()), line_h);
-        while (clipper.Step())
-        {
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
-            {
-                const Row& row = rows[static_cast<std::size_t>(i)];
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                const float right = std::max(content_right, base_x + max_text + px(TEXT_X + 40.f));
-                if (row.hunk_header)
-                {
-                    body->AddRectFilled(ImVec2(base_x, pos.y), ImVec2(right, pos.y + line_h),
-                                        theme::u32(p.hunk_header));
-                    mono_text(body, base_x + px(TEXT_X), pos.y, theme::u32(p.text_secondary),
-                              diff.hunks[row.hunk].header.c_str());
-                }
-                else if (state.file_view)
-                {
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, row.left->new_lineno);
-                    mono_text(body, base_x + px(43.f), pos.y, EDITOR_TEXT, row.left->text.c_str());
-                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
-                }
-                else if (split)
-                {
-                    // Each side: 33px numbers, the sign column, the text; the missing side is hatched.
-                    for (int side = 0; side < 2; ++side)
-                    {
-                        const git::DiffLine* line = side == 0 ? row.left : row.right;
-                        const float x0 = base_x + (side == 0 ? 0.f : half);
-                        const float x1 = side == 0 ? base_x + half : right;
-                        if (line == nullptr)
-                        {
-                            diagonal_fill(body, ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h));
-                            continue;
-                        }
-                        if (line->origin != ' ')
-                        {
-                            body->AddRectFilled(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h),
-                                                theme::u32(line->origin == '+' ? INSERT_BG : DELETE_BG));
-                            mono_text(body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
-                                      line->origin == '+' ? "+" : "-");
-                        }
-                        mono_number(body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
-                                    side == 0 ? line->old_lineno : line->new_lineno);
-                        body->PushClipRect(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h), true);
-                        mono_text(body, x0 + px(43.f), pos.y, EDITOR_TEXT, line->text.c_str());
-                        body->PopClipRect();
-                    }
-                }
-                else
-                {
-                    const git::DiffLine& line = *row.left;
-                    if (line.origin != ' ')
-                    {
-                        body->AddRectFilled(ImVec2(base_x + px(TEXT_X), pos.y), ImVec2(right, pos.y + line_h),
-                                            theme::u32(line.origin == '+' ? INSERT_BG : DELETE_BG));
-                        // codicon diff-insert / diff-remove in the 10px sign column.
-                        const float cx = std::floor(base_x + px(NEW_NUMBERS_RIGHT + 5.f));
-                        const float cy = std::floor(pos.y + line_h / 2.f);
-                        const ImU32 sign = theme::u32(p.text_normal);
-                        body->AddRectFilled(ImVec2(cx - px(5.f), cy), ImVec2(cx + px(5.f), cy + 1.f), sign);
-                        if (line.origin == '+')
-                        {
-                            body->AddRectFilled(ImVec2(cx, cy - px(5.f)), ImVec2(cx + 1.f, cy + px(5.f) + 1.f), sign);
-                        }
-                    }
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, line.old_lineno, line.old_lineno == 1);
-                    mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, line.new_lineno,
-                                line.new_lineno == new_cursor);
-                    mono_text(body, base_x + px(TEXT_X), pos.y, EDITOR_TEXT, line.text.c_str());
-                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, line.text.c_str()).x);
-                }
-                ImGui::Dummy(ImVec2(max_text + px(TEXT_X + 40.f), line_h));
-            }
-        }
-        clipper.End();
-        ImGui::PopStyleVar();
-        const float content_h = static_cast<float>(rows.size()) * line_h;
-        ImGui::EndChild();
-
-        // The modified editor's decorations ruler (14px, a 1px left border) and the diff overview: the visible
-        // range in rgba(121,121,121,.4), deletions in the original (left) half, insertions in the modified half.
-        {
-            const float ruler_x = content_right - px(DECORATIONS_RULER_W);
-            draw->AddRectFilled(ImVec2(ruler_x, editor_min.y), ImVec2(ruler_x + 1.f, editor_max.y),
-                                IM_COL32(127, 127, 127, 77));
-            const float area_h = editor_max.y - editor_min.y;
-            const float scale = content_h > area_h ? area_h / content_h : 1.f;
-            const float viewport_top = editor_min.y + scroll_y * scale;
-            const float viewport_h = std::min(area_h, view_h * scale);
-            draw->AddRectFilled(ImVec2(content_right, viewport_top), ImVec2(editor_max.x, viewport_top + viewport_h),
-                                IM_COL32(121, 121, 121, 102));
-            for (std::size_t i = 0; i < rows.size(); ++i)
-            {
-                const Row& row = rows[i];
-                const float y0 = editor_min.y + static_cast<float>(i) * line_h * scale;
-                const float y1 = y0 + std::max(1.f, line_h * scale);
-                const auto mark = [&](const git::DiffLine* line)
-                {
-                    if (line == nullptr || line->origin == ' ')
-                    {
-                        return;
-                    }
-                    const bool added = line->origin == '+';
-                    const float x0 = content_right + (added ? rulers_w / 2.f : 0.f);
-                    draw->AddRectFilled(
-                            ImVec2(x0, y0), ImVec2(x0 + rulers_w / 2.f, y1),
-                            theme::u32(added ? theme::with_alpha(p.green, 0.5f) : theme::with_alpha(p.red, 0.5f)));
-                };
-                mark(row.left);
-                mark(row.right);
-            }
-        }
+        DiffEditorOptions options;
+        options.mode = state.diff_mode;
+        options.file_view = state.file_view;
+        options.scroll_prev = scroll_prev;
+        options.scroll_next = scroll_next;
+        draw_diff_editor(state.diff ? &*state.diff : nullptr, state.diff_error, editor_min, editor_max, options);
         ImGui::EndChild();
     }
 } // namespace imgit::ui

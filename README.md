@@ -56,6 +56,13 @@ with the whole file or just the hunks. The working directory's changes stage and
 
 ![A file's diff next to its commit](docs/images/diff.png)
 
+### File history and blame
+
+*History* in a file's toolbar (or *File History* in its menu) lists every commit that changed the file, renames
+followed, with the file as the selected commit left it or that commit's diff next to it. The gutter blames each line
+with its author's avatar and a bar in the commit's colour; *Blame* adds the commit and date to every run of lines,
+and clicking a run selects its commit.
+
 ### Interactive rebase
 
 Right-click a commit and choose *Interactive Rebase*: every commit above it becomes a row. `P` / `S` / `R` / `D` set the

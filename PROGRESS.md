@@ -85,7 +85,9 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | Commit message height resize (row-resize handle, saved) and click-to-amend HEAD's message (Update Message / Cancel Amend) | ✅ | Rewording older commits from the detail panel is not done |
 | Multi-select summary | ✅ | |
 | File view: whole-file inline diff, split view, hunk view, file view, change navigation, overview rulers, stage / unstage from the header | ✅ | |
-| Word wrap, whitespace, hunk / line staging, file history, blame, file editing | ⬜ | Buttons present |
+| File history | ✅ | Blame / History in the file view's toolbar, File History / File Blame in the file menus: the commits that changed the file (libgit2 walk, renames followed) down the left, the file as the selected commit left it or its diff on the right, Esc or the cross closes it |
+| Blame | ✅ | The file view in the File History view: each line's commit in the gutter (the author's avatar at each run's first line, a bar in the commit's colour); the Blame toggle adds the commit's summary and date; clicking the gutter selects that commit; hovering it shows the commit |
+| Word wrap, whitespace, hunk / line staging, file editing | ⬜ | Buttons present |
 | Merge conflict editor (A / B / Output) | ✅ | Opens from a conflicted file: three-way line merge of the index's base / ours / theirs, pick whole conflicts or single lines from A and B, conflict navigator, Reset, double-click Output to edit it by hand, Save writes and stages the file; Open in external merge tool runs `git mergetool`. No syntax colouring, panes not resizable |
 | Interactive rebase (pick / reword / squash / drop, P R S D, reorder with Ctrl + ↑ / ↓, Reset) | ✅ | Takes the left panel's and graph's place; rows show the commit's lane node and streak; reword edits the message in a floating editor; the right panel shows the selected row's commit |
 
