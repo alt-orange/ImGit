@@ -1225,16 +1225,23 @@ namespace imgit::ui
                             false);
         }
         ImGui::PopStyleColor(4);
+        // A button as wide as its label in the font it is drawn with, 12px either side.
+        const auto button_width = [](const char* text, float at_least)
+        {
+            return std::max(at_least, std::ceil(ImGui::CalcTextSize(text).x) + px(24.f));
+        };
         ImGui::SetCursorScreenPos(ImVec2(x + pad, origin.y + px(206.f)));
         const bool url_changed = !url.empty() && url != original_url;
         if (editing)
         {
-            submit |= success_button("Edit this submodule", ImVec2(px(132.f), px(28.f)), url_changed);
+            submit |= success_button("Edit this submodule",
+                                     ImVec2(button_width("Edit this submodule", px(132.f)), px(28.f)), url_changed);
             submit = submit && url_changed;
         }
         else
         {
-            submit |= success_button("Add Submodule", ImVec2(px(112.f), px(28.f)), !url.empty());
+            submit |= success_button("Add Submodule", ImVec2(button_width("Add Submodule", px(112.f)), px(28.f)),
+                                     !url.empty());
             submit = submit && !url.empty();
         }
 
@@ -1280,7 +1287,7 @@ namespace imgit::ui
             {
                 // Checks out the commit the repository records (cloning the submodule first when needed).
                 const char* action = initialized ? "Update this submodule" : "Initialize this submodule";
-                const float button_w = text_size(fonts().regular, 13.f, action).x + px(24.f);
+                const float button_w = button_width(action, 0.f);
                 ImGui::SetCursorScreenPos(ImVec2(std::round(x + pad + (field_w - button_w) / 2.f), y + px(4.f)));
                 if (success_button(action, ImVec2(button_w, px(28.f)), !state.busy()))
                 {
