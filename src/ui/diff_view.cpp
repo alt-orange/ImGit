@@ -9,6 +9,7 @@
 #include <functional>
 #include <imgui.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace imgit::ui
@@ -276,6 +277,9 @@ namespace imgit::ui
         }
         const git::FileDiff& diff = *diff_ptr;
         const std::vector<Row> rows = build_rows(diff, options.mode, options.file_view);
+        // The syntax colours of the diff's lines, kept per editor until the diff changes; null for plain text.
+        static std::unordered_map<std::string, syntax::DiffCache> syntax_caches;
+        const syntax::DiffSpans* colours = options.syntax_highlighting ? syntax_caches[options.id].get(diff) : nullptr;
         const float line_h = px(LINE_H);
         const float rulers_w = px(DIFF_RULER_W);
         const float content_right = editor_max.x - rulers_w;
@@ -288,6 +292,13 @@ namespace imgit::ui
                           ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
         ImDrawList* body = ImGui::GetWindowDrawList();
+        // A row's line of code, coloured by its syntax (the add / delete backgrounds are drawn under it).
+        const auto code_text = [&](float x, float line_top, const Row& row, const git::DiffLine& line)
+        {
+            draw_code_text(body, fonts().mono, 12.f, ImVec2(x, css_text_y(12.f, line_top + px(2.f), true)), line.text,
+                           colours != nullptr ? colours->line(diff, row.hunk, &line) : std::span<const syntax::Span>(),
+                           EDITOR_TEXT);
+        };
         const float view_h = ImGui::GetWindowHeight();
         const float scroll_y = ImGui::GetScrollY();
         const bool window_hovered = ImGui::IsWindowHovered();
@@ -402,13 +413,13 @@ namespace imgit::ui
                         }
                     }
                     mono_number(body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, lineno);
-                    mono_text(body, text_x, pos.y, EDITOR_TEXT, row.left->text.c_str());
+                    code_text(text_x, pos.y, row, *row.left);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
                 }
                 else if (options.file_view)
                 {
                     mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, row.left->new_lineno);
-                    mono_text(body, base_x + px(43.f), pos.y, EDITOR_TEXT, row.left->text.c_str());
+                    code_text(base_x + px(43.f), pos.y, row, *row.left);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
                 }
                 else if (split)
@@ -434,7 +445,7 @@ namespace imgit::ui
                         mono_number(body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
                                     side == 0 ? line->old_lineno : line->new_lineno);
                         body->PushClipRect(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h), true);
-                        mono_text(body, x0 + px(43.f), pos.y, EDITOR_TEXT, line->text.c_str());
+                        code_text(x0 + px(43.f), pos.y, row, *line);
                         body->PopClipRect();
                     }
                 }
@@ -458,7 +469,7 @@ namespace imgit::ui
                     mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, line.old_lineno, line.old_lineno == 1);
                     mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, line.new_lineno,
                                 line.new_lineno == new_cursor);
-                    mono_text(body, base_x + px(TEXT_X), pos.y, EDITOR_TEXT, line.text.c_str());
+                    code_text(base_x + px(TEXT_X), pos.y, row, line);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, line.text.c_str()).x);
                 }
                 ImGui::Dummy(ImVec2(max_text + px(text_offset + 40.f), line_h));
@@ -756,6 +767,7 @@ namespace imgit::ui
         options.file_view = state.file_view;
         options.scroll_prev = scroll_prev;
         options.scroll_next = scroll_next;
+        options.syntax_highlighting = app.settings.syntax_highlighting;
         draw_diff_editor(state.diff ? &*state.diff : nullptr, state.diff_error, editor_min, editor_max, options);
         ImGui::EndChild();
     }

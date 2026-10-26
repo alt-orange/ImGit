@@ -35,6 +35,7 @@ namespace imgit::app
         bool remember_tabs = true;
         bool push_after_commit = false;
         bool compact_graph = false;
+        bool syntax_highlighting = true; // the diff and merge editors colour code by its language
         float zoom = 1.f;
         std::string theme = "ImGit Dark"; // a theme::theme_names() entry
         std::string default_branch = "main";

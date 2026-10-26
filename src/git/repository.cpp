@@ -201,6 +201,7 @@ namespace imgit::git
         Result<FileDiff> diff_to_file_diff(git_diff* diff, std::size_t delta_index, const std::string& path)
         {
             FileDiff result;
+            result.revision = new_revision();
             result.path = path;
             if (delta_index >= git_diff_num_deltas(diff))
             {

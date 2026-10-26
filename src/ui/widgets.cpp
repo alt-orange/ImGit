@@ -346,6 +346,65 @@ namespace imgit::ui
         }
     }
 
+    void draw_code_text(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, std::string_view text,
+                        std::span<const syntax::Span> spans, ImU32 plain)
+    {
+        if (spans.empty())
+        {
+            draw_text(draw, font, size, pos, plain, text.data(), text.data() + text.size());
+            return;
+        }
+        const theme::Palette& p = theme::palette();
+        const auto color = [&](syntax::Token token)
+        {
+            switch (token)
+            {
+            case syntax::Token::COMMENT:
+                return theme::u32(p.syntax_comment);
+            case syntax::Token::STRING:
+                return theme::u32(p.syntax_string);
+            case syntax::Token::NUMBER:
+                return theme::u32(p.syntax_number);
+            case syntax::Token::KEYWORD:
+                return theme::u32(p.syntax_keyword);
+            case syntax::Token::TYPE:
+                return theme::u32(p.syntax_type);
+            case syntax::Token::FUNCTION:
+                return theme::u32(p.syntax_function);
+            case syntax::Token::VARIABLE:
+                return theme::u32(p.syntax_variable);
+            case syntax::Token::OPERATOR:
+                return theme::u32(p.syntax_operator);
+            case syntax::Token::PUNCTUATION:
+                return theme::u32(p.syntax_punctuation);
+            case syntax::Token::TAG:
+                return theme::u32(p.syntax_tag);
+            case syntax::Token::ATTRIBUTE:
+                return theme::u32(p.syntax_attribute);
+            case syntax::Token::REGEXP:
+                return theme::u32(p.syntax_regexp);
+            case syntax::Token::CONSTANT:
+                return theme::u32(p.syntax_constant);
+            default:
+                return plain;
+            }
+        };
+        // Span by span, each after the width of the ones before; nothing past the clip rect.
+        const float clip_right = draw->GetClipRectMax().x;
+        float x = pos.x;
+        for (const syntax::Span& span : spans)
+        {
+            if (x > clip_right || span.end > text.size())
+            {
+                break;
+            }
+            const char* begin = text.data() + span.begin;
+            const char* end = text.data() + span.end;
+            draw_text(draw, font, size, ImVec2(x, pos.y), color(span.token), begin, end);
+            x += text_size(font, size, begin, end).x;
+        }
+    }
+
     float draw_text_ellipsis(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, float max_width, ImU32 color,
                              const char* text, const char* text_end)
     {

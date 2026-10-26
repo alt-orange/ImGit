@@ -53,6 +53,7 @@ namespace imgit::ui
         const git::Blame* blame = nullptr;
         bool blame_columns = false;
         std::function<ImVec4(const git::Sha&)> blame_color;
+        bool syntax_highlighting = true; // colour the code by its language (Preferences → Editor)
         const char* id = "##diff_lines";
     };
     // Draws the editor over [min, max): `diff`'s lines, or `error` / "Loading..." (a null diff) / "Binary file" /

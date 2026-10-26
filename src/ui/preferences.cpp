@@ -2406,7 +2406,7 @@ namespace imgit::ui
             row(form, "Syntax Highlighting",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##syntax", "Editor/Syntax Highlighting", true);
+                    setting_checkbox(r, "##syntax", app.settings.syntax_highlighting);
                 });
             row(form, "Show Line Numbers",
                 [&](Row& r)

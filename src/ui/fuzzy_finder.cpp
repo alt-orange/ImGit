@@ -385,7 +385,12 @@ namespace imgit::ui
                 {
                     app.show_left_panel = !app.show_left_panel;
                 });
-            add("Toggle Syntax Highlighting", later("Syntax highlighting"));
+            add("Toggle Syntax Highlighting",
+                [&app]
+                {
+                    app.settings.syntax_highlighting = !app.settings.syntax_highlighting;
+                    app.settings.save(app.config_path("settings.txt"));
+                });
             add("Toggle Toolbar Labels",
                 [&app]
                 {

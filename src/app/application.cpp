@@ -94,6 +94,7 @@ namespace imgit::app
     {
         std::ifstream file(path);
         std::string line;
+        bool syntax_saved = false;
         while (std::getline(file, line))
         {
             const auto eq = line.find('=');
@@ -115,6 +116,11 @@ namespace imgit::app
             else if (key == "show_toolbar_labels")
             {
                 show_toolbar_labels = truthy;
+            }
+            else if (key == "syntax_highlighting")
+            {
+                syntax_highlighting = truthy;
+                syntax_saved = true;
             }
             else if (key == "author_initials")
             {
@@ -232,6 +238,18 @@ namespace imgit::app
                 }
             }
         }
+        if (!syntax_saved)
+        {
+            // Before it was a setting, Preferences kept the Syntax Highlighting checkbox in preferences.txt.
+            std::ifstream preferences(std::filesystem::path(path).parent_path() / "preferences.txt");
+            while (std::getline(preferences, line))
+            {
+                if (line == "Editor/Syntax Highlighting\t0")
+                {
+                    syntax_highlighting = false;
+                }
+            }
+        }
     }
 
     void Settings::save(const std::string& path) const
@@ -280,6 +298,7 @@ namespace imgit::app
              << "remember_tabs=" << remember_tabs << '\n'
              << "push_after_commit=" << push_after_commit << '\n'
              << "compact_graph=" << compact_graph << '\n'
+             << "syntax_highlighting=" << syntax_highlighting << '\n'
              << "zoom=" << zoom << '\n'
              << "theme=" << theme << '\n'
              << "default_branch=" << default_branch << '\n';
