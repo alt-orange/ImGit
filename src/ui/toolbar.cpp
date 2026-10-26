@@ -386,7 +386,13 @@ namespace imgit::ui
             std::string to_open; // opened after the loop: open_repository rewrites the recent list it walks
             for (const std::string& path : app.recent_repos)
             {
-                if (path == state.repo.workdir())
+                // Neither this repository nor, in a submodule, the repositories it is open in (this very tab).
+                bool shown_here = false;
+                for (const app::RepoState* here = &state; here != nullptr; here = here->parent.get())
+                {
+                    shown_here |= path == here->repo.workdir();
+                }
+                if (shown_here)
                 {
                     continue;
                 }

@@ -1112,7 +1112,7 @@ namespace imgit::ui
     // Edit Submodule (600px): the Remote URL (editable) and the Path, the Edit this submodule button, whether the
     // submodule is checked out at the commit the repository records, the commit it has checked out, and the
     // Open / Delete this submodule buttons.
-    void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height)
+    void draw_slide_panel(app::Application& app, app::RepoState& state, ImVec2 origin, float height, float max_width)
     {
         app::Dialog& d = app.dialog;
         const bool open = (d.kind == app::Dialog::Kind::ADD_SUBMODULE || d.kind == app::Dialog::Kind::EDIT_SUBMODULE)
@@ -1127,6 +1127,9 @@ namespace imgit::ui
         static std::string url;
         static std::string path;
         static std::string original_url;
+        // The Edit panel takes the keyboard focus (for Esc) once the double-click that opened it is over: a click
+        // focuses the window under the mouse when the frame ends.
+        static bool focus_panel = false;
         if (open)
         {
             editing = d.kind == app::Dialog::Kind::EDIT_SUBMODULE;
@@ -1135,7 +1138,12 @@ namespace imgit::ui
             if (d.just_opened)
             {
                 original_url = d.text_a;
+                focus_panel = editing;
             }
+        }
+        else
+        {
+            focus_panel = false;
         }
         const git::Submodule* submodule = nullptr;
         if (editing)
@@ -1149,13 +1157,19 @@ namespace imgit::ui
             }
         }
         const theme::Palette& p = theme::palette();
-        const float width = px(editing ? 600.f : 400.f);
+        // Narrower over a narrow graph, rather than over the detail panel.
+        const float width = std::min(px(editing ? 600.f : 400.f), std::max(px(400.f), max_width - px(10.f)));
         const float shadow = px(10.f);
         const float visible = std::round(width * t);
         // The child holds the panel's shown part and its shadow over the graph.
         ImGui::SetCursorScreenPos(origin);
         ImGui::BeginChild("##slide_panel", ImVec2(visible + shadow, height), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        if (focus_panel && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            ImGui::SetWindowFocus();
+            focus_panel = false;
+        }
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const float x = origin.x + visible - width; // slides in from under the left panel
         const ImVec2 min(x, origin.y);
@@ -1284,24 +1298,29 @@ namespace imgit::ui
             y += px(24.f);
 
             // The status line: an icon and a sentence centred under the divider.
+            // A submodule only in .gitmodules (added, never committed or staged) has no commit to check out.
+            const bool recorded = !submodule->recorded.empty();
             const bool initialized = !submodule->checked_out.empty();
             const bool in_sync = submodule->in_sync();
             const std::string sentence =
-                    !initialized ? "This submodule is not initialized."
-                    : in_sync    ? "This submodule is in-sync with your repository (" + state.repo.name() + ")."
-                                 : "This submodule is out of sync with your repository (" + state.repo.name() + ").";
+                    !recorded      ? "This submodule is not committed to your repository (" + state.repo.name() + ")."
+                    : !initialized ? "This submodule is not initialized."
+                    : in_sync      ? "This submodule is in-sync with your repository (" + state.repo.name() + ")."
+                                   : "This submodule is out of sync with your repository (" + state.repo.name() + ").";
             const char* status_icon = in_sync ? "fas:check" : "fas:exclamation-triangle";
             const ImVec4 status_color = in_sync ? p.green : p.yellow;
             {
                 const float icon_w = fa_icon_width(status_icon, px(13.f));
                 const ImVec2 text = text_size(fonts().regular, 14.f, sentence.c_str());
-                const float sx = std::round(x + pad + (field_w - icon_w - px(5.f) - text.x) / 2.f);
+                const float text_w = std::min(text.x, field_w - icon_w - px(5.f));
+                const float sx = std::round(x + pad + (field_w - icon_w - px(5.f) - text_w) / 2.f);
                 draw_fa_icon(draw, status_icon, ImVec2(sx + icon_w / 2.f, y), px(13.f), theme::u32(status_color));
-                draw_text(draw, fonts().regular, 14.f, ImVec2(sx + icon_w + px(5.f), std::round(y - text.y / 2.f)),
-                          theme::u32(status_color), sentence.c_str());
+                draw_text_ellipsis(draw, fonts().regular, 14.f,
+                                   ImVec2(sx + icon_w + px(5.f), std::round(y - text.y / 2.f)), text_w + 1.f,
+                                   theme::u32(status_color), sentence.c_str());
             }
             y += px(18.f);
-            if (!in_sync)
+            if (recorded && !in_sync)
             {
                 // Checks out the commit the repository records (cloning the submodule first when needed).
                 const char* action = initialized ? "Update this submodule" : "Initialize this submodule";
@@ -1425,24 +1444,31 @@ namespace imgit::ui
             }
             else if (delete_submodule)
             {
-                // `git rm` drops the folder and its .gitmodules entry once deinit has emptied it.
+                // `git rm` drops the folder and its .gitmodules entry once deinit has emptied it, and stages the
+                // whole .gitmodules; it refuses while .gitmodules has unstaged changes, so those are staged first.
                 const std::string target = path;
+                std::vector<std::vector<std::string>> runs = {{"submodule", "deinit", "-f", "--", target}};
+                if (std::error_code ec;
+                    std::filesystem::exists(std::filesystem::path(state.repo.workdir()) / ".gitmodules", ec))
+                {
+                    runs.push_back({"add", "--", ".gitmodules"});
+                }
+                runs.push_back({"rm", "-f", "--", target});
                 d.open(app::Dialog::Kind::CONFIRM);
                 d.workdir = state.repo.workdir();
                 d.title = "Delete submodule";
                 d.message = "Delete the submodule '" + target
-                            + "'? Its folder and its entry in .gitmodules are removed and the removal is staged.";
+                            + "'? Its folder and its entry in .gitmodules are removed, and the removal is staged "
+                              "with .gitmodules.";
                 d.confirm_label = "Delete";
                 d.danger = true;
-                d.on_confirm = [&app, workdir = state.repo.workdir(), target]
+                d.on_confirm = [&app, workdir = state.repo.workdir(), runs = std::move(runs)]
                 {
                     for (const std::unique_ptr<app::RepoState>& tab : app.tabs)
                     {
                         if (tab->repo.workdir() == workdir)
                         {
-                            app.run_git_cli_sequence(
-                                    *tab, "Delete submodule",
-                                    {{"submodule", "deinit", "-f", "--", target}, {"rm", "-f", "--", target}});
+                            app.run_git_cli_sequence(*tab, "Delete submodule", runs);
                             break;
                         }
                     }
