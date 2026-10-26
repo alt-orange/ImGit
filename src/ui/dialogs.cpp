@@ -1272,6 +1272,7 @@ namespace imgit::ui
         bool open_submodule = false;
         bool delete_submodule = false;
         std::vector<std::string> sync_args; // initialize / update it to the recorded commit
+        const char* sync_title = nullptr;
         if (editing && submodule != nullptr)
         {
             const auto divider = [&](float y)
@@ -1310,6 +1311,7 @@ namespace imgit::ui
                 {
                     sync_args = initialized ? std::vector<std::string>{"submodule", "update", "--", path}
                                             : std::vector<std::string>{"submodule", "update", "--init", "--", path};
+                    sync_title = initialized ? "Update submodule" : "Initialize submodule";
                 }
                 y += px(44.f);
             }
@@ -1326,7 +1328,7 @@ namespace imgit::ui
                           "Current Revision");
                 if (commit != nullptr)
                 {
-                    const std::string date = "(" + format_date_time(commit->time) + ")";
+                    const std::string date = "(" + format_date_time(commit->author_time) + ")";
                     draw_text(draw, fonts().regular, 14.f, ImVec2(x + pad + caption.x + px(10.f), y),
                               theme::u32(p.text_secondary), date.c_str());
                 }
@@ -1415,8 +1417,7 @@ namespace imgit::ui
             }
             if (!sync_args.empty())
             {
-                app.run_git_cli(state, sync_args[2] == "--init" ? "Initialize submodule" : "Update submodule",
-                                std::move(sync_args));
+                app.run_git_cli(state, sync_title, std::move(sync_args));
             }
             if (close)
             {
