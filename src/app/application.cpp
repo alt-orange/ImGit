@@ -1304,6 +1304,10 @@ namespace imgit::app
             {
                 state->merge_tool.reset();
             }
+            else if (state->file_history)
+            {
+                state->close_file_history();
+            }
             else if (state->diff_target)
             {
                 state->close_diff();
@@ -1392,10 +1396,15 @@ namespace imgit::app
 
     void Application::draw_repo_tab(RepoState& state, ImVec2 size)
     {
-        // The merge tool takes the whole tab.
+        // The merge tool and the File History view take the whole tab.
         if (state.merge_tool)
         {
             ui::draw_merge_view(*this, state, size);
+            return;
+        }
+        if (state.file_history)
+        {
+            ui::draw_file_history(*this, state, size);
             return;
         }
         const float handle = ui::px(7.f); // --handle-width

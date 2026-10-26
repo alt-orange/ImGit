@@ -68,6 +68,11 @@ namespace imgit::app
     RepoState::~RepoState()
     {
         park(std::move(m_status_job));
+        if (file_history)
+        {
+            park(std::move(file_history->history_job));
+            park(std::move(file_history->blame_job));
+        }
         if (async)
         {
             park(std::move(async->future));
@@ -401,6 +406,152 @@ namespace imgit::app
             return;
         }
         diff = std::move(*loaded);
+    }
+
+    void RepoState::open_file_history(std::string path, git::Sha from, git::Sha select, bool blame)
+    {
+        if (file_history)
+        {
+            park(std::move(file_history->history_job));
+            park(std::move(file_history->blame_job));
+        }
+        file_history.emplace();
+        FileHistoryView& view = *file_history;
+        view.path = std::move(path);
+        view.from = std::move(from);
+        view.selected_sha = std::move(select);
+        view.blame = blame;
+        view.history_job = std::async(std::launch::async,
+                                      [workdir = repo.workdir(), path = view.path, from = view.from]
+                                      {
+                                          // A libgit2 repository must not be shared across threads: open another.
+                                          auto worker = git::Repository::open(workdir);
+                                          if (!worker)
+                                          {
+                                              return git::Result<git::FileHistory>(std::unexpected(worker.error()));
+                                          }
+                                          return worker->file_history(path, from);
+                                      });
+    }
+
+    void RepoState::close_file_history()
+    {
+        if (!file_history)
+        {
+            return;
+        }
+        park(std::move(file_history->history_job));
+        park(std::move(file_history->blame_job));
+        file_history.reset();
+    }
+
+    void RepoState::select_file_history_entry(int index)
+    {
+        if (!file_history)
+        {
+            return;
+        }
+        FileHistoryView& view = *file_history;
+        if (index < 0 || index >= static_cast<int>(view.history.entries.size()))
+        {
+            view.selected = -1;
+            view.diff.reset();
+            view.diff_error.clear();
+            return;
+        }
+        view.selected = index;
+        const git::FileHistoryEntry& entry = view.history.entries[static_cast<std::size_t>(index)];
+        view.selected_sha = entry.commit.sha;
+        reload_file_history_diff();
+        // The blame of the file as this commit left it (a deleted file has none).
+        park(std::move(view.blame_job));
+        view.blame_data.reset();
+        view.blame_error.clear();
+        view.blame_sha = entry.commit.sha;
+        view.blame_loading = entry.status != git::FileStatus::DELETED;
+        if (!view.blame_loading)
+        {
+            return;
+        }
+        view.blame_job = std::async(std::launch::async,
+                                    [workdir = repo.workdir(), path = entry.path, sha = entry.commit.sha]
+                                    {
+                                        auto worker = git::Repository::open(workdir);
+                                        if (!worker)
+                                        {
+                                            return git::Result<git::Blame>(std::unexpected(worker.error()));
+                                        }
+                                        return worker->blame_file(path, sha);
+                                    });
+    }
+
+    void RepoState::reload_file_history_diff()
+    {
+        if (!file_history || file_history->selected < 0)
+        {
+            return;
+        }
+        FileHistoryView& view = *file_history;
+        const git::FileHistoryEntry& entry = view.history.entries[static_cast<std::size_t>(view.selected)];
+        view.diff.reset();
+        view.diff_error.clear();
+        const int context = diff_mode == DiffMode::HUNK && !view.file_view ? 3 : 1 << 24;
+        auto loaded = repo.commit_file_diff(entry.commit.sha, entry.path, context, !diff_whitespace);
+        if (!loaded)
+        {
+            view.diff_error = loaded.error().message;
+            return;
+        }
+        view.diff = std::move(*loaded);
+    }
+
+    void RepoState::poll_file_history()
+    {
+        if (!file_history)
+        {
+            return;
+        }
+        FileHistoryView& view = *file_history;
+        if (view.history_job.valid() && view.history_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
+            auto loaded = view.history_job.get();
+            view.history_loading = false;
+            if (!loaded)
+            {
+                view.history_error = loaded.error().message;
+            }
+            else
+            {
+                view.history = std::move(*loaded);
+                int index = view.history.entries.empty() ? -1 : 0;
+                for (std::size_t i = 0; i < view.history.entries.size() && !view.selected_sha.empty(); ++i)
+                {
+                    if (view.history.entries[i].commit.sha == view.selected_sha)
+                    {
+                        index = static_cast<int>(i);
+                        break;
+                    }
+                }
+                select_file_history_entry(index);
+                if (index >= 0)
+                {
+                    view.scroll_to = static_cast<std::size_t>(index);
+                }
+            }
+        }
+        if (view.blame_job.valid() && view.blame_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
+            auto loaded = view.blame_job.get();
+            view.blame_loading = false;
+            if (!loaded)
+            {
+                view.blame_error = loaded.error().message;
+            }
+            else
+            {
+                view.blame_data = std::move(*loaded);
+            }
+        }
     }
 
     void RepoState::run_search()

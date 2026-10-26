@@ -38,15 +38,18 @@
 
 namespace
 {
-    // Development aid: `imgit <repo> [--size WxH] --screenshot out.bmp [--select-row N] [--open-file path]` renders a
-    // few frames, saves the framebuffer and exits. `--script file --shots dir` instead replays scripted input (move /
-    // click / rclick / dblclick / drag / key / type / wait / shot / row) one step per frame.
+    // Development aid: `imgit <repo> [--size WxH] --screenshot out.bmp [--select-row N] [--open-file path
+    // [--file-history [--blame]]]` renders a few frames, saves the framebuffer and exits. `--script file --shots dir`
+    // instead replays scripted input (move / click / rclick / dblclick / drag / key / type / wait / shot / row) one
+    // step per frame.
     struct DevOptions
     {
         std::string repo;
         std::string screenshot;
         int select_row = -1;
         std::string open_file;
+        bool file_history = false; // --open-file opens the File History view instead of the diff
+        bool blame = false; // ... with the blame columns on
         std::string script;
         std::string shots_dir = ".";
         int width = 1440;
@@ -323,6 +326,14 @@ namespace
             else if (arg == "--open-file" && i + 1 < argc)
             {
                 options.open_file = argv[++i];
+            }
+            else if (arg == "--file-history")
+            {
+                options.file_history = true;
+            }
+            else if (arg == "--blame")
+            {
+                options.blame = true;
             }
             else if (arg == "--script" && i + 1 < argc)
             {
@@ -869,7 +880,15 @@ int main(int argc, char** argv)
                         state->select_only(state->history.commits[static_cast<std::size_t>(options.select_row)].sha);
                         state->scroll_to_row = static_cast<std::size_t>(options.select_row);
                     }
-                    if (!options.open_file.empty())
+                    if (!options.open_file.empty() && options.file_history)
+                    {
+                        const imgit::git::Commit* commit = state->single_selected();
+                        const imgit::git::Sha sha = commit != nullptr && commit->type != imgit::git::NodeType::WORK_DIR
+                                                            ? commit->sha
+                                                            : imgit::git::Sha{};
+                        state->open_file_history(options.open_file, sha, sha, options.blame);
+                    }
+                    else if (!options.open_file.empty())
                     {
                         const imgit::git::Commit* commit = state->single_selected();
                         if (commit != nullptr && commit->type != imgit::git::NodeType::WORK_DIR)
@@ -906,8 +925,16 @@ int main(int argc, char** argv)
             {
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             }
-            // Screenshots wait (up to ~5 s) for avatar downloads so the capture shows the real images.
-            if (!options.screenshot.empty() && frame == 8 && imgit::ui::avatars_pending() && screenshot_wait < 300)
+            // Screenshots wait (up to ~5 s) for avatar downloads so the capture shows the real images, and for the
+            // File History view's background jobs.
+            const bool history_loading = [&]
+            {
+                const imgit::app::RepoState* state = app.active();
+                return state != nullptr && state->file_history
+                       && (state->file_history->history_loading || state->file_history->blame_loading);
+            }();
+            if (!options.screenshot.empty() && frame == 8 && (imgit::ui::avatars_pending() || history_loading)
+                && screenshot_wait < 300)
             {
                 ++screenshot_wait;
                 --frame;

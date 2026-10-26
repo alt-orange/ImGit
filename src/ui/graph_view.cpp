@@ -499,17 +499,20 @@ namespace imgit::ui
         }
 
         // The handles on the right edge of every zone but the last: `header` ones fill the header cell's last
-        // 10px; the others, over the rows, are 10px centred 4px left of it (the rows sit 4px left of the header).
+        // 10px and reach 4px over the border into the next cell, so hovering the border shows the resize cursor
+        // rather than the next cell's grab hand; the others, over the rows, are 10px centred 4px left of it (the
+        // rows sit 4px left of the header).
         void zone_handles(float x, float top, float bottom, bool header)
         {
             for (int i = 0; i + 1 < static_cast<int>(g_zones.zones.size()); ++i)
             {
                 const float right = zone_right(x, i) - (header ? 0.f : px(4.f));
-                const float half = header ? px(10.f) : px(5.f);
+                const float left_reach = header ? px(10.f) : px(5.f);
+                const float right_reach = header ? px(4.f) : px(5.f);
                 const std::string id = std::string(header ? "##zone_header_resize_" : "##zone_resize_")
                                        + zone_key(g_zones.zones[static_cast<std::size_t>(i)].type);
-                const ResizeHandle handle = resize_handle(id.c_str(), ImVec2(right - half, top),
-                                                          ImVec2(right + (header ? 0.f : half), bottom));
+                const ResizeHandle handle =
+                        resize_handle(id.c_str(), ImVec2(right - left_reach, top), ImVec2(right + right_reach, bottom));
                 if (handle.activated)
                 {
                     g_zone_drag = {i, g_zones.zones[static_cast<std::size_t>(i)].current, ImGui::GetIO().MousePos.x};
@@ -1759,9 +1762,12 @@ namespace imgit::ui
                 }
                 ImGui::SetCursorScreenPos(ImVec2(x, header_y));
                 ImGui::InvisibleButton((std::string("##zone_header_") + zone_key(type)).c_str(), ImVec2(w, header_h));
-                if (ImGui::IsItemHovered())
+                // cursor: grab over the header cells. IsItemHovered() goes by the rectangle alone, so it would
+                // also say yes over the resize handle at the cell's edge, which was submitted first and owns the
+                // hover: only the cell that owns it shows the hand.
+                if (ImGui::IsItemHovered() && ImGui::GetHoveredID() == ImGui::GetItemID())
                 {
-                    set_drag_cursor(DragCursor::GRAB); // cursor: grab over the header cells
+                    set_drag_cursor(DragCursor::GRAB);
                 }
                 if (ImGui::IsItemActivated() && !g_zone_move.pressed)
                 {

@@ -148,6 +148,8 @@ namespace imgit::ui
     void draw_status_icon(ImDrawList* draw, ImVec2 center, float size, git::FileStatus status);
 
     [[nodiscard]] std::string format_date_time(std::int64_t unix_seconds);
+    // "10/25/2026": the date alone.
+    [[nodiscard]] std::string format_date(std::int64_t unix_seconds);
     [[nodiscard]] std::string format_date_long(std::int64_t unix_seconds);
     [[nodiscard]] std::string format_relative(std::int64_t unix_seconds);
     [[nodiscard]] std::string file_name(const std::string& path);

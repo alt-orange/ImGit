@@ -1542,11 +1542,21 @@ namespace imgit::ui
                          })};
         }
 
-        MenuItems history_items(Application& app)
+        // File History / File Blame: the File History view of `path` at `sha` (HEAD when empty: the working
+        // directory's files).
+        MenuItems history_items(app::RepoState& state, const std::string& path, const git::Sha& sha)
         {
+            const git::Sha from = sha == app::WIP_SHA ? git::Sha{} : sha;
             return {item("File History",
-                         placeholder(app, "File History", "File history is not available in ImGit yet.")),
-                    item("File Blame", placeholder(app, "File Blame", "File blame is not available in ImGit yet."))};
+                         [&state, path, from]
+                         {
+                             state.open_file_history(path, from, from, false);
+                         }),
+                    item("File Blame",
+                         [&state, path, from]
+                         {
+                             state.open_file_history(path, from, from, true);
+                         })};
         }
     } // namespace
 
@@ -1945,7 +1955,7 @@ namespace imgit::ui
                                    app.run_git_cli(state, "Stash file", {"stash", "push", "--", path});
                                }));
         }
-        MenuItems history = added ? MenuItems{} : history_items(app);
+        MenuItems history = added ? MenuItems{} : history_items(state, path, {});
         MenuItems open;
         open.push_back(item("Open in external diff tool",
                             [&app, &state, path, staged]
@@ -2020,7 +2030,7 @@ namespace imgit::ui
         {
             open.push_back(std::move(entry));
         }
-        return separated_menu({history_items(app),
+        return separated_menu({stash ? MenuItems{} : history_items(state, path, sha),
                                std::move(open),
                                {item("Copy file path",
                                      [&app, &state, path]
@@ -2215,6 +2225,29 @@ namespace imgit::ui
                                 placeholder(app, "Create file", "Creating files is not available in ImGit yet.")));
         }
         return separated_menu({std::move(ops), std::move(open)});
+    }
+
+    MenuItems file_history_commit_menu(app::Application& app, app::RepoState& state, const git::Sha& sha,
+                                       const std::string& path)
+    {
+        return separated_menu({{item(
+                                       "Show in graph",
+                                       [&state, sha]
+                                       {
+                                           state.close_file_history();
+                                           jump_to_commit(state, sha.c_str());
+                                       },
+                                       state.history.row_by_sha.contains(sha))},
+                               {item("Copy commit sha",
+                                     [&app, sha]
+                                     {
+                                         app.copy_to_clipboard(sha);
+                                     }),
+                                item("Copy file path",
+                                     [&app, &state, path]
+                                     {
+                                         app.copy_to_clipboard(full_path(state, path));
+                                     })}});
     }
 
     MenuItems tab_menu(app::Application& app, int index)

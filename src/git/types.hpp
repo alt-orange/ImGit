@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -183,6 +185,54 @@ namespace imgit::git
         bool binary = false;
         int additions = 0;
         int deletions = 0;
+    };
+
+    // One commit of a file's history and what it did to the file.
+    struct FileHistoryEntry
+    {
+        Commit commit;
+        FileStatus status = FileStatus::MODIFIED; // ADDED / MODIFIED / DELETED / RENAMED
+        std::string path; // the file's path at this commit
+        std::string old_path; // RENAMED: its path in the parent
+    };
+
+    struct FileHistory
+    {
+        std::vector<FileHistoryEntry> entries; // newest first
+        bool has_more = false; // the walk stopped at its limit
+    };
+
+    // One run of lines a blame attributes to the same commit.
+    struct BlameHunk
+    {
+        int start_line = 1; // 1-based line in the blamed revision
+        int line_count = 0;
+        Sha sha;
+        Author author;
+        std::int64_t time = 0; // the author's
+        std::string summary;
+        std::string orig_path; // the file's path in that commit
+        int orig_start_line = 1;
+    };
+
+    struct Blame
+    {
+        std::vector<BlameHunk> hunks; // in line order
+        // The hunk holding `line` (1-based), nullptr past the end.
+        [[nodiscard]] const BlameHunk* hunk_at(int line) const noexcept
+        {
+            const auto after = std::partition_point(hunks.begin(), hunks.end(),
+                                                    [line](const BlameHunk& hunk)
+                                                    {
+                                                        return hunk.start_line <= line;
+                                                    });
+            if (after == hunks.begin())
+            {
+                return nullptr;
+            }
+            const BlameHunk& hunk = *std::prev(after);
+            return line < hunk.start_line + hunk.line_count ? &hunk : nullptr;
+        }
     };
 
     enum class ResetMode
