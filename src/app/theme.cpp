@@ -141,6 +141,41 @@ namespace imgit::theme
             p.terminal_fg = rgb(0xC2C3C0);
         }
 
+        // Monaco's token colours: vs-dark on a dark background, vs on a light one.
+        void syntax_palette(Palette& p) noexcept
+        {
+            if (to_hsl(p.app_bg0).l > 0.5f)
+            {
+                p.syntax_comment = rgb(0x008000);
+                p.syntax_string = rgb(0xA31515);
+                p.syntax_number = rgb(0x098658);
+                p.syntax_keyword = rgb(0x0000FF);
+                p.syntax_type = rgb(0x267F99);
+                p.syntax_function = rgb(0x795E26);
+                p.syntax_variable = rgb(0x001080);
+                p.syntax_operator = rgb(0x000000);
+                p.syntax_punctuation = rgb(0x383838);
+                p.syntax_tag = rgb(0x800000);
+                p.syntax_attribute = rgb(0xE50000);
+                p.syntax_regexp = rgb(0x811F3F);
+                p.syntax_constant = rgb(0x0000FF);
+                return;
+            }
+            p.syntax_comment = rgb(0x6A9955);
+            p.syntax_string = rgb(0xCE9178);
+            p.syntax_number = rgb(0xB5CEA8);
+            p.syntax_keyword = rgb(0x569CD6);
+            p.syntax_type = rgb(0x4EC9B0);
+            p.syntax_function = rgb(0xDCDCAA);
+            p.syntax_variable = rgb(0x9CDCFE);
+            p.syntax_operator = rgb(0xD4D4D4);
+            p.syntax_punctuation = rgb(0xD4D4D4);
+            p.syntax_tag = rgb(0x569CD6);
+            p.syntax_attribute = rgb(0x9CDCFE);
+            p.syntax_regexp = rgb(0xD16969);
+            p.syntax_constant = rgb(0x569CD6);
+        }
+
         constexpr ThemeSpec THEMES[] = {
                 {"ImGit Dark", 0x1E1C1A, 0xF28C28, 0xFFAE5C, 0xFFBE7D, 0xC2661D, 0xFFAE5C, 0},
                 {"Ocean", 0x161D26, 0x3A9DE8, 0x6CC4F5, 0x9CCBF2, 0x2A6FA8, 0x6CC4F5, 5},
@@ -223,6 +258,7 @@ namespace imgit::theme
             {
                 theme.exact(p);
             }
+            syntax_palette(p);
             return p;
         }
     } // namespace

@@ -14,5 +14,11 @@
     "libgit2",
     "nativefiledialog-extended",
     "stb"
-  ]
+  ],
+  "features": {
+    "tests": {
+      "description": "The unit tests (IMGIT_BUILD_TESTS)",
+      "dependencies": [ "gtest" ]
+    }
+  }
 }

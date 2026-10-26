@@ -1,6 +1,6 @@
 # Progress
 
-Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or the `--script` input replay),
+Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or the `--script` input replay),
 🟡 implemented but not driven by hand, ⬜ not implemented.
 
 ## Look
@@ -87,8 +87,9 @@ Status as of 2026-10-25. ✅ implemented and exercised (headless screenshots or 
 | File view: whole-file inline diff, split view, hunk view, file view, change navigation, overview rulers, stage / unstage from the header | ✅ | |
 | File history | ✅ | Blame / History in the file view's toolbar, File History / File Blame in the file menus: the commits that changed the file (libgit2 walk, renames followed) down the left, the file as the selected commit left it or its diff on the right, Esc or the cross closes it |
 | Blame | ✅ | The file view in the File History view: each line's commit in the gutter (the author's avatar at each run's first line, a bar in the commit's colour); the Blame toggle adds the commit's summary and date; clicking the gutter selects that commit; hovering it shows the commit |
+| Syntax highlighting | 🟡 | In the diff / file / File History editors and the merge tool's A / B panes; Preferences → Editor → Syntax Highlighting (on by default). A small line-based tokenizer (`src/ui/syntax/`), Monaco's vs-dark token colours (vs on a light background) from the theme. Own scanners for C, C++, C#, Java, Kotlin, Scala, Go, Rust, Dart, JavaScript, TypeScript, PHP, Python, Ruby, Lua, shell, PowerShell, SQL, JSON, YAML, INI, XML, HTML (with `<script>` / `<style>`), CSS / SCSS / Less, Markdown (fenced code by its language) and Dockerfile; keyword / comment / string tables for the rest of the list in `languages.cpp`. Each diff hunk starts from a fresh state (a hunk that starts inside a comment can be mis-coloured); the merge panes are tokenized whole. Lines over 2,000 characters and files over 5,000 lines or 1 MiB are plain. Unit tests in `test/` |
 | Word wrap, whitespace, hunk / line staging, file editing | ⬜ | Buttons present |
-| Merge conflict editor (A / B / Output) | ✅ | Opens from a conflicted file: three-way line merge of the index's base / ours / theirs, pick whole conflicts or single lines from A and B, conflict navigator, Reset, double-click Output to edit it by hand, Save writes and stages the file; Open in external merge tool runs `git mergetool`. No syntax colouring, panes not resizable |
+| Merge conflict editor (A / B / Output) | ✅ | Opens from a conflicted file: three-way line merge of the index's base / ours / theirs, pick whole conflicts or single lines from A and B, conflict navigator, Reset, double-click Output to edit it by hand, Save writes and stages the file; Open in external merge tool runs `git mergetool`. A / B are syntax highlighted, the Output is not; panes not resizable |
 | Interactive rebase (pick / reword / squash / drop, P R S D, reorder with Ctrl + ↑ / ↓, Reset) | ✅ | Takes the left panel's and graph's place; rows show the commit's lane node and streak; reword edits the message in a floating editor; the right panel shows the selected row's commit |
 
 ## Git operations

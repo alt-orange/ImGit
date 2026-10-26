@@ -1,8 +1,10 @@
 #pragma once
 
 #include "git/types.hpp"
+#include "ui/syntax/syntax.hpp"
 #include <cstdint>
 #include <imgui.h>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -76,6 +78,10 @@ namespace imgit::ui
     [[nodiscard]] ImVec2 text_size(ImFont* font, float size, const char* text, const char* text_end = nullptr);
     void draw_text(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
                    const char* text_end = nullptr);
+    // A line of code: each of `spans` in its token's syntax colour (theme::Palette::syntax_*), plain text in
+    // `plain`; without spans, all of it in `plain`.
+    void draw_code_text(ImDrawList* draw, ImFont* font, float size, ImVec2 pos, std::string_view text,
+                        std::span<const syntax::Span> spans, ImU32 plain);
     void draw_dashed_line(ImDrawList* draw, ImVec2 a, ImVec2 b, ImU32 color, float thickness, float dash = 3.f,
                           float gap = 3.f);
 

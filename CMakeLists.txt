@@ -6,8 +6,17 @@
 # `cmake --build --preset x64-debug`; `linux-debug` and `macos-debug` likewise with a vcpkg checkout in
 # VCPKG_ROOT.  Everything in assets/ is compiled into the executable (cmake/EmbedAssets.cmake), so imgit.exe
 # (imgit on Linux, ImGit.app on macOS) runs on its own.
+#
+#   imgit_tests  the unit tests (test/, GoogleTest), with -DIMGIT_BUILD_TESTS=ON; then `ctest --test-dir <build>`
 
 cmake_minimum_required(VERSION 3.25)
+
+# The tests need GoogleTest: vcpkg installs it with the manifest's "tests" feature, which must be chosen before
+# project().
+option(IMGIT_BUILD_TESTS "Build the unit tests (test/)" OFF)
+if(IMGIT_BUILD_TESTS)
+    list(APPEND VCPKG_MANIFEST_FEATURES tests)
+endif()
 
 # The oldest macOS the build runs on; must be set before project(). vcpkg-triplets/*-osx.cmake builds the
 # libraries for the same release (keep the two in step).
@@ -30,6 +39,13 @@ find_package(cpr CONFIG REQUIRED)
 find_package(nfd CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(OpenGL REQUIRED)
+
+# The syntax highlighter: plain C++ (no ImGui), shared by the app and the tests.
+add_library(imgit_syntax STATIC
+    src/ui/syntax/languages.cpp
+    src/ui/syntax/syntax.cpp
+    src/ui/syntax/tokenizer.cpp)
+target_include_directories(imgit_syntax PUBLIC src)
 
 add_executable(imgit
     src/main.cpp
@@ -116,15 +132,18 @@ else()
 endif()
 
 target_include_directories(imgit PRIVATE src ${Stb_INCLUDE_DIR})
-target_link_libraries(imgit PRIVATE imgui::imgui glfw libgit2::libgit2package cpr::cpr nfd::nfd OpenGL::GL)
+target_link_libraries(imgit PRIVATE imgit_syntax imgui::imgui glfw libgit2::libgit2package cpr::cpr nfd::nfd
+                                    OpenGL::GL)
 
 # Every warning the compilers offer short of the style-level ones, and all of them errors: /W4 /WX on MSVC and
 # clang-cl, -Wall -Wextra -Wpedantic -Werror elsewhere. clang-cl takes the GNU flags too, for what /W4 leaves
 # out, through /clang: (a bare -Wall there is MSVC's /Wall, which clang-cl reads as -Weverything).
 if(MSVC)
     target_compile_options(imgit PRIVATE /utf-8 /EHsc /W4 /WX)
+    target_compile_options(imgit_syntax PRIVATE /utf-8 /EHsc /W4 /WX)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(imgit PRIVATE /clang:-Wall /clang:-Wextra /clang:-Wpedantic)
+        target_compile_options(imgit_syntax PRIVATE /clang:-Wall /clang:-Wextra /clang:-Wpedantic)
     endif()
     # a GUI subsystem in Release keeps the console window away; Debug keeps it for logs
     set_target_properties(imgit PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
@@ -132,7 +151,13 @@ if(MSVC)
     target_link_options(imgit PRIVATE $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>)
 else()
     target_compile_options(imgit PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(imgit_syntax PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 include(cmake/EmbedAssets.cmake)
 imgit_embed_assets(imgit ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+
+if(IMGIT_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
+endif()

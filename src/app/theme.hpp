@@ -67,6 +67,22 @@ namespace imgit::theme
         ImVec4 terminal_fg;
         ImVec4 terminal_prompt; // terminal__repo-name-color
         ImVec4 terminal_red;
+
+        // Syntax highlighting in the diff and merge editors: Monaco's vs-dark token colours, or its vs ones when
+        // the theme's background is light. Plain text keeps each editor's own colour.
+        ImVec4 syntax_comment;
+        ImVec4 syntax_string;
+        ImVec4 syntax_number;
+        ImVec4 syntax_keyword;
+        ImVec4 syntax_type;
+        ImVec4 syntax_function;
+        ImVec4 syntax_variable;
+        ImVec4 syntax_operator;
+        ImVec4 syntax_punctuation;
+        ImVec4 syntax_tag;
+        ImVec4 syntax_attribute;
+        ImVec4 syntax_regexp;
+        ImVec4 syntax_constant;
     };
 
     [[nodiscard]] const Palette& palette() noexcept;

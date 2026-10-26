@@ -176,8 +176,9 @@ namespace imgit::ui
             ImGui::SetScrollY(std::max(0.f, static_cast<float>(line - 3)) * px(LINE_H));
         }
 
-        // A (ours) or B (theirs): the side's file with its conflicts highlighted and pickable.
-        void draw_side(app::MergeTool& tool, app::Side side, ImVec2 origin, ImVec2 size)
+        // A (ours) or B (theirs): the side's file with its conflicts highlighted and pickable, its code coloured by
+        // its syntax when `syntax_highlighting`.
+        void draw_side(app::MergeTool& tool, app::Side side, ImVec2 origin, ImVec2 size, bool syntax_highlighting)
         {
             const theme::Palette& p = theme::palette();
             ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -224,8 +225,11 @@ namespace imgit::ui
                 word(fonts().bold, branch, theme::u32(color));
             }
 
-            // The code.
+            // The code, its syntax colours kept per side until its text changes.
             const std::vector<std::string>& lines = a ? tool.ours : tool.theirs;
+            static syntax::TextCache syntax_caches[2];
+            const syntax::LineSpans* colours =
+                    syntax_highlighting ? syntax_caches[a ? 0 : 1].get(tool.path, lines) : nullptr;
             ImGui::SetCursorScreenPos(ImVec2(origin.x, hmax.y));
             ImGui::PushStyleColor(ImGuiCol_ChildBg, p.app_bg0);
             ImGui::BeginChild(a ? "##merge_a" : "##merge_b", ImVec2(size.x, size.y - px(PANE_HEADER_H)),
@@ -285,7 +289,11 @@ namespace imgit::ui
                     ImGui::PopID();
                     line_number(code, top_left.x, top, i + 1);
                     const std::string& text = lines[static_cast<std::size_t>(i)];
-                    mono_text(code, top_left.x + px(MARGIN_W), top, theme::u32(p.text_normal), text.c_str());
+                    draw_code_text(code, fonts().mono, 12.f,
+                                   ImVec2(top_left.x + px(MARGIN_W), css_y(12.f, top + px(2.f), true)), text,
+                                   colours != nullptr ? colours->line(static_cast<std::size_t>(i))
+                                                      : std::span<const syntax::Span>(),
+                                   theme::u32(p.text_normal));
                     widest = std::max(widest, text_size(fonts().mono, 12.f, text.c_str()).x);
                 }
             }
@@ -518,10 +526,12 @@ namespace imgit::ui
         const float body_h = size.y - px(HEADER_H);
         const float panes_h = std::round(body_h / 2.f);
         const float half = std::round(size.x / 2.f);
-        draw_side(tool, app::Side::A, ImVec2(origin.x, body_top), ImVec2(half - 1.f, panes_h));
+        draw_side(tool, app::Side::A, ImVec2(origin.x, body_top), ImVec2(half - 1.f, panes_h),
+                  app.settings.syntax_highlighting);
         draw->AddRectFilled(ImVec2(origin.x + half - 1.f, body_top), ImVec2(origin.x + half, body_top + panes_h),
                             theme::u32(p.panel_border));
-        draw_side(tool, app::Side::B, ImVec2(origin.x + half, body_top), ImVec2(size.x - half, panes_h));
+        draw_side(tool, app::Side::B, ImVec2(origin.x + half, body_top), ImVec2(size.x - half, panes_h),
+                  app.settings.syntax_highlighting);
         draw_output(tool, ImVec2(origin.x, body_top + panes_h), ImVec2(size.x, body_h - panes_h));
         tool.scroll_request = -1;
         ImGui::EndChild();
