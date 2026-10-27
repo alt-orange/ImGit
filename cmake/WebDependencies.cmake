@@ -15,7 +15,8 @@ set(IMGIT_WEB_GLFW_FLAGS --use-port=contrib.glfw3)
 # for shared memory.
 string(APPEND CMAKE_C_FLAGS " -pthread")
 string(APPEND CMAKE_CXX_FLAGS " -pthread")
-set(BUILD_SHARED_LIBS OFF)
+# In the cache: libgit2's option() defaults to a shared library and, under its older policies, ignores a plain variable.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # libgit2's overflow checks hand a size_t* (unsigned long) to the unsigned int builtins where both are 32 bits wide,
 # as in wasm32: the same type in all but name.
 string(APPEND CMAKE_C_FLAGS " -Wno-incompatible-pointer-types")
