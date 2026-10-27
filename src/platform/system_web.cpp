@@ -48,7 +48,8 @@ namespace imgit::platform
 
     Shell default_shell()
     {
-        return {{}, "Terminal"};
+        // pseudo_console_web.cpp's own shell; the arguments are not used.
+        return {{"sh"}, "sh"};
     }
 
     std::string system_proxy()

@@ -88,10 +88,12 @@ namespace imgit::ui
             ImGui::SameLine();
             if (default_button("Browse...", ImVec2(browse_w, 0.f)))
             {
-                if (auto picked = platform::shell::pick_folder_dialog())
-                {
-                    value = *picked;
-                }
+                // `value` is a field of the app's dialog, which outlives a browser's later answer.
+                platform::shell::pick_folder_dialog({}, platform::shell::FolderPurpose::LOCATION,
+                                                    [&value](const std::string& picked)
+                                                    {
+                                                        value = picked;
+                                                    });
             }
         }
 

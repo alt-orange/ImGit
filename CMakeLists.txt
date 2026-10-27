@@ -100,6 +100,7 @@ add_executable(imgit
 if(EMSCRIPTEN)
     # The browser: WebGL 2 through GLFW's GLES 3 header, no processes, the home folder kept in IndexedDB.
     target_sources(imgit PRIVATE
+        src/git/web_git.cpp
         src/platform/app_menu_none.cpp
         src/platform/http_web.cpp
         src/platform/main_loop_web.cpp
@@ -137,6 +138,7 @@ elseif(WIN32)
         src/platform/http_cpr.cpp
         src/platform/main_loop_desktop.cpp
         src/platform/shell_dialogs.cpp
+        src/platform/window_desktop.cpp
         src/platform/process_win32.cpp
         src/platform/pseudo_console_win32.cpp
         src/platform/shell_win32.cpp
@@ -151,6 +153,7 @@ else()
         src/platform/http_cpr.cpp
         src/platform/main_loop_desktop.cpp
         src/platform/shell_dialogs.cpp
+        src/platform/window_desktop.cpp
         src/platform/process_posix.cpp
         src/platform/pseudo_console_posix.cpp
         src/platform/shell_posix.cpp

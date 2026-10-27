@@ -43,6 +43,9 @@
     }
     var Module = {
         canvas: document.getElementById('canvas'),
+        // The CORS proxy git requests go through: <proxy><url>. Unset: this server's /git-proxy/ (tools/serve_web.py);
+        // '' for none; `?git-proxy=<prefix>` in the address overrides it. See docs/WEB.md.
+        // imgitGitProxy: 'https://proxy.example.com/',
         setStatus: function (text) {
             if (window.crossOriginIsolated) {
                 status_line.textContent = text;

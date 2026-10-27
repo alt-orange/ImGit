@@ -12,6 +12,18 @@ EM_JS(void, imgit_set_canvas_cursor, (const char* cursor), {
     }
 });
 
+// The page's full screen (the whole page, so the canvas keeps following the window's size). The key or click that
+// asked for it still counts as the user's gesture the browser wants.
+EM_JS(void, imgit_toggle_page_full_screen, (), {
+    if (document.fullscreenElement) {
+        document.exitFullscreen();
+    } else if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(function (error) {
+            console.warn('ImGit: full screen refused', error);
+        });
+    }
+});
+
 // The browser: the window is the page's canvas, sized to the browser window.
 namespace imgit::platform
 {
@@ -74,6 +86,11 @@ namespace imgit::platform
         // Back to GLFW's cursor: cleared here, so the one ImGui asks for next frame is applied again.
         imgit_set_canvas_cursor("");
         glfwSetCursor(window, nullptr);
+    }
+
+    void toggle_full_screen(GLFWwindow*)
+    {
+        imgit_toggle_page_full_screen();
     }
 
     NativeWindow native_window(GLFWwindow*)

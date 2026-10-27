@@ -278,6 +278,8 @@ namespace imgit::app
         // Open Repo: a native folder picker starting at the last opened repository; a folder that is not
         // a repository gets an "Open Failed" toast.
         void browse_for_repository();
+        // Opens the folder the picker returned, or says why it cannot.
+        void open_picked_repository(const std::string& picked);
         void close_tab(int index);
         // Opens the submodule at `path` (relative to the tab's working directory) in the tab of `state`, which
         // waits behind it until close_submodule.

@@ -261,6 +261,19 @@ namespace imgit::git::cli
         return request;
     }
 
+    std::vector<Credential>
+    credentials_from_environment(const std::vector<std::pair<std::string, std::string>>& environment)
+    {
+        for (const auto& [name, value] : environment)
+        {
+            if (name == CREDENTIALS_VARIABLE)
+            {
+                return decode(value);
+            }
+        }
+        return {};
+    }
+
     bool is_askpass_invocation()
     {
         return std::getenv(ASKPASS_MARKER) != nullptr;

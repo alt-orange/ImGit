@@ -173,10 +173,16 @@ namespace imgit::ui
             add("Apply patch", with_repo(
                                        [&app](app::RepoState& r)
                                        {
-                                           if (const auto file = platform::shell::open_file_dialog("patch"))
-                                           {
-                                               app.run_git_cli(r, "Apply patch", {"apply", *file});
-                                           }
+                                           platform::shell::open_file_dialog(
+                                                   "patch",
+                                                   [&app, workdir = r.repo.workdir()](const std::string& file)
+                                                   {
+                                                       if (app::RepoState* tab = app.find_repo_state(workdir);
+                                                           tab != nullptr)
+                                                       {
+                                                           app.run_git_cli(*tab, "Apply patch", {"apply", file});
+                                                       }
+                                                   });
                                        }));
             add("Blame", later("File Blame"));
             add("Checkout", next(Stage::CHECKOUT));

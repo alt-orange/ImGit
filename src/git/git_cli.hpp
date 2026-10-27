@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Network operations go through the user's `git` executable so the configured credential helpers and SSH
@@ -62,6 +63,11 @@ namespace imgit::git::cli
 
     // `scheme://host[:port]` of a url (and its `user@`, when it has one); empty for scp-style ssh urls.
     [[nodiscard]] std::string credential_host(const std::string& url, std::string* username = nullptr);
+
+    // The credentials run() hands its child through the environment, for the browser's in-process git
+    // (web_git.cpp), which answers the prompts itself.
+    [[nodiscard]] std::vector<Credential>
+    credentials_from_environment(const std::vector<std::pair<std::string, std::string>>& environment);
 
     // ImGit started by git as its askpass program: run() marks the environment, and `prompt` is git's
     // "Username for '...': " / "Password for '...': ".

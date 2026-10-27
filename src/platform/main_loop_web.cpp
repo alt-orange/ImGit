@@ -8,6 +8,13 @@
 // (Module.imgitSyncFiles in res/web/pre.js) while the page runs.
 namespace imgit::platform
 {
+    namespace detail
+    {
+        // shell_web.cpp: the file dialogs' answers, and the saved files that become downloads.
+        void run_dialog_answers();
+        void deliver_downloads();
+    } // namespace detail
+
     namespace
     {
         // Seconds between two saves while the page is open: what a closed tab can lose.
@@ -45,7 +52,9 @@ namespace imgit::platform
                 save_and_store();
                 return;
             }
+            detail::run_dialog_answers();
             g_loop.frame();
+            detail::deliver_downloads();
             if (now() - g_loop.last_save >= SAVE_INTERVAL)
             {
                 save_and_store();

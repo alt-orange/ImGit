@@ -63,11 +63,11 @@ namespace imgit::platform::shell
                 });
     }
 
-    std::optional<std::string> open_file_dialog(const std::string& extension)
+    void open_file_dialog(const std::string& extension, std::function<void(const std::string&)> on_picked)
     {
         const std::string name = extension + " files";
         const nfdu8filteritem_t filter{name.c_str(), extension.c_str()};
-        return run_dialog(
+        const std::optional<std::string> picked = run_dialog(
                 [&](nfdu8char_t** path)
                 {
                     nfdopendialogu8args_t args{};
@@ -76,9 +76,13 @@ namespace imgit::platform::shell
                     args.parentWindow = parent();
                     return NFD_OpenDialogU8_With(path, &args);
                 });
+        if (picked)
+        {
+            on_picked(*picked);
+        }
     }
 
-    std::optional<std::string> pick_folder_dialog(const std::string& start)
+    void pick_folder_dialog(const std::string& start, FolderPurpose, std::function<void(const std::string&)> on_picked)
     {
         std::error_code error;
         // The shell rejects "C:/repo/": native separators, no trailing one.
@@ -93,7 +97,7 @@ namespace imgit::platform::shell
             const std::u8string text = path.u8string();
             folder.assign(text.begin(), text.end());
         }
-        return run_dialog(
+        const std::optional<std::string> chosen = run_dialog(
                 [&](nfdu8char_t** picked)
                 {
                     nfdpickfolderu8args_t args{};
@@ -101,5 +105,9 @@ namespace imgit::platform::shell
                     args.parentWindow = parent();
                     return NFD_PickFolderU8_With(picked, &args);
                 });
+        if (chosen)
+        {
+            on_picked(*chosen);
+        }
     }
 } // namespace imgit::platform::shell

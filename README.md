@@ -162,9 +162,10 @@ cmake --build --preset web-release
 python3 tools/serve_web.py build/web-release   # http://localhost:8000/imgit.html
 ```
 
-The page needs the cross-origin isolation headers (COOP / COEP) for its threads, which `tools/serve_web.py` sends.
-Repositories live in the browser's storage (IndexedDB). There are no network operations, terminal or file dialogs
-there yet. See [`docs/WEB.md`](docs/WEB.md).
+The page needs the cross-origin isolation headers (COOP / COEP) for its threads, which `tools/serve_web.py` sends;
+it is also the CORS proxy the page reaches git hosts through. Repositories live in the browser's storage
+(IndexedDB): clone, fetch, pull and push run on libgit2 inside the page, *Open Repo* copies a folder in from disk,
+and the terminal panel has a small shell with that `git`. See [`docs/WEB.md`](docs/WEB.md).
 
 **CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
 every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, plus `web-release` with a headless Chromium

@@ -19,6 +19,9 @@ namespace imgit::platform
     // scaled (macOS: ImGui rasterises the fonts at the framebuffer's density).
     [[nodiscard]] float layout_scale(GLFWwindow* window);
 
+    // Full screen on the window's monitor, or back to the window it was; in the browser, the page's full screen.
+    void toggle_full_screen(GLFWwindow* window);
+
     // The window init_window() was given (the parent of file dialogs), null before.
     [[nodiscard]] GLFWwindow* main_window();
 

@@ -510,14 +510,19 @@ namespace imgit::app
 
     void Application::browse_for_repository()
     {
-        const auto picked = platform::shell::pick_folder_dialog(recent_repos.empty() ? "" : recent_repos.front());
-        if (!picked)
+        platform::shell::pick_folder_dialog(recent_repos.empty() ? "" : recent_repos.front(),
+                                            platform::shell::FolderPurpose::OPEN,
+                                            [this](const std::string& picked)
+                                            {
+                                                open_picked_repository(picked);
+                                            });
+    }
+
+    void Application::open_picked_repository(const std::string& picked)
+    {
+        if (!git::Repository::open(picked))
         {
-            return;
-        }
-        if (!git::Repository::open(*picked))
-        {
-            std::string name = *picked;
+            std::string name = picked;
             while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
             {
                 name.pop_back();
@@ -526,7 +531,7 @@ namespace imgit::app
             toasts.push(ToastKind::ERROR, "Open Failed", "Could not find a compatible repository at '" + name + "'.");
             return;
         }
-        open_repository(*picked);
+        open_repository(picked);
     }
 
     void Application::open_submodule(RepoState& state, const std::string& path)

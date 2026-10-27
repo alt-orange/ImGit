@@ -1275,10 +1275,11 @@ namespace imgit::ui
             app::Application& app = r.page().app;
             if (button(r.page(), "##browse", r.x(), r.top, "Browse", Tone::PRIMARY))
             {
-                if (const auto path = platform::shell::open_file_dialog(extension); path)
-                {
-                    set_value(app, key, *path);
-                }
+                platform::shell::open_file_dialog(extension,
+                                                  [&app, key](const std::string& path)
+                                                  {
+                                                      set_value(app, key, path);
+                                                  });
             }
             const float browse_w = 26.f + measure(Style{12.f}, "Browse");
             text(r.page(), r.x() + browse_w + 5.f, r.top + 4.32f, LABEL, value_of(app, key, fallback));
@@ -2296,10 +2297,11 @@ namespace imgit::ui
                     stored_field(r, "##gpg_program", "Commit Signing/GPG Program", "gpg", {}, 227.28f);
                     if (button(page, "##browse_gpg", r.x() + 232.28f, r.top, "Browse", Tone::PRIMARY, BTN_34))
                     {
-                        if (const auto path = platform::shell::open_file_dialog("exe"); path)
-                        {
-                            set_value(app, "Commit Signing/GPG Program", *path);
-                        }
+                        platform::shell::open_file_dialog("exe",
+                                                          [&app](const std::string& path)
+                                                          {
+                                                              set_value(app, "Commit Signing/GPG Program", path);
+                                                          });
                     }
                     help(r,
                          "This is usually \"gpg\" or \"gpg2\" depending on the\nversion you are using.\nYou can also "
@@ -2558,10 +2560,11 @@ namespace imgit::ui
                     stored_field(r, "##hooks_dir", "Git Hooks/Directory", "", field, 227.28f);
                     if (button(page, "##browse_hooks", r.x() + 232.28f, r.top, "Browse", Tone::PRIMARY, BTN_34))
                     {
-                        if (const auto path = platform::shell::open_file_dialog(""); path)
-                        {
-                            set_value(app, "Git Hooks/Directory", *path);
-                        }
+                        platform::shell::open_file_dialog("",
+                                                          [&app](const std::string& path)
+                                                          {
+                                                              set_value(app, "Git Hooks/Directory", path);
+                                                          });
                     }
                     help(r, "The directory that Git hooks will use for this repository and its linked worktrees.");
                 });

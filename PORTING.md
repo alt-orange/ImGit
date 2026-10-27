@@ -17,6 +17,7 @@ differs at run time (shortcut labels, the terminal's modifiers).
 | `platform/system.hpp`: home, app data and config folders, `local_time`, menu show delay, system font files, default shell, system proxy | `%USERPROFILE%`, `%APPDATA%`, `localtime_s`, `SPI_GETMENUSHOWDELAY`, `%WINDIR%\Fonts`, PowerShell, `WinHttpGetIEProxyConfigForCurrentUser` | `$HOME`, `$XDG_CONFIG_HOME`, `localtime_r`, 400 ms, *no fonts yet*, `$SHELL -l`, none (curl reads `HTTPS_PROXY` itself) |
 | `platform/window.hpp`: `apply_window_hints`, `init_window`, `layout_scale`, `set_cursor` / `reset_cursor`, `native_window` | no extra hints; dark caption (DWM), Chromium's resize cursors through a `WM_SETCURSOR` hook, ole32's drag-and-drop cursors; the monitor's content scale | `GLFW_OPENGL_FORWARD_COMPAT` on macOS; the window icon (Linux) or the dark title bar (`window_mac.mm`); GLFW standard cursors; X11 window or NSWindow handle; the content scale on X11, 1 on macOS (points; ImGui 1.92 rasterises the fonts at the Retina framebuffer's density on its own) |
 | `gfx/native_font_loader.hpp` | DirectWrite ClearType (`native_font_loader_dwrite.cpp`) | none (`native_font_loader_none.cpp`): FreeType with the gamma loader |
+| `platform/window.hpp`: `toggle_full_screen` | `window_desktop.cpp` (shared): `glfwSetWindowMonitor` on the primary monitor | the same |
 | `platform/main_loop.hpp`: the frame loop, `wait_for_events`, the GLSL version, `relaunch` | `main_loop_desktop.cpp` (shared): a `while` loop, `glfwWaitEventsTimeout`, `#version 330`, `spawn_detached(executable_path())` | the same |
 | `platform/http.hpp`: `http_get` (the Gravatars) | `http_cpr.cpp` (shared): cpr, one keep-alive session per thread, the system proxy | the same |
 
@@ -166,8 +167,16 @@ build, the hosting headers and what works. In short:
   IndexedDB.
 - **Threads.** `-pthread` with a pool of 8 workers started before main(), so the background jobs start at once. A
   thread beyond the pool waits for a new web worker to load.
-- **Processes.** There are none: `cli::available()` is false, the terminal cannot start, and the shell actions do
-  nothing. The folder picker is the browser's `prompt()`.
+- **Processes.** There are none. `run_process()` runs the app's registered in-process programs instead
+  (`platform/programs.hpp`). `git` is `git/web_git.cpp`: libgit2 behind git's command line, for what ImGit asks of
+  git (network, stash, apply, patches, abort, rev-list) and the basics of a terminal session. Its network goes
+  through a libgit2 smart-HTTP subtransport over a synchronous `emscripten_fetch` on the worker thread, and a CORS
+  proxy (`tools/serve_web.py`'s `/git-proxy/`). The terminal panel gets a small shell
+  (`pseudo_console_web.cpp`).
+- **Dialogs.** `open_file_dialog` and `pick_folder_dialog` now take a callback, because the browser's file input
+  answers later. The browser copies the picked file, or a folder with its `.git`, into the page's storage. Saving
+  returns a path in the page and offers the file as a download once it is written. `toggle_full_screen` moved into
+  the platform layer, where the browser uses the page's full screen.
 
 Verified on 2026-10-27, without a current emsdk (only Ubuntu's emscripten 3.1.6 was installable here):
 
@@ -176,6 +185,15 @@ Verified on 2026-10-27, without a current emsdk (only Ubuntu's emscripten 3.1.6 
 - Every ImGit source passed a wasm32 syntax check with `-Wall -Wextra -Wpedantic -Werror`, using clang 18,
   libc++ 18 and the Emscripten sysroot. emcc 3.1.6's own libc++ has no `<expected>`.
 - The first link and the first run of the page are CI's `Browser (WebAssembly)` job (`build.yml`).
+
+Later the same day, with emsdk 6.0.12 installed here, the page was driven in headless Chromium:
+
+- A clone from GitHub through the terminal panel and through the Clone dialog.
+- Against a local `git http-backend` with Basic auth: clone, commit and push from the terminal, then pull the
+  server's next commit (fast-forward).
+- A repository on disk opened through *Open Repo* (a folder upload). Its toolbar Push asked for credentials in
+  ImGit's sign-in bar and then pushed.
+- *Create patch from commit* as a download, *Apply patch* from an upload, and full screen in and out.
 
 ## Still to do
 

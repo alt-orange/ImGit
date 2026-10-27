@@ -1133,11 +1133,18 @@ namespace imgit::ui
                     branch_ops.push_back(item("Apply patch",
                                               [&app, &state]
                                               {
-                                                  const auto file = platform::shell::open_file_dialog("patch");
-                                                  if (file)
-                                                  {
-                                                      app.run_git_cli(state, "Apply patch", {"apply", *file});
-                                                  }
+                                                  // The browser answers on a later frame, when `state` may be gone.
+                                                  const std::string workdir = state.repo.workdir();
+                                                  platform::shell::open_file_dialog(
+                                                          "patch",
+                                                          [&app, workdir](const std::string& file)
+                                                          {
+                                                              if (RepoState* tab = app.find_repo_state(workdir);
+                                                                  tab != nullptr)
+                                                              {
+                                                                  app.run_git_cli(*tab, "Apply patch", {"apply", file});
+                                                              }
+                                                          });
                                               }));
                 }
                 const std::string name = local->name;

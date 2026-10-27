@@ -737,21 +737,7 @@ int main(int argc, char** argv)
         };
         app.toggle_full_screen = [window]
         {
-            static int saved[4] = {};
-            if (glfwGetWindowMonitor(window) != nullptr)
-            {
-                glfwSetWindowMonitor(window, nullptr, saved[0], saved[1], saved[2], saved[3], 0);
-                return;
-            }
-            glfwGetWindowPos(window, &saved[0], &saved[1]);
-            glfwGetWindowSize(window, &saved[2], &saved[3]);
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = monitor != nullptr ? glfwGetVideoMode(monitor) : nullptr;
-            if (mode == nullptr)
-            {
-                return; // no monitor to go full screen on (disconnected meanwhile)
-            }
-            glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+            imgit::platform::toggle_full_screen(window);
         };
         imgit::ui::set_avatar_cache_directory(app.app_path("gravatars"));
         app.apply_settings(); // applies the saved zoom on top of the monitor scale
