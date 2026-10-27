@@ -8,6 +8,10 @@
 # (imgit on Linux, ImGit.app on macOS) runs on its own.
 #
 #   imgit_tests  the unit tests (test/, GoogleTest), with -DIMGIT_BUILD_TESTS=ON; then `ctest --test-dir <build>`
+#
+# In the browser: `cmake --preset web-release` / `cmake --build --preset web-release` with an activated emsdk (EMSDK
+# set) builds imgit.html, .js and .wasm (WebAssembly, WebGL 2); its libraries come from cmake/WebDependencies.cmake
+# instead of vcpkg. See docs/WEB.md.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -32,13 +36,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # the static CRT of the x64-windows-static triplet (/MT, /MTd)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-find_package(imgui CONFIG REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(libgit2 CONFIG REQUIRED)
-find_package(cpr CONFIG REQUIRED)
-find_package(nfd CONFIG REQUIRED)
-find_package(Stb REQUIRED)
-find_package(OpenGL REQUIRED)
+if(EMSCRIPTEN)
+    include(cmake/WebDependencies.cmake)
+else()
+    find_package(imgui CONFIG REQUIRED)
+    find_package(glfw3 CONFIG REQUIRED)
+    find_package(libgit2 CONFIG REQUIRED)
+    find_package(cpr CONFIG REQUIRED)
+    find_package(nfd CONFIG REQUIRED)
+    find_package(Stb REQUIRED)
+    find_package(OpenGL REQUIRED)
+    set(IMGIT_DEPENDENCIES imgui::imgui glfw libgit2::libgit2package cpr::cpr nfd::nfd OpenGL::GL)
+endif()
 
 # The syntax highlighter: plain C++ (no ImGui), shared by the app and the tests.
 add_library(imgit_syntax STATIC
@@ -63,7 +72,6 @@ add_executable(imgit
     src/gfx/image.cpp
     src/gfx/lcd_renderer.cpp
     src/graph/graph_layout.cpp
-    src/platform/shell_dialogs.cpp
     src/ui/tabs_bar.cpp
     src/ui/toolbar.cpp
     src/ui/left_panel.cpp
@@ -87,11 +95,48 @@ add_executable(imgit
     src/ui/vector_icons.cpp
     src/ui/widgets.cpp)
 
-# Platform code lives in src/platform (one header per service, a _win32 / _posix source each, plus the .mm
+# Platform code lives in src/platform (one header per service, a _win32 / _posix / _web source each, plus the .mm
 # sources for the Cocoa calls) and in the native font loader; everything else is portable.
-if(WIN32)
+if(EMSCRIPTEN)
+    # The browser: WebGL 2 through GLFW's GLES 3 header, no processes, the home folder kept in IndexedDB.
     target_sources(imgit PRIVATE
         src/platform/app_menu_none.cpp
+        src/platform/http_web.cpp
+        src/platform/main_loop_web.cpp
+        src/platform/process_web.cpp
+        src/platform/pseudo_console_web.cpp
+        src/platform/shell_web.cpp
+        src/platform/system_web.cpp
+        src/platform/window_web.cpp
+        src/gfx/native_font_loader_none.cpp)
+    target_compile_definitions(imgit PRIVATE GLFW_INCLUDE_ES3)
+    set_target_properties(imgit PROPERTIES SUFFIX .html)
+    # The worker pool is started before main() runs, so the background jobs (git status, file history, avatars)
+    # start at once: a thread beyond the pool waits for a new web worker to load.
+    target_link_options(imgit PRIVATE
+        -pthread
+        -sPTHREAD_POOL_SIZE=8
+        -sALLOW_MEMORY_GROWTH=1
+        -sINITIAL_MEMORY=128MB
+        -sSTACK_SIZE=4MB
+        -sDEFAULT_PTHREAD_STACK_SIZE=1MB
+        -sMIN_WEBGL_VERSION=2
+        -sMAX_WEBGL_VERSION=2
+        -sFETCH=1
+        -sFORCE_FILESYSTEM=1
+        -lidbfs.js
+        --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/res/web/shell.html
+        --pre-js ${CMAKE_CURRENT_SOURCE_DIR}/res/web/pre.js
+        # the monospace face the desktop takes from the system (Consolas, Menlo, fontconfig's choice)
+        --embed-file ${CMAKE_CURRENT_SOURCE_DIR}/res/web/fonts/DejaVuSansMono.ttf@/fonts/DejaVuSansMono.ttf)
+    set_property(TARGET imgit APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/web/shell.html ${CMAKE_CURRENT_SOURCE_DIR}/res/web/pre.js)
+elseif(WIN32)
+    target_sources(imgit PRIVATE
+        src/platform/app_menu_none.cpp
+        src/platform/http_cpr.cpp
+        src/platform/main_loop_desktop.cpp
+        src/platform/shell_dialogs.cpp
         src/platform/process_win32.cpp
         src/platform/pseudo_console_win32.cpp
         src/platform/shell_win32.cpp
@@ -103,6 +148,9 @@ if(WIN32)
     target_link_libraries(imgit PRIVATE shell32 dwmapi dwrite winhttp)
 else()
     target_sources(imgit PRIVATE
+        src/platform/http_cpr.cpp
+        src/platform/main_loop_desktop.cpp
+        src/platform/shell_dialogs.cpp
         src/platform/process_posix.cpp
         src/platform/pseudo_console_posix.cpp
         src/platform/shell_posix.cpp
@@ -132,8 +180,7 @@ else()
 endif()
 
 target_include_directories(imgit PRIVATE src ${Stb_INCLUDE_DIR})
-target_link_libraries(imgit PRIVATE imgit_syntax imgui::imgui glfw libgit2::libgit2package cpr::cpr nfd::nfd
-                                    OpenGL::GL)
+target_link_libraries(imgit PRIVATE imgit_syntax ${IMGIT_DEPENDENCIES})
 
 # Every warning the compilers offer short of the style-level ones, and all of them errors: /W4 /WX on MSVC and
 # clang-cl, -Wall -Wextra -Wpedantic -Werror elsewhere. clang-cl takes the GNU flags too, for what /W4 leaves
@@ -157,7 +204,7 @@ endif()
 include(cmake/EmbedAssets.cmake)
 imgit_embed_assets(imgit ${CMAKE_CURRENT_SOURCE_DIR}/assets)
 
-if(IMGIT_BUILD_TESTS)
+if(IMGIT_BUILD_TESTS AND NOT EMSCRIPTEN)
     enable_testing()
     add_subdirectory(test)
 endif()

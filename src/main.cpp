@@ -6,7 +6,7 @@
 #include "git/git_cli.hpp"
 #include "git/repository.hpp"
 #include "platform/app_menu.hpp"
-#include "platform/process.hpp"
+#include "platform/main_loop.hpp"
 #include "platform/system.hpp"
 #include "platform/window.hpp"
 #include "ui/avatars.hpp"
@@ -715,7 +715,7 @@ int main(int argc, char** argv)
     // A scripted run takes no real input: the backend's GLFW callbacks would feed the user's mouse and keyboard
     // into the script's frames.
     ImGui_ImplGlfw_InitForOpenGL(window, options.script.empty());
-    ImGui_ImplOpenGL3_Init("#version 330");
+    ImGui_ImplOpenGL3_Init(imgit::platform::glsl_version());
     imgit::ui::set_texture_backend({create_gl_texture, destroy_gl_texture});
 
     imgit::git::Library git_library;
@@ -730,8 +730,10 @@ int main(int argc, char** argv)
         {
             // Written now, not at exit: the new instance reads these files as soon as it starts.
             app.save_state();
-            imgit::platform::spawn_detached({imgit::platform::executable_path()});
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            if (imgit::platform::relaunch())
+            {
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
         };
         app.toggle_full_screen = [window]
         {
@@ -783,13 +785,13 @@ int main(int argc, char** argv)
         }
         int frame = 0;
         int screenshot_wait = 0;
-        while (!glfwWindowShouldClose(window))
+        const auto run_frame = [&]
         {
             // Idle, the loop waits for input (or 0.1s); a running transition keeps it drawing every frame so fades
             // like the tab hover move smoothly.
             if (options.screenshot.empty() && !scripted && !imgit::ui::animating())
             {
-                glfwWaitEventsTimeout(0.1);
+                imgit::platform::wait_for_events(0.1);
             }
             else
             {
@@ -952,7 +954,12 @@ int main(int argc, char** argv)
             }
             glfwSwapBuffers(window);
             ++frame;
-        }
+        };
+        imgit::platform::run_main_loop(window, run_frame,
+                                       [&app]
+                                       {
+                                           app.save_state();
+                                       });
     }
 
     imgit::ui::shutdown_avatars();

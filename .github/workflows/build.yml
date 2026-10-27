@@ -264,3 +264,79 @@ jobs:
           name: imgit-${{ matrix.platform }}
           path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
+
+  # The browser build: WebAssembly through emsdk, the libraries built from source (cmake/WebDependencies.cmake)
+  web:
+    name: Browser (WebAssembly)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Set up emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.12
+
+      - name: Configure
+        run: cmake --preset web-release
+
+      - name: Build
+        run: cmake --build --preset web-release
+
+      # Headless Chromium renders WebGL 2 through SwiftShader; the page needs the COOP / COEP headers for its threads.
+      - name: Smoke test (the page runs its first frames)
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke"
+          (cd "$RUNNER_TEMP/smoke" && npm init -y > /dev/null && npm install --silent playwright@1.63.0 \
+            && npx playwright install --with-deps chromium)
+          python3 tools/serve_web.py build/web-release --port 8000 &
+          sleep 2
+          # next to its node_modules, where the script's `import 'playwright'` is resolved
+          cp tools/web_smoke.mjs "$RUNNER_TEMP/smoke/"
+          node "$RUNNER_TEMP/smoke/web_smoke.mjs" http://localhost:8000/imgit.html smoke-web.png
+
+      - name: Upload the smoke test screenshot
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot-web
+          path: smoke-web.png
+          if-no-files-found: ignore
+
+      - name: Package
+        id: package
+        run: |
+          version="${{ inputs.version }}"
+          version="${version:-$(git rev-parse --short HEAD)}"
+          name="imgit-$version-web"
+          mkdir -p "dist/$name/licenses"
+          cp build/web-release/imgit.html build/web-release/imgit.js build/web-release/imgit.wasm "dist/$name/"
+          cp tools/serve_web.py README.md docs/WEB.md "dist/$name/"
+          cp assets/fonts/LICENSE.txt "dist/$name/licenses/OpenSans.txt"
+          cp assets/icons/NOTICE.txt "dist/$name/licenses/FontAwesome.txt"
+          cp assets/cursors/NOTICE.txt "dist/$name/licenses/Chromium-cursors.txt"
+          cp res/web/fonts/LICENSE.txt "dist/$name/licenses/DejaVu.txt"
+          deps=build/web-release/_deps
+          cp "$deps/imgui-src/LICENSE.txt" "dist/$name/licenses/imgui.txt"
+          cp "$deps/freetype-src/LICENSE.TXT" "dist/$name/licenses/freetype.txt"
+          cp "$deps/libgit2-src/COPYING" "dist/$name/licenses/libgit2.txt"
+          cp "$deps/stb-src/LICENSE" "dist/$name/licenses/stb.txt"
+          glfw_license=$(find "$EMSDK" -ipath '*emscripten-glfw*' -name 'LICENSE*' -print -quit)
+          if [ -n "$glfw_license" ]; then cp "$glfw_license" "dist/$name/licenses/emscripten-glfw.txt"; fi
+          cd dist
+          zip -qr "$name.zip" "$name"
+          echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: imgit-web
+          path: ${{ steps.package.outputs.file }}
+          if-no-files-found: error

@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- The page of ImGit's browser build (--shell-file in CMakeLists.txt): the canvas fills the window. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ImGit Desktop</title>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #1f1f1f;
+            color: #cccccc;
+            font: 14px system-ui, sans-serif;
+        }
+        canvas {
+            display: block;
+            outline: none;
+        }
+        #status {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            text-align: center;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<div id="status">Loading ImGit…</div>
+<script>
+    var status_line = document.getElementById('status');
+    if (!window.crossOriginIsolated) {
+        // The worker threads share the WebAssembly memory, which browsers allow only on a cross-origin isolated page.
+        status_line.textContent = 'ImGit needs a cross-origin isolated page: serve it with the headers '
+            + '"Cross-Origin-Opener-Policy: same-origin" and "Cross-Origin-Embedder-Policy: require-corp" '
+            + '(tools/serve_web.py does).';
+    }
+    var Module = {
+        canvas: document.getElementById('canvas'),
+        setStatus: function (text) {
+            if (window.crossOriginIsolated) {
+                status_line.textContent = text;
+            }
+        },
+        onRuntimeInitialized: function () {
+            status_line.style.display = 'none';
+            Module.canvas.focus();
+        },
+    };
+    window.addEventListener('error', function () {
+        status_line.style.display = '';
+        status_line.textContent = 'ImGit stopped with an error; the browser console has the details.';
+    });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

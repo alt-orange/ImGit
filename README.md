@@ -153,11 +153,26 @@ say `Ctrl`, and `Option` for `Alt`; in the terminal panel the Control key still 
 downloaded `ImGit.app` is only ad-hoc signed, so the first launch needs a right-click → *Open* (or
 `xattr -d com.apple.quarantine ImGit.app`).
 
+**Browser (WebAssembly)** — an activated [emsdk](https://emscripten.org) 3.1.55+ (`EMSDK` set), CMake and Ninja; no
+vcpkg, the libraries are built from source at the same versions:
+
+```bash
+cmake --preset web-release
+cmake --build --preset web-release
+python3 tools/serve_web.py build/web-release   # http://localhost:8000/imgit.html
+```
+
+The page needs the cross-origin isolation headers (COOP / COEP) for its threads, which `tools/serve_web.py` sends.
+Repositories live in the browser's storage (IndexedDB). There are no network operations, terminal or file dialogs
+there yet. See [`docs/WEB.md`](docs/WEB.md).
+
 **CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
-every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, vcpkg at the manifest's baseline, its binary
+every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, plus `web-release` with a headless Chromium
+smoke test, vcpkg at the manifest's baseline, its binary
 cache in the Actions cache) and takes a screenshot as a smoke test under Xvfb on Linux and, best effort, on the macOS
 runner. Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
-`imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt`
+`imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`), `imgit-<tag>-web.zip`
+and `SHA256SUMS.txt`
 to it; run it by hand with a tag to rebuild an existing release's packages. The release executables for Windows and
 Linux are compressed with UPX (macOS has no working UPX target); some antivirus scanners flag UPX-packed files, and
 `upx -d` restores the original binary.
@@ -177,11 +192,12 @@ made this way.
 | `src/graph/` | lane and edge assignment for the commit graph |
 | `src/app/` | the application: settings, profiles, tabs, themes, repository state, undo, the merge model, toasts, the terminal's screen |
 | `src/ui/` | every view: graph, panels, diff, interactive rebase, merge tool, menus, dialogs, preferences, command palette, terminal |
-| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window (`window_mac.mm` for the Cocoa calls) |
+| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window (`window_mac.mm` for the Cocoa calls), the main loop and HTTP; `*_web.cpp` for the browser |
 | `src/gfx/` | image decoding, the LCD text renderer and the platform font loader |
 | `assets/` | fonts, icons and images compiled into the executable |
-| `res/` | the Windows icon and resource script, the macOS `.icns` and `Info.plist` template |
+| `res/` | the Windows icon and resource script, the macOS `.icns` and `Info.plist` template, the browser page (`res/web/`) |
 | `tools/app_icon.py` | draws the app icon (`app_icon.png`, `imgit.ico`, `imgit.icns`) |
+| `tools/serve_web.py`, `tools/web_smoke.mjs` | serve the browser build with the isolation headers; its CI smoke test |
 
 ## Credits
 
@@ -190,7 +206,9 @@ linking exception), [GLFW](https://www.glfw.org) (zlib), [cpr](https://github.co
 [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) (zlib) and
 [stb](https://github.com/nothings/stb) (public domain). It ships the Open Sans font (SIL OFL,
 `assets/fonts/LICENSE.txt`), Font Awesome Free icons (CC BY 4.0, `assets/icons/NOTICE.txt`) and two of Chromium's
-cursors (BSD, `assets/cursors/NOTICE.txt`).
+cursors (BSD, `assets/cursors/NOTICE.txt`). The browser build adds
+[emscripten-glfw](https://github.com/pongasoft/emscripten-glfw) (Apache 2.0) and DejaVu Sans Mono (Bitstream Vera
+licence, `res/web/fonts/LICENSE.txt`).
 
 <!-- Link references -->
 

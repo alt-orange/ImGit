@@ -2,13 +2,12 @@
 #include "app/assets.hpp"
 #include "app/md5.hpp"
 #include "gfx/image.hpp"
-#include "platform/system.hpp"
+#include "platform/http.hpp"
 #include "ui/vector_icons.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <condition_variable>
-#include <cpr/cpr.h>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -82,30 +81,16 @@ namespace imgit::ui
         // GETs `url` into `file` (through a temporary name, so a cut-off download is never taken for an image).
         bool download(const std::string& url, const std::filesystem::path& file)
         {
-            // One session for the worker thread: its connection to gravatar.com is kept alive between avatars.
-            static thread_local cpr::Session session;
-            static thread_local bool configured = false;
-            if (!configured)
-            {
-                configured = true;
-                session.SetTimeout(cpr::Timeout{30000});
-                // The system proxy, as the Windows download API used before honoured it.
-                if (const std::string proxy = platform::system_proxy(); !proxy.empty())
-                {
-                    session.SetProxies(cpr::Proxies{{"http", proxy}, {"https", proxy}});
-                }
-            }
-            session.SetUrl(cpr::Url{url});
-            const cpr::Response response = session.Get();
+            const platform::HttpResponse response = platform::http_get(url);
             // No Gravatar for the address: remember it, so the initials are drawn without asking again.
-            if (!response.error && response.status_code == 404)
+            if (response.received && response.status == 404)
             {
                 std::filesystem::path none = file;
                 none += ".none";
                 std::ofstream{none};
                 return false;
             }
-            if (response.error || response.status_code != 200 || response.text.empty())
+            if (!response.received || response.status != 200 || response.body.empty())
             {
                 return false;
             }
@@ -113,7 +98,7 @@ namespace imgit::ui
             partial += ".part";
             {
                 std::ofstream out(partial, std::ios::binary);
-                out.write(response.text.data(), static_cast<std::streamsize>(response.text.size()));
+                out.write(response.body.data(), static_cast<std::streamsize>(response.body.size()));
                 if (!out)
                 {
                     return false;

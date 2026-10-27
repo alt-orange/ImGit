@@ -78,6 +78,25 @@
       }
     },
     {
+      "name": "web-debug",
+      "displayName": "Browser (WebAssembly) Debug",
+      "description": "Emscripten from an activated emsdk (EMSDK); the libraries are built from source, not vcpkg",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+      }
+    },
+    {
+      "name": "web-release",
+      "displayName": "Browser (WebAssembly) Release",
+      "inherits": "web-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "ci-windows",
       "displayName": "CI Windows x64 Release",
       "inherits": "x64-release",
@@ -109,6 +128,8 @@
     { "name": "linux-release", "configurePreset": "linux-release" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
     { "name": "macos-release", "configurePreset": "macos-release" },
+    { "name": "web-debug", "configurePreset": "web-debug" },
+    { "name": "web-release", "configurePreset": "web-release" },
     { "name": "ci-windows", "configurePreset": "ci-windows" },
     { "name": "ci-linux", "configurePreset": "ci-linux" },
     { "name": "ci-macos", "configurePreset": "ci-macos" }
