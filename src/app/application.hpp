@@ -275,6 +275,9 @@ namespace imgit::app
         // The state of the repository at `workdir`, shown or behind an open submodule; nullptr when none.
         [[nodiscard]] RepoState* find_repo_state(const std::string& workdir) const;
         void open_repository(const std::string& path);
+        // After a clone: when the repository in the active tab has submodules, asks whether to initialize them
+        // recursively.
+        void offer_recursive_submodule_init();
         // Open Repo: a native folder picker starting at the last opened repository; a folder that is not
         // a repository gets an "Open Failed" toast.
         void browse_for_repository();

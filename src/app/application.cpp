@@ -468,6 +468,33 @@ namespace imgit::app
         return nullptr;
     }
 
+    void Application::offer_recursive_submodule_init()
+    {
+        if (active_tab < 0 || active_tab >= static_cast<int>(tabs.size()))
+        {
+            return;
+        }
+        const std::string workdir = tabs[static_cast<std::size_t>(active_tab)]->repo.workdir();
+        std::error_code ec;
+        if (!std::filesystem::exists(std::filesystem::path(workdir) / ".gitmodules", ec))
+        {
+            return;
+        }
+        dialog.open(Dialog::Kind::CONFIRM);
+        dialog.workdir = workdir;
+        dialog.title = "Initialize submodules";
+        dialog.message = "This repository has submodules. Initialize them recursively?";
+        dialog.confirm_label = "Initialize";
+        dialog.danger = false;
+        dialog.on_confirm = [this, workdir]
+        {
+            if (RepoState* tab = find_repo_state(workdir); tab != nullptr)
+            {
+                run_git_cli(*tab, "Initialize submodules", {"submodule", "update", "--init", "--recursive"});
+            }
+        };
+    }
+
     void Application::open_repository(const std::string& raw_path)
     {
         repo_management_open = false;
@@ -1153,6 +1180,7 @@ namespace imgit::app
                 }
                 toasts.push(ToastKind::SUCCESS, "Clone complete", destination);
                 open_repository(destination);
+                offer_recursive_submodule_init();
             }
             else if (!prompt_for_credentials(output.text, clone.attempt,
                                              [this, parent = std::move(clone.parent), url = std::move(clone.url),
