@@ -2,11 +2,76 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 
 namespace imgit::theme
 {
     namespace
     {
+        // Reads a decimal number at the start of [begin, end): an optional '-', digits with an optional fraction
+        // (".5" and "5." included) and an optional exponent, as std::from_chars does for floating point (Apple's
+        // libc++ has only the integer overloads). Independent of the C locale. Returns where the number ends, or
+        // `begin` when there is none.
+        const char* parse_decimal(const char* begin, const char* end, double& out)
+        {
+            const char* p = begin;
+            const bool negative = p != end && *p == '-';
+            if (negative)
+            {
+                ++p;
+            }
+            const auto is_digit = [](char c)
+            {
+                return c >= '0' && c <= '9';
+            };
+            double mantissa = 0.0;
+            int scale = 0; // the power of ten the digits after the point add
+            bool any_digit = false;
+            for (; p != end && is_digit(*p); ++p)
+            {
+                mantissa = mantissa * 10.0 + (*p - '0');
+                any_digit = true;
+            }
+            if (p != end && *p == '.')
+            {
+                ++p;
+                for (; p != end && is_digit(*p); ++p)
+                {
+                    mantissa = mantissa * 10.0 + (*p - '0');
+                    --scale;
+                    any_digit = true;
+                }
+            }
+            if (!any_digit)
+            {
+                return begin;
+            }
+            if (p != end && (*p == 'e' || *p == 'E'))
+            {
+                const char* exponent_start = p + 1;
+                const char* q = exponent_start;
+                const bool exponent_negative = q != end && *q == '-';
+                if (q != end && (*q == '-' || *q == '+'))
+                {
+                    ++q;
+                }
+                int exponent = 0;
+                const char* digits = q;
+                for (; q != end && is_digit(*q); ++q)
+                {
+                    exponent = std::min(exponent * 10 + (*q - '0'), 9999);
+                }
+                if (q != digits) // "1e" alone leaves the 'e' unread, as from_chars does
+                {
+                    scale += exponent_negative ? -exponent : exponent;
+                    p = q;
+                }
+            }
+            const double value = mantissa * std::pow(10.0, scale);
+            out = negative ? -value : value;
+            return p;
+        }
+
         // Just enough JSON for a theme file: objects, arrays, strings, numbers, true / false / null.
         struct Json
         {
@@ -198,8 +263,8 @@ namespace imgit::theme
                 }
                 const char* begin = m_text.data() + m_pos;
                 const char* end = m_text.data() + m_text.size();
-                const auto [next, error] = std::from_chars(begin, end, value.number);
-                if (error != std::errc{} || next == begin)
+                const char* next = parse_decimal(begin, end, value.number);
+                if (next == begin)
                 {
                     return fail("unexpected character");
                 }
@@ -370,13 +435,13 @@ namespace imgit::theme
         {
             const auto comma = text.find(',');
             const std::string_view part = trim(text.substr(0, comma));
-            float value = 0.f;
-            const auto [next, error] = std::from_chars(part.data(), part.data() + part.size(), value);
-            if (error != std::errc{} || next != part.data() + part.size())
+            double value = 0.0;
+            const char* next = parse_decimal(part.data(), part.data() + part.size(), value);
+            if (part.empty() || next != part.data() + part.size())
             {
                 return std::nullopt;
             }
-            values.push_back(value);
+            values.push_back(static_cast<float>(value));
             if (comma == std::string_view::npos)
             {
                 break;

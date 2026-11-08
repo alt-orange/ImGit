@@ -32,6 +32,21 @@ namespace
         const auto rgba = parse_color("rgba(0,0,0,0.25)");
         ASSERT_TRUE(rgba);
         EXPECT_FLOAT_EQ(rgba->a, 0.25f);
+        // The number forms the parser takes (std::from_chars' floating-point ones).
+        const auto forms = parse_color("rgba(25.5e1, 1.275E2, 0, .5)");
+        ASSERT_TRUE(forms);
+        EXPECT_FLOAT_EQ(forms->r, 1.f);
+        EXPECT_NEAR(forms->g, 0.5f, 1e-6f);
+        EXPECT_FLOAT_EQ(forms->a, 0.5f);
+    }
+
+    TEST(ThemeColor, RejectsBadNumbers)
+    {
+        EXPECT_FALSE(parse_color("rgb(1, 2, )"));
+        EXPECT_FALSE(parse_color("rgb(1, 2, -)"));
+        EXPECT_FALSE(parse_color("rgb(1, 2, 3x)"));
+        EXPECT_FALSE(parse_color("rgb(1, 2, .)"));
+        EXPECT_FALSE(parse_color("rgb(1, 2, 3e)"));
     }
 
     TEST(ThemeColor, Rejects)
