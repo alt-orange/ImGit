@@ -36,6 +36,19 @@ namespace imgit::app
         bool push_after_commit = false;
         bool compact_graph = false;
         bool syntax_highlighting = true; // the diff and merge editors colour code by its language
+        bool word_wrap = false; // the diff / file view wraps long lines (Preferences → Editor, the toolbar toggle)
+        // The diff view's whitespace toggle: on, changes in whitespace only are shown and the whitespace of changed
+        // lines is drawn (· for a space, → for a tab); off, they are left out (GIT_DIFF_IGNORE_WHITESPACE).
+        bool diff_whitespace = true;
+        // The order of the right panel's file lists (the Sort button).
+        enum class FileSort
+        {
+            PATH,
+            PATH_DESCENDING,
+            NAME,
+            STATUS,
+        };
+        FileSort file_sort = FileSort::PATH;
         float zoom = 1.f;
         std::string theme = "ImGit Dark"; // a theme::theme_names() entry
         std::string default_branch = "main";
@@ -49,6 +62,10 @@ namespace imgit::app
         float detail_panel_width = 438.f; // DETAIL_PANEL_DEFAULT_WIDTH
         float terminal_height = 275.f; // TERMINAL_DEFAULT_HEIGHT
         float commit_message_height = 150.f; // layout.CommitMessage.rightPanelHeight (initialCommitMessageHeight)
+        // The merge tool's dragged splits: A's share of the width beside B, and A / B's share of the height above
+        // the Output.
+        float merge_a_fraction = 0.5f;
+        float merge_top_fraction = 0.5f;
         std::map<std::string, float> graph_column_widths; // by zone: ref, graph, message, author...
         std::vector<std::string> graph_column_order; // the zones' keys as dragged into place; empty: the default
 
@@ -84,6 +101,7 @@ namespace imgit::app
             KEYBOARD_SHORTCUTS,
             ABOUT,
             CONFIRM, // generic: title / message / confirm_label / on_confirm
+            CREATE_FILE, // the prompt bar: text_a the new file's name, text_b the folder it goes in ("" the root)
         };
         Kind kind = Kind::NONE;
         bool just_opened = false;

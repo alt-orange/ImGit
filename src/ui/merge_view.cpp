@@ -15,8 +15,9 @@
 // conflict navigator. Each conflict is highlighted in A / B with a checkbox on its first line that picks the whole
 // side; a click on a line picks or drops that line alone. The Output shows the merge: agreed lines, the picked
 // lines tagged A / B, and the base's lines (magenta) where nothing was picked yet; a double-click edits it as
-// text. Save writes the Output and marks the file resolved. Positions are CSS px; code is Consolas 12px on 16px
-// lines with an 82px margin (glyphs, line numbers, decorations).
+// text. Save writes the Output and marks the file resolved. A | B and the Output are split by drag handles, the
+// split kept in the settings. Positions are CSS px; code is Consolas 12px on 16px lines with an 82px margin
+// (glyphs, line numbers, decorations).
 namespace imgit::ui
 {
     namespace
@@ -28,6 +29,8 @@ namespace imgit::ui
         constexpr float NUMBERS_RIGHT = 62.f;
         constexpr float DECORATION_X = 18.f; // the margin decoration: a 4px bar, then the side's tint
         constexpr float GLYPH_X = 67.f; // the in-output / add / remove glyph, 14.4px
+        constexpr float MIN_PANE_W = 200.f; // the narrowest A / B and the lowest panes the handles leave
+        constexpr float MIN_PANE_H = 110.f;
 
         // The sides' colours: A sky blue, B amber, Output violet.
         constexpr ImVec4 rgb(unsigned hex, float alpha = 1.f)
@@ -302,8 +305,9 @@ namespace imgit::ui
             ImGui::EndChild();
         }
 
-        // The Output: the merge as it stands, or the text being edited.
-        void draw_output(app::MergeTool& tool, ImVec2 origin, ImVec2 size)
+        // The Output: the merge as it stands, its code coloured by its syntax when `syntax_highlighting`, or the text
+        // being edited.
+        void draw_output(app::MergeTool& tool, ImVec2 origin, ImVec2 size, bool syntax_highlighting)
         {
             const theme::Palette& p = theme::palette();
             ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -371,6 +375,19 @@ namespace imgit::ui
             }
 
             const std::vector<app::OutputLine> lines = tool.output();
+            // Its syntax colours, kept until the merged text changes (a pick, a reset).
+            static syntax::TextCache syntax_cache;
+            const syntax::LineSpans* colours = nullptr;
+            if (syntax_highlighting)
+            {
+                std::vector<std::string> texts;
+                texts.reserve(lines.size());
+                for (const app::OutputLine& line : lines)
+                {
+                    texts.push_back(line.text);
+                }
+                colours = syntax_cache.get(tool.path, texts);
+            }
             ImGui::SetCursorScreenPos(body);
             ImGui::PushStyleColor(ImGuiCol_ChildBg, p.app_bg0);
             ImGui::BeginChild("##merge_output", body_size, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
@@ -445,7 +462,11 @@ namespace imgit::ui
                     {
                         line_number(code, top_left.x, top, numbers[static_cast<std::size_t>(i)]);
                     }
-                    mono_text(code, top_left.x + px(MARGIN_W), top, theme::u32(p.text_normal), line.text.c_str());
+                    draw_code_text(code, fonts().mono, 12.f,
+                                   ImVec2(top_left.x + px(MARGIN_W), css_y(12.f, top + px(2.f), true)), line.text,
+                                   colours != nullptr ? colours->line(static_cast<std::size_t>(i))
+                                                      : std::span<const syntax::Span>(),
+                                   theme::u32(p.text_normal));
                     widest = std::max(widest, text_size(fonts().mono, 12.f, line.text.c_str()).x);
                 }
             }
@@ -521,20 +542,49 @@ namespace imgit::ui
                                  top, Tone::PRIMARY, &w);
         }
 
-        // A | B over the Output, halving the rest.
+        // A | B over the Output, split where the user dragged the handles (halves by default).
         const float body_top = origin.y + px(HEADER_H);
         const float body_h = size.y - px(HEADER_H);
-        const float panes_h = std::round(body_h / 2.f);
-        const float half = std::round(size.x / 2.f);
+        const float min_w = std::min(px(MIN_PANE_W), size.x / 2.f);
+        const float min_h = std::min(px(MIN_PANE_H), body_h / 2.f);
+        const float panes_h = std::round(std::clamp(body_h * app.settings.merge_top_fraction, min_h, body_h - min_h));
+        const float half = std::round(std::clamp(size.x * app.settings.merge_a_fraction, min_w, size.x - min_w));
         draw_side(tool, app::Side::A, ImVec2(origin.x, body_top), ImVec2(half - 1.f, panes_h),
                   app.settings.syntax_highlighting);
         draw->AddRectFilled(ImVec2(origin.x + half - 1.f, body_top), ImVec2(origin.x + half, body_top + panes_h),
                             theme::u32(p.panel_border));
         draw_side(tool, app::Side::B, ImVec2(origin.x + half, body_top), ImVec2(size.x - half, panes_h),
                   app.settings.syntax_highlighting);
-        draw_output(tool, ImVec2(origin.x, body_top + panes_h), ImVec2(size.x, body_h - panes_h));
+        draw_output(tool, ImVec2(origin.x, body_top + panes_h), ImVec2(size.x, body_h - panes_h),
+                    app.settings.syntax_highlighting);
         tool.scroll_request = -1;
         ImGui::EndChild();
+
+        // The resize handles over the panes' borders (windows of their own, above the panes' child windows): the
+        // border between A and B, and the Output's top border. The split is kept as a share of the view.
+        {
+            float a_w = half;
+            float top_h = panes_h;
+            bool released = overlay_resize_drag("##merge_resize_ab", ImVec2(origin.x + half - px(4.f), body_top),
+                                                ImVec2(origin.x + half + px(2.f), body_top + panes_h), true, 1.f, &a_w,
+                                                min_w, size.x - min_w);
+            released |= overlay_resize_drag("##merge_resize_output", ImVec2(origin.x, body_top + panes_h - px(3.f)),
+                                            ImVec2(origin.x + size.x, body_top + panes_h + px(3.f)), false, 1.f,
+                                            &top_h, min_h, body_h - min_h);
+            // Only a drag moves the stored split (not the clamp of a narrow window).
+            if (a_w != half)
+            {
+                app.settings.merge_a_fraction = std::clamp(a_w / size.x, 0.1f, 0.9f);
+            }
+            if (top_h != panes_h)
+            {
+                app.settings.merge_top_fraction = std::clamp(top_h / body_h, 0.1f, 0.9f);
+            }
+            if (released)
+            {
+                app.settings.save(app.config_path("settings.txt"));
+            }
+        }
 
         const std::string path = tool.path;
         if (save)

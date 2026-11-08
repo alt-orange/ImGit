@@ -49,6 +49,7 @@ namespace imgit::ui
             const git::DiffLine* right = nullptr; // split: the new side
             bool hunk_header = false;
             std::size_t hunk = 0;
+            int segment = 0; // word wrap: which visual line of the row's text this is (0: the first)
         };
 
         float css_text_y(float size, float box_top, bool mono)
@@ -224,6 +225,63 @@ namespace imgit::ui
             return rows;
         }
 
+        // Word wrap: each row as many times as its longer side needs `wrap_w` wide visual lines (whole characters of
+        // the monospace font), the copies numbered by `segment`. Hunk headers stay one line.
+        std::vector<Row> wrap_rows(const std::vector<Row>& rows, float wrap_w)
+        {
+            std::vector<Row> wrapped;
+            wrapped.reserve(rows.size());
+            const auto segments = [&](const git::DiffLine* line)
+            {
+                if (line == nullptr || line->text.empty())
+                {
+                    return 1;
+                }
+                const float w = text_size(fonts().mono, 12.f, line->text.c_str()).x;
+                return std::max(1, static_cast<int>(std::ceil(w / wrap_w - 0.001f)));
+            };
+            for (const Row& row : rows)
+            {
+                const int count = row.hunk_header ? 1 : std::max(segments(row.left), segments(row.right));
+                for (int k = 0; k < count; ++k)
+                {
+                    Row copy = row;
+                    copy.segment = k;
+                    wrapped.push_back(copy);
+                }
+            }
+            return wrapped;
+        }
+
+        // The whitespace of `text` drawn at `x` (where the text starts): a middle dot centred in each space's cell,
+        // an arrow over each tab, in Monaco's editorWhitespace.foreground (rgba(227,228,226,.16)).
+        void draw_whitespace(ImDrawList* draw, float x, float line_top, const std::string& text)
+        {
+            const ImU32 color = IM_COL32(227, 228, 226, 72);
+            const float y = line_top + px(LINE_H) / 2.f;
+            for (std::size_t i = 0; i < text.size(); ++i)
+            {
+                if (text[i] != ' ' && text[i] != '\t')
+                {
+                    continue;
+                }
+                const float x0 = x + text_size(fonts().mono, 12.f, text.data(), text.data() + i).x;
+                const float x1 = x + text_size(fonts().mono, 12.f, text.data(), text.data() + i + 1).x;
+                if (text[i] == ' ')
+                {
+                    draw->AddCircleFilled(ImVec2((x0 + x1) / 2.f, y), px(1.f), color, 8);
+                }
+                else
+                {
+                    const float head = px(3.f);
+                    const float tip = std::min(x1 - px(2.f), x0 + px(12.f));
+                    draw->AddLine(ImVec2(x0 + px(2.f), y), ImVec2(tip, y), color, 1.f);
+                    draw->AddLine(ImVec2(tip - head, y - head), ImVec2(tip, y), color, 1.f);
+                    draw->AddLine(ImVec2(tip - head, y + head), ImVec2(tip, y), color, 1.f);
+                }
+            }
+        }
+
         // Monaco's diagonal-fill: rgba(204,204,204,.2) stripes at -45 degrees, 8px apart (a 12.5% band).
         void diagonal_fill(ImDrawList* draw, ImVec2 min, ImVec2 max)
         {
@@ -276,7 +334,21 @@ namespace imgit::ui
             return nullptr;
         }
         const git::FileDiff& diff = *diff_ptr;
-        const std::vector<Row> rows = build_rows(diff, options.mode, options.file_view);
+        const bool gutter = options.file_view && options.blame_gutter;
+        const float text_offset = gutter ? (options.blame_columns ? BLAME_COLUMNS_TEXT_X : BLAME_TEXT_X)
+                                         : (options.file_view ? 43.f : TEXT_X);
+        // Word wrap: the text column's width, in whole characters (less the vertical scrollbar).
+        float wrap_w = 0.f;
+        if (options.word_wrap)
+        {
+            const float view_w = editor_max.x - px(DIFF_RULER_W) - editor_min.x - ImGui::GetStyle().ScrollbarSize;
+            const float column_w = split ? view_w / 2.f - px(43.f) : view_w - px(text_offset) - px(10.f);
+            const float char_w = std::max(1.f, text_size(fonts().mono, 12.f, "M").x);
+            wrap_w = std::max(char_w * 8.f, std::floor(column_w / char_w) * char_w);
+        }
+        const std::vector<Row> rows = options.word_wrap
+                                              ? wrap_rows(build_rows(diff, options.mode, options.file_view), wrap_w)
+                                              : build_rows(diff, options.mode, options.file_view);
         // The syntax colours of the diff's lines, kept per editor until the diff changes; null for plain text.
         static std::unordered_map<std::string, syntax::DiffCache> syntax_caches;
         const syntax::DiffSpans* colours = options.syntax_highlighting ? syntax_caches[options.id].get(diff) : nullptr;
@@ -284,20 +356,37 @@ namespace imgit::ui
         const float rulers_w = px(DIFF_RULER_W);
         const float content_right = editor_max.x - rulers_w;
         // The file view with a blame gutter: the avatar column, the numbers, the commit columns, the bar, the text.
-        const bool gutter = options.file_view && options.blame_gutter;
-        const float text_offset = gutter ? (options.blame_columns ? BLAME_COLUMNS_TEXT_X : BLAME_TEXT_X)
-                                         : (options.file_view ? 43.f : TEXT_X);
         ImGui::SetCursorScreenPos(editor_min);
         ImGui::BeginChild(options.id, ImVec2(content_right - editor_min.x, editor_max.y - editor_min.y),
-                          ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+                          ImGuiChildFlags_None, options.word_wrap ? 0 : ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
         ImDrawList* body = ImGui::GetWindowDrawList();
-        // A row's line of code, coloured by its syntax (the add / delete backgrounds are drawn under it).
+        // A row's line of code, coloured by its syntax (the add / delete backgrounds are drawn under it). Wrapped,
+        // the row shows its segment: the line shifted left by the segments before it, clipped to the column.
         const auto code_text = [&](float x, float line_top, const Row& row, const git::DiffLine& line)
         {
-            draw_code_text(body, fonts().mono, 12.f, ImVec2(x, css_text_y(12.f, line_top + px(2.f), true)), line.text,
+            const float shift = static_cast<float>(row.segment) * wrap_w;
+            if (options.word_wrap)
+            {
+                body->PushClipRect(ImVec2(x, line_top), ImVec2(x + wrap_w, line_top + px(LINE_H)), true);
+            }
+            if (options.show_whitespace && line.origin != ' ')
+            {
+                draw_whitespace(body, x - shift, line_top, line.text);
+            }
+            draw_code_text(body, fonts().mono, 12.f, ImVec2(x - shift, css_text_y(12.f, line_top + px(2.f), true)),
+                           line.text,
                            colours != nullptr ? colours->line(diff, row.hunk, &line) : std::span<const syntax::Span>(),
                            EDITOR_TEXT);
+            if (options.word_wrap)
+            {
+                body->PopClipRect();
+            }
+        };
+        // Wrapped rows show their line numbers, signs and blame only on their first segment.
+        const auto number_of = [](const Row& row, int number)
+        {
+            return row.segment == 0 ? number : 0;
         };
         const float view_h = ImGui::GetWindowHeight();
         const float scroll_y = ImGui::GetScrollY();
@@ -383,7 +472,7 @@ namespace imgit::ui
                     {
                         const ImVec4 color = options.blame_color ? options.blame_color(hunk->sha)
                                                                  : theme::graph_color(sha_color_index(hunk->sha));
-                        const bool first = lineno == hunk->start_line;
+                        const bool first = lineno == hunk->start_line && row.segment == 0;
                         if (first)
                         {
                             draw_avatar(body, ImVec2(base_x + px(BLAME_AVATAR_X), pos.y + line_h / 2.f),
@@ -412,13 +501,13 @@ namespace imgit::ui
                             }
                         }
                     }
-                    mono_number(body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, lineno);
+                    mono_number(body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, number_of(row, lineno));
                     code_text(text_x, pos.y, row, *row.left);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
                 }
                 else if (options.file_view)
                 {
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, row.left->new_lineno);
+                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, number_of(row, row.left->new_lineno));
                     code_text(base_x + px(43.f), pos.y, row, *row.left);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
                 }
@@ -439,11 +528,14 @@ namespace imgit::ui
                         {
                             body->AddRectFilled(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h),
                                                 theme::u32(line->origin == '+' ? INSERT_BG : DELETE_BG));
-                            mono_text(body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
-                                      line->origin == '+' ? "+" : "-");
+                            if (row.segment == 0)
+                            {
+                                mono_text(body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
+                                          line->origin == '+' ? "+" : "-");
+                            }
                         }
                         mono_number(body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
-                                    side == 0 ? line->old_lineno : line->new_lineno);
+                                    number_of(row, side == 0 ? line->old_lineno : line->new_lineno));
                         body->PushClipRect(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h), true);
                         code_text(x0 + px(43.f), pos.y, row, *line);
                         body->PopClipRect();
@@ -459,20 +551,21 @@ namespace imgit::ui
                         // codicon diff-insert / diff-remove in the 10px sign column.
                         const float cx = std::floor(base_x + px(NEW_NUMBERS_RIGHT + 5.f));
                         const float cy = std::floor(pos.y + line_h / 2.f);
-                        const ImU32 sign = theme::u32(p.text_normal);
+                        const ImU32 sign = theme::u32(row.segment == 0 ? p.text_normal : ImVec4());
                         body->AddRectFilled(ImVec2(cx - px(5.f), cy), ImVec2(cx + px(5.f), cy + 1.f), sign);
                         if (line.origin == '+')
                         {
                             body->AddRectFilled(ImVec2(cx, cy - px(5.f)), ImVec2(cx + 1.f, cy + px(5.f) + 1.f), sign);
                         }
                     }
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, line.old_lineno, line.old_lineno == 1);
-                    mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, line.new_lineno,
+                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, number_of(row, line.old_lineno),
+                                line.old_lineno == 1);
+                    mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, number_of(row, line.new_lineno),
                                 line.new_lineno == new_cursor);
                     code_text(base_x + px(TEXT_X), pos.y, row, line);
                     max_text = std::max(max_text, text_size(fonts().mono, 12.f, line.text.c_str()).x);
                 }
-                ImGui::Dummy(ImVec2(max_text + px(text_offset + 40.f), line_h));
+                ImGui::Dummy(ImVec2(options.word_wrap ? 1.f : max_text + px(text_offset + 40.f), line_h));
             }
         }
         clipper.End();
@@ -554,13 +647,28 @@ namespace imgit::ui
                                   origin.y + px(28.f)),
                            target.path.c_str());
             }
-            // The close cross (zmdi-close, 20px) 10px from the right.
+            // The close cross (zmdi-close, 20px) 10px from the right; it closes the editor too.
             const ImVec2 cmin(origin.x + size.x - px(30.f), origin.y + px(7.5f));
             ImGui::SetCursorScreenPos(cmin);
             // Escape closes it from the application's shortcuts, with their guards.
             if (ImGui::InvisibleButton("##close_diff", ImVec2(px(20.f), px(20.f))))
             {
-                state.close_diff();
+                if (state.file_edit && state.file_edit->text != state.file_edit->saved)
+                {
+                    app.dialog.open(app::Dialog::Kind::CONFIRM);
+                    app.dialog.title = "Discard Changes";
+                    app.dialog.message = "Discard your unsaved changes to " + state.file_edit->path + "?";
+                    app.dialog.confirm_label = "Discard";
+                    app.dialog.danger = true;
+                    app.dialog.on_confirm = [&state]
+                    {
+                        state.close_diff();
+                    };
+                }
+                else
+                {
+                    state.close_diff();
+                }
                 ImGui::EndChild();
                 return;
             }
@@ -630,6 +738,14 @@ namespace imgit::ui
 
         // Toolbar row
         const float bar_y = origin.y + px(HEADER_H + 10.f);
+        if (state.file_edit)
+        {
+            draw_file_editor(app, state, ImVec2(origin.x + px(10.f), bar_y + px(1.5f)),
+                             ImVec2(origin.x, origin.y + px(HEADER_H + TOOLBAR_H)),
+                             ImVec2(origin.x + size.x - 1.f, origin.y + size.y));
+            ImGui::EndChild();
+            return;
+        }
         bool scroll_prev = false, scroll_next = false;
         {
             {
@@ -642,8 +758,8 @@ namespace imgit::ui
                 ImGui::SetCursorScreenPos(bmin);
                 if (ImGui::InvisibleButton("##edit_file", ImVec2(w, px(20.f))))
                 {
-                    app.toasts.push(app::ToastKind::INFO, label,
-                                    "The built-in editor is not part of ImGit yet.");
+                    const std::string path = target.path;
+                    open_file_editor(app, state, path);
                 }
                 const bool hovered = ImGui::IsItemHovered();
                 draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.accent, hovered ? 0.3f : 0.2f)), px(2.f));
@@ -694,6 +810,7 @@ namespace imgit::ui
                     {"##inline", nullptr, "far:list", "Inline View", 0.f},
                     {"##split", nullptr, "far:columns", "Split View", 0.f},
                     {"##whitespace", nullptr, "far:paragraph", "Show whitespace", 10.f},
+                    {"##wrap", nullptr, "fas:level-down", "Word wrap", 0.f},
             };
             float total = 0.f;
             for (const Button& button : buttons)
@@ -720,7 +837,11 @@ namespace imgit::ui
                 }
                 else if (id == "##whitespace")
                 {
-                    checked = state.diff_whitespace;
+                    checked = app.settings.diff_whitespace;
+                }
+                else if (id == "##wrap")
+                {
+                    checked = app.settings.word_wrap;
                 }
                 if (toggle_button(button.id, button.label, button.icon, ImVec2(x, bar_y), checked, button.tip))
                 {
@@ -734,8 +855,15 @@ namespace imgit::ui
                     }
                     else if (id == "##whitespace")
                     {
-                        state.diff_whitespace = !state.diff_whitespace;
+                        app.settings.diff_whitespace = !app.settings.diff_whitespace;
+                        state.diff_whitespace = app.settings.diff_whitespace;
                         state.reload_diff();
+                        app.settings.save(app.config_path("settings.txt"));
+                    }
+                    else if (id == "##wrap")
+                    {
+                        app.settings.word_wrap = !app.settings.word_wrap;
+                        app.settings.save(app.config_path("settings.txt"));
                     }
                     else if (id == "##prev")
                     {
@@ -768,6 +896,8 @@ namespace imgit::ui
         options.scroll_prev = scroll_prev;
         options.scroll_next = scroll_next;
         options.syntax_highlighting = app.settings.syntax_highlighting;
+        options.word_wrap = app.settings.word_wrap;
+        options.show_whitespace = app.settings.diff_whitespace;
         draw_diff_editor(state.diff ? &*state.diff : nullptr, state.diff_error, editor_min, editor_max, options);
         ImGui::EndChild();
     }

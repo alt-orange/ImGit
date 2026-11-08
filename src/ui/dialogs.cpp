@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -876,7 +877,9 @@ namespace imgit::ui
                           ImVec2(x, std::round(box_top + std::round(ascent)) - std::ceil(ascent)), color, label);
             };
 
-            const std::string message = "Rename '" + d.ref_name + "' to:";
+            const std::string message = d.kind == app::Dialog::Kind::CREATE_FILE
+                                                ? "Create a file in " + (d.text_b.empty() ? "/" : d.text_b + "/") + ":"
+                                                : "Rename '" + d.ref_name + "' to:";
             const float field_w = px(230.f);
             const float message_w = text_size(fonts().regular, 14.f, message.c_str()).x;
             const float submit_w = text_size(fonts().bold, 12.f, "Submit").x + px(12.f);
@@ -1529,6 +1532,50 @@ namespace imgit::ui
                 app.run_git_cli(*state, "Push",
                                 {"push", "--set-upstream", request.text_a, request.ref_name + ":" + target});
             }
+            return;
+        }
+        // Creating a file asks for its name in the prompt bar, then opens it in the file view's editor.
+        if (d.kind == app::Dialog::Kind::CREATE_FILE)
+        {
+            const int answer = draw_rename_prompt(d);
+            if (answer == 0)
+            {
+                return;
+            }
+            const app::Dialog request = d;
+            d.close();
+            if (answer < 0 || request.text_a.empty())
+            {
+                return;
+            }
+            std::string path = request.text_b.empty() ? request.text_a : request.text_b + "/" + request.text_a;
+            std::replace(path.begin(), path.end(), '\\', '/');
+            const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+            const bool escapes = relative.is_absolute() || relative.has_root_name() || relative.empty()
+                                 || *relative.begin() == ".." || relative.filename().empty();
+            const std::filesystem::path full = std::filesystem::path(state->repo.workdir()) / relative;
+            std::error_code error;
+            if (escapes)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not create " + path,
+                                "The file must be inside the repository.");
+                return;
+            }
+            if (std::filesystem::exists(full, error))
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not create " + path, "A file with that name exists.");
+                return;
+            }
+            std::filesystem::create_directories(full.parent_path(), error);
+            std::ofstream created(full, std::ios::binary);
+            created.close();
+            if (!created)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not create " + path, "The file could not be written.");
+                return;
+            }
+            state->refresh_status();
+            open_file_editor(app, *state, relative.generic_string());
             return;
         }
         // Renaming a branch asks for the new name in the prompt bar.
@@ -2400,6 +2447,7 @@ namespace imgit::ui
         }
         case app::Dialog::Kind::NONE:
         case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
+        case app::Dialog::Kind::CREATE_FILE:
         case app::Dialog::Kind::PUSH_NEW_BRANCH:
         case app::Dialog::Kind::ADD_SUBMODULE: // the slide panel
         case app::Dialog::Kind::EDIT_SUBMODULE:

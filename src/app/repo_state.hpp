@@ -168,6 +168,17 @@ namespace imgit::app
         std::optional<MergeTool> merge_tool; // a conflicted file being resolved
         std::optional<FileHistoryView> file_history; // open over the tab
         std::optional<git::FileDiff> diff;
+        // The file view's editor (Edit This File): the working directory's copy of diff_target's file as text,
+        // "\n" line breaks (written back as "\r\n" when `crlf`); `saved` is the text on disk.
+        struct FileEdit
+        {
+            std::string path;
+            std::string text;
+            std::string saved;
+            bool crlf = false;
+            bool focus = true;
+        };
+        std::optional<FileEdit> file_edit;
         // The diff editor modes: the hunk list, the whole file inline (default) or side by side; the
         // file view shows the file itself.
         enum class DiffMode

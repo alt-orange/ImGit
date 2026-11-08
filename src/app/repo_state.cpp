@@ -375,6 +375,7 @@ namespace imgit::app
 
     void RepoState::open_diff(DiffTarget target)
     {
+        file_edit.reset();
         diff_target = std::move(target);
         reload_diff();
     }
@@ -382,6 +383,7 @@ namespace imgit::app
     void RepoState::close_diff()
     {
         left_open_in_diff = false;
+        file_edit.reset();
         diff_target.reset();
         diff.reset();
         diff_error.clear();

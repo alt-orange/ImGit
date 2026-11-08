@@ -1522,7 +1522,10 @@ namespace imgit::ui
                 return {};
             }
             return {item("Edit file",
-                         placeholder(app, "Edit file", "The in-app file editor is not available in ImGit yet.")),
+                         [&app, &state, path]
+                         {
+                             open_file_editor(app, state, path);
+                         }),
                     item("Delete file",
                          [&app, &state, full, path]
                          {
@@ -2222,7 +2225,11 @@ namespace imgit::ui
                                     platform::shell::open_path(full);
                                 }));
             open.push_back(item("Create a file in this folder",
-                                placeholder(app, "Create file", "Creating files is not available in ImGit yet.")));
+                                [&app, folder]
+                                {
+                                    app.dialog.open(app::Dialog::Kind::CREATE_FILE);
+                                    app.dialog.text_b = folder;
+                                }));
         }
         return separated_menu({std::move(ops), std::move(open)});
     }

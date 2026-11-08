@@ -369,6 +369,8 @@ namespace imgit::ui
             return commit_color(state, sha);
         };
         options.syntax_highlighting = app.settings.syntax_highlighting;
+        options.word_wrap = app.settings.word_wrap;
+        options.show_whitespace = app.settings.diff_whitespace;
         options.id = "##file_history_lines";
         const git::BlameHunk* clicked =
                 draw_diff_editor(view.diff ? &*view.diff : nullptr, view.diff_error, editor_min, editor_max, options);
