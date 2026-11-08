@@ -50,6 +50,8 @@ target_include_directories(imgit_syntax PUBLIC src)
 add_executable(imgit
     src/main.cpp
     src/app/application.cpp
+    src/app/connections.cpp
+    src/app/connection_checks.cpp
     src/app/profiles.cpp
     src/app/assets.cpp
     src/app/md5.cpp

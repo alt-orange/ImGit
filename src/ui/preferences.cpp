@@ -1944,6 +1944,181 @@ namespace imgit::ui
                 });
         }
 
+        // A connection's header: an icon, the service's name and, for a known service, its host after it.
+        void connection_heading(Form& form, const app::Connection& connection)
+        {
+            const float top = form.place(25.f);
+            const Style style{18.f, white(0.75f), Face::SEMIBOLD};
+            const bool known = app::service_of(connection.host) != nullptr;
+            icon(form.page, known ? "far:cloud" : "far:globe", form.left, top + 1.f, 18.f, 18.f, 18.f, white(0.6f));
+            const float w = text(form.page, form.left + 28.f, top + leading(style, 19.796875f), style, connection.name);
+            if (connection.name != connection.host)
+            {
+                text(form.page, form.left + 28.f + w + 10.f, top + 4.f, HELP, connection.host);
+            }
+            form.advance(top, 19.796875f, 12.f);
+        }
+
+        // A check's status in its row: a dot, what it found, and a line about it under them (`first_line` down:
+        // lower when a button sits beside the status). Returns the status text's right edge (CSS px).
+        float connection_status(Row& r, const app::Connection::Check& check, float first_line = 27.f)
+        {
+            Page& page = r.page();
+            using State = app::Connection::State;
+            ImVec4 dot = white(0.35f);
+            std::string status = "Not checked";
+            switch (check.state)
+            {
+            case State::CONNECTED:
+                dot = GREEN;
+                status = check.user.empty() ? "Connected" : "Connected as " + check.user;
+                break;
+            case State::NOT_CONNECTED:
+                status = "Not connected";
+                break;
+            case State::CHECKING:
+                dot = BLUE;
+                status = "Checking...";
+                break;
+            case State::UNCHECKED:
+                break;
+            }
+            const ImVec2 centre = page.at(r.x() + 5.f, r.top + 17.f);
+            page.draw->AddCircleFilled(centre, px(4.f), u32(dot));
+            const Style style = check.state == State::CONNECTED ? Style{14.f, white(0.85f), Face::SEMIBOLD} : LABEL;
+            const float w = text(page, r.x() + 16.f, r.top + 7.f + leading(style, 20.f), style, status);
+            r.column = first_line;
+            if (!check.detail.empty())
+            {
+                // Plain text (ssh's own words may hold markup characters), one line.
+                text_truncated(page, r.x() + 16.f, r.top + r.column + leading(HELP, 17.140625f), HELP, check.detail,
+                               std::max(100.f, r.form.control_width() - 46.f));
+                r.column += 17.140625f;
+            }
+            return r.x() + 16.f + w;
+        }
+
+        void connections_page(Page& page)
+        {
+            app::Application& app = page.app;
+            app::Connections& connections = app.connections;
+            std::vector<std::pair<std::string, std::string>> remotes;
+            for (const auto& tab : app.tabs)
+            {
+                for (const git::Remote& remote : tab->history.remotes)
+                {
+                    remotes.emplace_back(tab->repo.name(), remote.url);
+                }
+            }
+            connections.update_hosts(remotes);
+            connections.poll();
+            connections.check(app.credentials, false);
+
+            Form form{page};
+            title(form, "Connections");
+            paragraph(form, "The hosting services git can reach from this computer and the accounts it uses there: "
+                            "HTTPS usernames and tokens (entered in ImGit, or kept by your Git credential helper) "
+                            "and SSH keys the service accepts. Other servers appear here when an open repository "
+                            "has a remote on them.");
+            {
+                const float top = form.place(0.f);
+                const bool busy = connections.checking();
+                if (button(page, "##refresh_connections", form.left, top, busy ? "Checking..." : "Check Again",
+                           Tone::PRIMARY, BTN, busy))
+                {
+                    connections.check(app.credentials, true);
+                }
+                form.advance(top, 31.140625f, 10.f);
+            }
+
+            for (const app::Connection& connection : connections.list())
+            {
+                ImGui::PushID(connection.host.c_str());
+                connection_heading(form, connection);
+                if (connection.https)
+                {
+                    row(form, "HTTPS",
+                        [&](Row& r)
+                        {
+                            const app::Connection::Check& check = connection.https_check;
+                            const bool connected = check.state == app::Connection::State::CONNECTED;
+                            const float right = connection_status(r, check, connected ? 34.f : 27.f);
+                            if (!connected)
+                            {
+                                return;
+                            }
+                            // Forget: this session's credential at once; a stored one after a confirmation.
+                            if (button(page, "##forget", right + 15.f, r.top + 1.5f, "Forget", Tone::DEFAULT))
+                            {
+                                const std::string host = connection.host;
+                                const std::string user = check.user;
+                                if (connection.session_credential)
+                                {
+                                    std::erase_if(app.credentials,
+                                                  [&](const git::cli::Credential& credential)
+                                                  {
+                                                      const auto parsed = app::parse_remote_url(credential.url + "/");
+                                                      return parsed && parsed->host == host;
+                                                  });
+                                    app.toasts.push(app::ToastKind::INFO, "Connections",
+                                                    "Forgot the credentials entered for " + host + " this session.");
+                                }
+                                else
+                                {
+                                    app::Dialog& d = app.dialog;
+                                    d.open(app::Dialog::Kind::CONFIRM);
+                                    d.title = "Forget stored credentials";
+                                    d.message = "Remove " + user + "'s credentials for " + host
+                                                + " from your Git credential helper? Git will ask for them the "
+                                                  "next time it connects over HTTPS.";
+                                    d.confirm_label = "Forget";
+                                    d.danger = true;
+                                    d.on_confirm = [&app, host, user]
+                                    {
+                                        app::forget_stored_credential(host, user);
+                                        if (app::Connection* c = app.connections.find(host); c != nullptr)
+                                        {
+                                            c->https_check = {};
+                                        }
+                                        app.toasts.push(app::ToastKind::INFO, "Connections",
+                                                        "Removed the stored credentials for " + host + ".");
+                                    };
+                                }
+                            }
+                        });
+                }
+                if (connection.ssh)
+                {
+                    row(form, "SSH",
+                        [&](Row& r)
+                        {
+                            connection_status(r, connection.ssh_check);
+                            const std::string target =
+                                    connection.ssh_target + (connection.ssh_port.empty() ? "" : ":" + connection.ssh_port);
+                            text(page, r.x() + 16.f, r.top + r.column + leading(HELP, 17.140625f), HELP,
+                                 "Checked with ssh -T " + target);
+                            r.column += 17.140625f;
+                        });
+                }
+                if (!connection.repos.empty())
+                {
+                    row(form, "Open repositories",
+                        [&](Row& r)
+                        {
+                            std::string names;
+                            for (const std::string& repo : connection.repos)
+                            {
+                                names += (names.empty() ? "" : ", ") + repo;
+                            }
+                            text_truncated(page, r.x(), r.top + 7.f + leading(LABEL, 20.f), LABEL, names,
+                                           std::max(100.f, r.form.control_width() - 30.f));
+                            r.column = 27.f;
+                        });
+                }
+                ImGui::PopID();
+            }
+        }
+
         void ds_title(Page& page, std::string_view s)
         {
             text(page, 40.f, 19.f, Style{24.f, white(0.8f)}, s);
@@ -2805,6 +2980,7 @@ namespace imgit::ui
                 {"General", "fas:cog", general_page},
                 {"Profiles", "fas:user-friends", profiles_page},
                 {"SSH", "fas:shield-check", ssh_page},
+                {"Connections", "fas:plug", connections_page},
                 {"External Tools", "fas:tools", external_tools_page},
                 {"Notifications", "fas:bell", notifications_page},
                 {"UI Customization", "fas:paint-brush", ui_customization_page},

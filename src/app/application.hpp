@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/connections.hpp"
 #include "app/profiles.hpp"
 #include "app/repo_state.hpp"
 #include "app/toasts.hpp"
@@ -276,6 +277,8 @@ namespace imgit::app
         bool prompt_for_credentials(const std::string& output, const std::optional<git::cli::Credential>& attempt,
                                     std::function<void(git::cli::Credential)> retry);
         void keep_credential(const git::cli::Credential& credential);
+        // Preferences → Connections: the hosting services reachable over HTTPS / SSH and their checks.
+        Connections connections;
 
         // Paths of closed tabs, most recent last (File > Reopen Closed Tab).
         std::vector<std::string> closed_tabs;
