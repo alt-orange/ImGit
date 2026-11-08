@@ -1,7 +1,11 @@
 #include "app/theme.hpp"
+#include "app/theme_file.hpp"
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iterator>
+#include <list>
+#include <sstream>
 
 namespace imgit::theme
 {
@@ -89,8 +93,9 @@ namespace imgit::theme
             return from_hsl(hsl, c.w);
         }
 
-        // What a theme changes: its background (the rest of the surfaces are lighter steps of it) and its accent. A
-        // theme with `exact` replaces the derived surfaces and text colours with its own afterwards.
+        // What a theme changes: its background (the rest of the surfaces are steps of it: lighter ones on a dark
+        // background, darker and lighter ones around a light background, which also gets dark text) and its
+        // accent. A theme with `exact` replaces the derived surfaces and text colours with its own afterwards.
         struct ThemeSpec
         {
             const char* name;
@@ -178,6 +183,8 @@ namespace imgit::theme
 
         constexpr ThemeSpec THEMES[] = {
                 {"ImGit Dark", 0x1E1C1A, 0xF28C28, 0xFFAE5C, 0xFFBE7D, 0xC2661D, 0xFFAE5C, 0},
+                // The light one: warm paper greys, a deeper orange so text in it stays readable.
+                {"ImGit Light", 0xF6F5F3, 0xE07B12, 0xB35C00, 0xA0520A, 0xC2661D, 0xB35C00, 0},
                 {"Ocean", 0x161D26, 0x3A9DE8, 0x6CC4F5, 0x9CCBF2, 0x2A6FA8, 0x6CC4F5, 5},
                 {"Midnight Teal", 0x121518, 0x1FB5A3, 0x4FD8C8, 0x86E0D5, 0x167F73, 0x4FD8C8, 4},
                 {"Amethyst", 0x1D1B24, 0x9B6BFF, 0xC59BFF, 0xC6AEF7, 0x6B46B5, 0xC59BFF, 7},
@@ -186,9 +193,113 @@ namespace imgit::theme
                 {"Claude Code", 0x151515, 0xD97757, 0xD97757, 0xD97757, 0x444444, 0xD97757, 0, claude_code_palette},
         };
 
-        constexpr const char* THEME_NAMES[] = {THEMES[0].name, THEMES[1].name, THEMES[2].name, THEMES[3].name,
-                                               THEMES[4].name, THEMES[5].name};
-        static_assert(std::size(THEME_NAMES) == std::size(THEMES));
+        unsigned to_hex(const Rgba& c) noexcept
+        {
+            const auto channel = [](float v)
+            {
+                return static_cast<unsigned>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+            };
+            return (channel(c.r) << 16) | (channel(c.g) << 8) | channel(c.b);
+        }
+
+        // A theme loaded from a file: the built-in spec it starts from with its own colours put in, then its
+        // palette colours by name.
+        struct CustomTheme
+        {
+            std::string name;
+            ThemeSpec spec{};
+            std::vector<std::pair<std::string, ImVec4>> colors;
+        };
+
+        // The palette's colours by the names theme files use.
+        struct NamedColor
+        {
+            const char* name;
+            ImVec4 Palette::* member;
+        };
+
+        constexpr NamedColor NAMED_COLORS[] = {
+                {"red", &Palette::red},
+                {"orange", &Palette::orange},
+                {"yellow", &Palette::yellow},
+                {"green", &Palette::green},
+                {"teal", &Palette::teal},
+                {"blue", &Palette::blue},
+                {"ltblue", &Palette::ltblue},
+                {"purple", &Palette::purple},
+                {"accent", &Palette::accent},
+                {"ink", &Palette::ink},
+                {"app_bg0", &Palette::app_bg0},
+                {"toolbar_bg0", &Palette::toolbar_bg0},
+                {"toolbar_bg1", &Palette::toolbar_bg1},
+                {"toolbar_bg2", &Palette::toolbar_bg2},
+                {"panel_bg0", &Palette::panel_bg0},
+                {"panel_bg1", &Palette::panel_bg1},
+                {"panel_bg2", &Palette::panel_bg2},
+                {"input_bg", &Palette::input_bg},
+                {"panel_border", &Palette::panel_border},
+                {"section_border", &Palette::section_border},
+                {"subtle_border", &Palette::subtle_border},
+                {"modal_overlay", &Palette::modal_overlay},
+                {"stats_added", &Palette::stats_added},
+                {"stats_deleted", &Palette::stats_deleted},
+                {"stats_files", &Palette::stats_files},
+                {"text_selected", &Palette::text_selected},
+                {"text_normal", &Palette::text_normal},
+                {"text_secondary", &Palette::text_secondary},
+                {"text_disabled", &Palette::text_disabled},
+                {"text_accent", &Palette::text_accent},
+                {"text_inverse", &Palette::text_inverse},
+                {"text_dimmed", &Palette::text_dimmed},
+                {"hover_row", &Palette::hover_row},
+                {"selected_row", &Palette::selected_row},
+                {"link", &Palette::link},
+                {"wip_status", &Palette::wip_status},
+                {"checked_out", &Palette::checked_out},
+                {"added_line", &Palette::added_line},
+                {"deleted_line", &Palette::deleted_line},
+                {"hunk_header", &Palette::hunk_header},
+                {"avatar_default", &Palette::avatar_default},
+                {"scroll_thumb", &Palette::scroll_thumb},
+                {"toggle_border", &Palette::toggle_border},
+                {"filter_match", &Palette::filter_match},
+                {"droppable", &Palette::droppable},
+                {"drop_target", &Palette::drop_target},
+                {"terminal_bg", &Palette::terminal_bg},
+                {"terminal_fg", &Palette::terminal_fg},
+                {"terminal_prompt", &Palette::terminal_prompt},
+                {"terminal_red", &Palette::terminal_red},
+                {"syntax_comment", &Palette::syntax_comment},
+                {"syntax_string", &Palette::syntax_string},
+                {"syntax_number", &Palette::syntax_number},
+                {"syntax_keyword", &Palette::syntax_keyword},
+                {"syntax_type", &Palette::syntax_type},
+                {"syntax_function", &Palette::syntax_function},
+                {"syntax_variable", &Palette::syntax_variable},
+                {"syntax_operator", &Palette::syntax_operator},
+                {"syntax_punctuation", &Palette::syntax_punctuation},
+                {"syntax_tag", &Palette::syntax_tag},
+                {"syntax_attribute", &Palette::syntax_attribute},
+                {"syntax_regexp", &Palette::syntax_regexp},
+                {"syntax_constant", &Palette::syntax_constant},
+        };
+
+        // The colour of `p` a theme file calls `name` ("graph_0".."graph_9" for the lanes), nullptr for none.
+        ImVec4* named_color(Palette& p, std::string_view name) noexcept
+        {
+            for (const NamedColor& color : NAMED_COLORS)
+            {
+                if (name == color.name)
+                {
+                    return &(p.*color.member);
+                }
+            }
+            if (name.size() == 7 && name.starts_with("graph_") && name[6] >= '0' && name[6] <= '9')
+            {
+                return &p.graph_colors[name[6] - '0'];
+            }
+            return nullptr;
+        }
 
         Palette build_palette(const ThemeSpec& theme) noexcept
         {
@@ -204,37 +315,65 @@ namespace imgit::theme
             p.accent = rgb(theme.accent);
 
             p.app_bg0 = rgb(theme.background);
-            // The surfaces are lighter steps of the background.
-            p.toolbar_bg0 = lighten(p.app_bg0, 0.06f);
-            p.toolbar_bg1 = lighten(p.toolbar_bg0, 0.04f);
-            p.toolbar_bg2 = lighten(p.toolbar_bg1, 0.06f);
-            p.panel_bg0 = lighten(p.app_bg0, 0.05f);
-            p.panel_bg1 = lighten(p.panel_bg0, 0.05f);
-            p.panel_bg2 = lighten(p.panel_bg1, 0.05f);
-            p.input_bg = rgb(0x000000, 0.20f);
-            p.panel_border = rgb(0xFFFFFF, 0.08f);
-            p.section_border = rgb(0xFFFFFF, 0.08f);
-            p.subtle_border = rgb(0xFFFFFF, 0.04f);
-            p.modal_overlay = rgb(0x000000, 0.5f);
+            p.light = to_hsl(p.app_bg0).l > 0.5f;
+            if (p.light)
+            {
+                // The chrome a step darker than the content (the tabs bar darkest), popups and inputs lighter.
+                p.ink = rgb(0x1B1A19);
+                p.toolbar_bg0 = lighten(p.app_bg0, -0.08f);
+                p.toolbar_bg1 = lighten(p.app_bg0, -0.04f);
+                p.toolbar_bg2 = lighten(p.app_bg0, 0.03f);
+                p.panel_bg0 = lighten(p.app_bg0, -0.03f);
+                p.panel_bg1 = lighten(p.app_bg0, 0.03f);
+                p.panel_bg2 = lighten(p.app_bg0, -0.06f);
+                p.input_bg = rgb(0xFFFFFF, 0.75f);
+                p.panel_border = rgb(0x000000, 0.12f);
+                p.section_border = rgb(0x000000, 0.12f);
+                p.subtle_border = rgb(0x000000, 0.06f);
+                p.modal_overlay = rgb(0x000000, 0.3f);
+                // Darker greens and reds read on white.
+                p.red = rgb(0xCF3A32);
+                p.orange = rgb(0xC77C12);
+                p.yellow = rgb(0xB38B00);
+                p.green = rgb(0x2E9A4B);
+            }
+            else
+            {
+                // The surfaces are lighter steps of the background.
+                p.toolbar_bg0 = lighten(p.app_bg0, 0.06f);
+                p.toolbar_bg1 = lighten(p.toolbar_bg0, 0.04f);
+                p.toolbar_bg2 = lighten(p.toolbar_bg1, 0.06f);
+                p.panel_bg0 = lighten(p.app_bg0, 0.05f);
+                p.panel_bg1 = lighten(p.panel_bg0, 0.05f);
+                p.panel_bg2 = lighten(p.panel_bg1, 0.05f);
+                p.input_bg = rgb(0x000000, 0.20f);
+                p.panel_border = rgb(0xFFFFFF, 0.08f);
+                p.section_border = rgb(0xFFFFFF, 0.08f);
+                p.subtle_border = rgb(0xFFFFFF, 0.04f);
+                p.modal_overlay = rgb(0x000000, 0.5f);
+            }
 
-            // The lane colours, round the colour wheel from orange; a theme starts at its accent's.
+            // The lane colours, round the colour wheel from orange; a theme starts at its accent's. On a light
+            // background they are a step darker.
             const unsigned graph[GRAPH_COLOR_COUNT] = {0xF28C28, 0xF2C230, 0xB9D23A, 0x52C45A, 0x1FB5A3,
                                                        0x2BA6E0, 0x5B7CFA, 0xA85CF0, 0xD9479F, 0xE5486C};
             for (int i = 0; i < GRAPH_COLOR_COUNT; ++i)
             {
-                p.graph_colors[i] = rgb(graph[(i + theme.first_lane) % GRAPH_COLOR_COUNT]);
+                const ImVec4 lane = rgb(graph[(i + theme.first_lane) % GRAPH_COLOR_COUNT]);
+                p.graph_colors[i] = p.light ? lighten(lane, -0.08f) : lane;
             }
             p.stats_added = rgb(0x347d39);
             p.stats_deleted = rgb(0xc93c37);
             p.stats_files = rgb(0xe2c08d);
 
-            p.text_selected = rgb(0xFFFFFF);
-            p.text_normal = rgb(0xFFFFFF, 0.75f);
-            p.text_secondary = rgb(0xFFFFFF, 0.60f);
-            p.text_disabled = rgb(0xFFFFFF, 0.40f);
+            // The text ramp: the ink at falling opacities (a little stronger on a light background).
+            p.text_selected = with_alpha(p.ink, 1.f);
+            p.text_normal = with_alpha(p.ink, p.light ? 0.85f : 0.75f);
+            p.text_secondary = with_alpha(p.ink, p.light ? 0.65f : 0.60f);
+            p.text_disabled = with_alpha(p.ink, p.light ? 0.45f : 0.40f);
             p.text_accent = rgb(theme.text_accent);
             p.text_inverse = rgb(0x222222);
-            p.text_dimmed = rgb(0xFFFFFF, 0.75f * 0.20f);
+            p.text_dimmed = with_alpha(p.ink, p.text_normal.w * 0.20f);
 
             p.hover_row = with_alpha(p.accent, 0.10f);
             p.selected_row = with_alpha(p.accent, 0.20f);
@@ -243,17 +382,17 @@ namespace imgit::theme
             p.checked_out = with_alpha(p.green, 0.30f);
             p.added_line = with_alpha(p.green, 0.20f);
             p.deleted_line = with_alpha(p.red, 0.20f);
-            p.hunk_header = rgb(0x000000, 0.25f);
+            p.hunk_header = rgb(0x000000, p.light ? 0.06f : 0.25f);
             p.avatar_default = rgb(theme.avatar);
-            p.scroll_thumb = rgb(0xFFFFFF, 0.15f);
-            p.toggle_border = rgb(0xFFFFFF, 0.20f);
+            p.scroll_thumb = with_alpha(p.ink, p.light ? 0.22f : 0.15f);
+            p.toggle_border = with_alpha(p.ink, p.light ? 0.25f : 0.20f);
             p.filter_match = with_alpha(p.accent, 0.50f);
             p.droppable = with_alpha(p.yellow, 0.30f);
             p.drop_target = with_alpha(p.green, 0.50f);
-            p.terminal_bg = lighten(p.app_bg0, -0.04f);
-            p.terminal_fg = rgb(0xDCDCDC);
+            p.terminal_bg = lighten(p.app_bg0, p.light ? 0.02f : -0.04f);
+            p.terminal_fg = p.light ? rgb(0x2B2B2B) : rgb(0xDCDCDC);
             p.terminal_prompt = rgb(theme.prompt);
-            p.terminal_red = rgb(0xF0716A);
+            p.terminal_red = p.light ? rgb(0xC4312A) : rgb(0xF0716A);
             if (theme.exact != nullptr)
             {
                 theme.exact(p);
@@ -265,8 +404,31 @@ namespace imgit::theme
 
     namespace
     {
-        const ThemeSpec* g_theme = &THEMES[0];
+        // A list keeps each custom theme where it is, so the names below may point into it.
+        std::list<CustomTheme> g_custom_themes;
+        std::vector<const char*> g_theme_names = []
+        {
+            std::vector<const char*> names;
+            for (const ThemeSpec& theme : THEMES)
+            {
+                names.push_back(theme.name);
+            }
+            return names;
+        }();
+        const char* g_theme_name = THEMES[0].name;
         Palette g_palette = build_palette(THEMES[0]);
+
+        const ThemeSpec* builtin_theme(std::string_view name) noexcept
+        {
+            for (const ThemeSpec& theme : THEMES)
+            {
+                if (name == theme.name)
+                {
+                    return &theme;
+                }
+            }
+            return nullptr;
+        }
     } // namespace
 
     const Palette& palette() noexcept
@@ -274,27 +436,142 @@ namespace imgit::theme
         return g_palette;
     }
 
+    ImVec4 ink(float alpha) noexcept
+    {
+        return with_alpha(g_palette.ink, alpha);
+    }
+
+    ImU32 ink_u32(int alpha) noexcept
+    {
+        return u32(ink(static_cast<float>(alpha) / 255.f));
+    }
+
     std::span<const char* const> theme_names() noexcept
     {
-        return THEME_NAMES;
+        return g_theme_names;
     }
 
     void set_theme(std::string_view name)
     {
-        g_theme = &THEMES[0];
-        for (const ThemeSpec& theme : THEMES)
+        for (const CustomTheme& custom : g_custom_themes)
         {
-            if (name == theme.name)
+            if (name == custom.name)
             {
-                g_theme = &theme;
+                g_palette = build_palette(custom.spec);
+                for (const auto& [key, color] : custom.colors)
+                {
+                    if (ImVec4* target = named_color(g_palette, key); target != nullptr)
+                    {
+                        *target = color;
+                    }
+                }
+                g_theme_name = custom.name.c_str();
+                return;
             }
         }
-        g_palette = build_palette(*g_theme);
+        const ThemeSpec* theme = builtin_theme(name);
+        if (theme == nullptr)
+        {
+            theme = &THEMES[0];
+        }
+        g_palette = build_palette(*theme);
+        g_theme_name = theme->name;
     }
 
     const char* current_theme() noexcept
     {
-        return g_theme->name;
+        return g_theme_name;
+    }
+
+    std::vector<std::string> load_custom_themes(const std::filesystem::path& folder)
+    {
+        std::vector<std::string> problems;
+        // The current theme's name may point into the list about to be replaced: keep it by value.
+        const std::string current = g_theme_name;
+        g_custom_themes.clear();
+        std::vector<std::filesystem::path> files;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
+        {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".json")
+            {
+                files.push_back(entry.path());
+            }
+        }
+        std::ranges::sort(files);
+        for (const std::filesystem::path& file : files)
+        {
+            const std::string label = file.filename().string();
+            std::ifstream in(file, std::ios::binary);
+            std::ostringstream text;
+            text << in.rdbuf();
+            auto parsed = parse_theme_file(text.str());
+            if (!parsed)
+            {
+                problems.push_back(label + ": " + parsed.error());
+                continue;
+            }
+            if (builtin_theme(parsed->name) != nullptr
+                || std::ranges::any_of(g_custom_themes,
+                                       [&](const CustomTheme& other)
+                                       {
+                                           return other.name == parsed->name;
+                                       }))
+            {
+                problems.push_back(label + ": a theme called \"" + parsed->name + "\" already exists");
+                continue;
+            }
+            const ThemeSpec* base = builtin_theme(parsed->base.empty() ? DEFAULT_THEME : parsed->base);
+            if (base == nullptr)
+            {
+                problems.push_back(label + ": no built-in theme called \"" + parsed->base + "\"");
+                continue;
+            }
+            CustomTheme theme;
+            theme.name = parsed->name;
+            theme.spec = *base;
+            const auto put = [](const std::optional<Rgba>& color, unsigned& target)
+            {
+                if (color)
+                {
+                    target = to_hex(*color);
+                }
+            };
+            put(parsed->background, theme.spec.background);
+            put(parsed->accent, theme.spec.accent);
+            put(parsed->link, theme.spec.link);
+            put(parsed->text_accent, theme.spec.text_accent);
+            put(parsed->avatar, theme.spec.avatar);
+            put(parsed->prompt, theme.spec.prompt);
+            if (parsed->background)
+            {
+                // Its own background, its own surfaces: the base's exact greys would not match it.
+                theme.spec.exact = nullptr;
+            }
+            for (const auto& [key, color] : parsed->colors)
+            {
+                Palette probe;
+                if (named_color(probe, key) == nullptr)
+                {
+                    problems.push_back(label + ": no palette colour called \"" + key + "\"");
+                    continue;
+                }
+                theme.colors.emplace_back(key, ImVec4(color.r, color.g, color.b, color.a));
+            }
+            g_custom_themes.push_back(std::move(theme));
+        }
+        g_theme_names.clear();
+        for (const ThemeSpec& theme : THEMES)
+        {
+            g_theme_names.push_back(theme.name);
+        }
+        for (CustomTheme& theme : g_custom_themes)
+        {
+            theme.spec.name = theme.name.c_str();
+            g_theme_names.push_back(theme.name.c_str());
+        }
+        set_theme(current);
+        return problems;
     }
 
     ImVec4 with_alpha(ImVec4 color, float alpha) noexcept
@@ -355,16 +632,16 @@ namespace imgit::theme
         c[ImGuiCol_Border] = p.panel_border;
         c[ImGuiCol_BorderShadow] = {0.f, 0.f, 0.f, 0.f};
         c[ImGuiCol_FrameBg] = p.input_bg;
-        c[ImGuiCol_FrameBgHovered] = rgb(0x000000, 0.30f);
-        c[ImGuiCol_FrameBgActive] = rgb(0x000000, 0.35f);
+        c[ImGuiCol_FrameBgHovered] = p.light ? rgb(0xFFFFFF, 0.95f) : rgb(0x000000, 0.30f);
+        c[ImGuiCol_FrameBgActive] = p.light ? rgb(0xFFFFFF, 1.f) : rgb(0x000000, 0.35f);
         c[ImGuiCol_TitleBg] = p.panel_bg0;
         c[ImGuiCol_TitleBgActive] = p.panel_bg0;
         c[ImGuiCol_TitleBgCollapsed] = p.panel_bg0;
         c[ImGuiCol_MenuBarBg] = p.toolbar_bg0;
         c[ImGuiCol_ScrollbarBg] = {0.f, 0.f, 0.f, 0.f};
         c[ImGuiCol_ScrollbarGrab] = p.scroll_thumb;
-        c[ImGuiCol_ScrollbarGrabHovered] = rgb(0xFFFFFF, 0.25f);
-        c[ImGuiCol_ScrollbarGrabActive] = rgb(0xFFFFFF, 0.35f);
+        c[ImGuiCol_ScrollbarGrabHovered] = with_alpha(p.ink, p.light ? 0.32f : 0.25f);
+        c[ImGuiCol_ScrollbarGrabActive] = with_alpha(p.ink, p.light ? 0.42f : 0.35f);
         c[ImGuiCol_CheckMark] = p.text_inverse;
         c[ImGuiCol_SliderGrab] = p.accent;
         c[ImGuiCol_SliderGrabActive] = p.accent;

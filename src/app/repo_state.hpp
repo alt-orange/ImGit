@@ -139,6 +139,10 @@ namespace imgit::app
         git::RepoState operation_state = git::RepoState::NONE;
         std::string load_error;
         std::string pinned_branch; // full ref name forced into column 0, "" for none
+        // The repository tab's own name ("" for the repository's) and group ("" for none); kept on the state the
+        // tab was opened on.
+        std::string tab_name;
+        std::string tab_group;
 
         // Graph walk options
         std::size_t commit_limit = 2000;

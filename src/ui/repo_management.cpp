@@ -181,7 +181,7 @@ namespace imgit::ui
                 {
                     if (hovered)
                     {
-                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                     }
                     draw->AddRect(bmin, bmax, theme::u32(p.text_normal), px(2.f), 0, 1.f);
                 }
@@ -330,7 +330,7 @@ namespace imgit::ui
             std::vector<std::string> result;
             for (const std::string& path : paths)
             {
-                if (search.empty() || contains_ci(repo_name(path), search) || contains_ci(path, search))
+                if (search.empty() || contains_ci(app.repo_display_name(path), search) || contains_ci(path, search))
                 {
                     result.push_back(path);
                 }
@@ -361,7 +361,7 @@ namespace imgit::ui
             // count.
             const ImVec2 hmin(left + px(3.f), y);
             const ImVec2 hmax(right - px(10.f), y + px(44.f));
-            draw->AddRectFilled(hmin, hmax, IM_COL32(255, 255, 255, 13), px(2.5f));
+            draw->AddRectFilled(hmin, hmax, theme::ink_u32(13), px(2.5f));
             ImGui::SetCursorScreenPos(ImVec2(hmin.x + px(11.f), y + px(11.f)));
             ImGui::PushID(section.name.c_str());
             if (ImGui::InvisibleButton("##toggle", ImVec2(px(28.f), px(22.f))))
@@ -501,7 +501,7 @@ namespace imgit::ui
                 }
                 // name, owner
                 draw_text_ellipsis(draw, fonts().regular, 14.f, ImVec2(left + px(94.f), css_y(14.f, mid - px(10.f))),
-                                   px(230.f), theme::u32(p.text_normal), repo_name(path).c_str());
+                                   px(230.f), theme::u32(p.text_normal), app.repo_display_name(path).c_str());
                 const git::RepoSummary* summary = repo_summary(path);
                 if (summary != nullptr && !summary->owner.empty())
                 {

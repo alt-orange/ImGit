@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/profiles.hpp"
+#include "app/theme.hpp"
 #include <imgui.h>
 #include <string>
 
@@ -20,8 +21,8 @@ namespace imgit::ui
     struct ProfileMenuStyle
     {
         const ImVec4& background; // .react-select__menu and its options (a palette colour)
-        ImVec4 border; // the menu list's and each option's 1px border
-        ImVec4 text;
+        theme::Ink border; // the menu list's and each option's 1px border
+        theme::Ink text;
     };
     // The tabs bar menu's picker (toolbar colours) and the Preferences sidebar's (panel-bg0).
     extern const ProfileMenuStyle POPOVER_PROFILE_MENU;

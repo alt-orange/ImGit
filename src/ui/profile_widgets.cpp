@@ -27,10 +27,8 @@ namespace imgit::ui
         }
     } // namespace
 
-    const ProfileMenuStyle POPOVER_PROFILE_MENU{theme::palette().toolbar_bg0, ImVec4(1.f, 1.f, 1.f, 0.2f),
-                                                ImVec4(1.f, 1.f, 1.f, 0.9f)};
-    const ProfileMenuStyle SIDEBAR_PROFILE_MENU{theme::palette().app_bg0, ImVec4(1.f, 1.f, 1.f, 0.08f),
-                                                ImVec4(1.f, 1.f, 1.f, 0.75f)};
+    const ProfileMenuStyle POPOVER_PROFILE_MENU{theme::palette().toolbar_bg0, theme::Ink{0.2f}, theme::Ink{0.9f}};
+    const ProfileMenuStyle SIDEBAR_PROFILE_MENU{theme::palette().app_bg0, theme::Ink{0.08f}, theme::Ink{0.75f}};
 
     void draw_profile_icon(ImDrawList* draw, ImVec2 min, float size, const app::Profile& profile)
     {

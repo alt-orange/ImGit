@@ -108,7 +108,7 @@ namespace imgit::ui
             if (!plain)
             {
                 draw_icon(draw, icon, ImVec2(icon_x + icon_w / 2.f, mid), px(TAB_ICON_EM),
-                          theme::u32(active ? theme::with_alpha(p.white, 0.35f) : p.text_secondary));
+                          theme::u32(active ? theme::ink(0.35f) : p.text_secondary));
             }
             const float line_h = text_size(font, TAB_FONT, "A").y;
             draw_text_ellipsis(draw, font, TAB_FONT, ImVec2(icon_x + icon_w + gap, mid - line_h / 2.f), text_w + 1.f,
@@ -172,7 +172,213 @@ namespace imgit::ui
             return pressed;
         }
 
+        // The index of the repository tab opened on `workdir`, -1 when it is gone.
+        int tab_index_of(const app::Application& app, const std::string& workdir)
+        {
+            for (int i = 0; i < static_cast<int>(app.tabs.size()); ++i)
+            {
+                if (app.tabs[static_cast<std::size_t>(i)]->root().repo.workdir() == workdir)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        std::string g_menu_group; // tab group label right-clicked this frame
+
+        void save_tab_groups(app::Application& app)
+        {
+            if (app.settings.remember_tabs)
+            {
+                app.save_state();
+            }
+        }
+
+        // A tab group's label in front of its tabs: a rounded plate in the group's colour holding its name (and its
+        // tab count while collapsed). A click collapses or expands the group, a right-click opens its menu.
+        void group_label(ImDrawList* draw, float& x, float y, float height, app::Application& app,
+                         const std::string& name, int tab_count)
+        {
+            app::Application::TabGroup* group = app.find_tab_group(name);
+            if (group == nullptr)
+            {
+                return;
+            }
+            const theme::Palette& p = theme::palette();
+            ImFont* font = fonts().semibold;
+            const std::string label = group->collapsed ? name + "  " + std::to_string(tab_count) : name;
+            const float text_w = std::min(text_size(font, theme::FONT_SIZE_SMALL, label.c_str()).x, px(160.f));
+            const float w = text_w + px(16.f);
+            const float h = px(20.f);
+            const ImVec2 min(x + px(6.f), std::round(y + (height - h) / 2.f));
+            const ImVec2 max(min.x + w, min.y + h);
+            ImGui::SetCursorScreenPos(min);
+            ImGui::PushID("##tab_group");
+            ImGui::PushID(name.c_str());
+            const bool clicked = ImGui::InvisibleButton("##label", ImVec2(w, h));
+            const bool hovered = ImGui::IsItemHovered();
+            ImGui::PopID();
+            ImGui::PopID();
+            const ImVec4 color = theme::graph_color(group->color);
+            draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(color, hovered ? 1.f : 0.85f)), px(4.f));
+            const float line_h = text_size(font, theme::FONT_SIZE_SMALL, "A").y;
+            draw_text_ellipsis(draw, font, theme::FONT_SIZE_SMALL, ImVec2(min.x + px(8.f), min.y + (h - line_h) / 2.f),
+                               text_w + 1.f, theme::u32(p.text_inverse), label.c_str());
+            if (hovered)
+            {
+                tooltip(group->collapsed ? "Expand group" : "Collapse group");
+            }
+            if (clicked)
+            {
+                group->collapsed = !group->collapsed;
+                save_tab_groups(app);
+            }
+            if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+            {
+                g_menu_group = name;
+            }
+            x = max.x + px(4.f);
+        }
+
+        MenuItems tab_group_menu(app::Application& app, const std::string& name)
+        {
+            const app::Application::TabGroup* group = app.find_tab_group(name);
+            if (group == nullptr)
+            {
+                return {};
+            }
+            return separated_menu({
+                    {menu_item("Rename group",
+                               [&app, name]
+                               {
+                                   open_text_prompt(app, "Rename tab group '" + name + "' to:", name, false,
+                                                    [&app, name](const std::string& to)
+                                                    {
+                                                        app.rename_tab_group(name, to);
+                                                    });
+                               }),
+                     menu_item(group->collapsed ? "Expand group" : "Collapse group",
+                               [&app, name]
+                               {
+                                   if (app::Application::TabGroup* g = app.find_tab_group(name); g != nullptr)
+                                   {
+                                       g->collapsed = !g->collapsed;
+                                       save_tab_groups(app);
+                                   }
+                               }),
+                     menu_item("Next color",
+                               [&app, name]
+                               {
+                                   if (app::Application::TabGroup* g = app.find_tab_group(name); g != nullptr)
+                                   {
+                                       g->color = (g->color + 1) % theme::GRAPH_COLOR_COUNT;
+                                       save_tab_groups(app);
+                                   }
+                               })},
+                    {menu_item("Ungroup",
+                               [&app, name]
+                               {
+                                   app.ungroup_tabs(name);
+                               }),
+                     menu_item("Close group",
+                               [&app, name]
+                               {
+                                   app.close_tab_group(name);
+                               })},
+            });
+        }
+
     } // namespace
+
+    void open_text_prompt(app::Application& app, std::string message, std::string initial, bool allow_empty,
+                          std::function<void(const std::string&)> on_text)
+    {
+        app.dialog.open(app::Dialog::Kind::TEXT_PROMPT);
+        app.dialog.message = std::move(message);
+        app.dialog.text_a = std::move(initial);
+        app.dialog.flag = allow_empty;
+        app.dialog.on_text = std::move(on_text);
+    }
+
+    MenuItems tab_naming_items(app::Application& app, int index)
+    {
+        if (index < 0 || index >= static_cast<int>(app.tabs.size()))
+        {
+            return {};
+        }
+        const app::RepoState& root = app.tabs[static_cast<std::size_t>(index)]->root();
+        const std::string workdir = root.repo.workdir();
+        MenuItems items;
+        items.push_back(menu_item(
+                "Rename tab",
+                [&app, workdir, current = root.tab_name.empty() ? app.repo_display_name(workdir) : root.tab_name]
+                {
+                    open_text_prompt(app, "Rename tab to:", current, true,
+                                     [&app, workdir](const std::string& name)
+                                     {
+                                         // The repository's own name, or nothing, gives the tab back its default.
+                                         app.rename_tab(tab_index_of(app, workdir),
+                                                        name == app.repo_display_name(workdir) ? "" : name);
+                                     });
+                }));
+        if (!root.tab_name.empty())
+        {
+            items.push_back(menu_item("Reset tab name",
+                                      [&app, workdir]
+                                      {
+                                          app.rename_tab(tab_index_of(app, workdir), "");
+                                      }));
+        }
+        MenuItems groups;
+        groups.push_back(menu_item("New group...",
+                                   [&app, workdir]
+                                   {
+                                       open_text_prompt(app, "Name the new tab group:", "", false,
+                                                        [&app, workdir](const std::string& name)
+                                                        {
+                                                            app.set_tab_group(tab_index_of(app, workdir), name);
+                                                        });
+                                   }));
+        for (const app::Application::TabGroup& group : app.tab_groups)
+        {
+            if (group.name != root.tab_group)
+            {
+                groups.push_back(menu_item(group.name,
+                                           [&app, workdir, name = group.name]
+                                           {
+                                               app.set_tab_group(tab_index_of(app, workdir), name);
+                                           }));
+            }
+        }
+        items.push_back(menu_submenu("Add tab to group", std::move(groups)));
+        if (!root.tab_group.empty())
+        {
+            items.push_back(menu_item("Remove tab from group",
+                                      [&app, workdir]
+                                      {
+                                          app.set_tab_group(tab_index_of(app, workdir), "");
+                                      }));
+        }
+        items.push_back(menu_item("Alias repository",
+                                  [&app, workdir]
+                                  {
+                                      std::string folder = workdir;
+                                      while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\'))
+                                      {
+                                          folder.pop_back();
+                                      }
+                                      folder = folder.substr(folder.find_last_of("/\\") + 1);
+                                      const std::string alias = app.repo_display_name(workdir);
+                                      open_text_prompt(app, "Alias repository '" + folder + "' as (empty: no alias):",
+                                                       alias == folder ? "" : alias, true,
+                                                       [&app, workdir](const std::string& name)
+                                                       {
+                                                           app.set_repo_alias(workdir, name);
+                                                       });
+                                  }));
+        return items;
+    }
 
     void draw_tabs_bar(app::Application& app)
     {
@@ -212,10 +418,33 @@ namespace imgit::ui
         std::vector<float> widths;
         int held_tab = -1;
         float held_x = 0.f;
+        std::string previous_group;
         for (int i = 0; i < tab_count; ++i)
         {
             const app::RepoState& state = *app.tabs[static_cast<std::size_t>(i)];
             const bool dragging = g_tab_drag.active && g_tab_drag.index == i;
+            // A group's label goes in front of each run of its tabs; a collapsed group hides them, but for the
+            // active (or dragged) one.
+            const std::string& group_name = state.root().tab_group;
+            const app::Application::TabGroup* group = group_name.empty() ? nullptr : app.find_tab_group(group_name);
+            if (group != nullptr && group_name != previous_group)
+            {
+                int run = 0;
+                while (i + run < tab_count
+                       && app.tabs[static_cast<std::size_t>(i + run)]->root().tab_group == group_name)
+                {
+                    ++run;
+                }
+                group_label(draw, x, origin.y, height, app, group_name, run);
+                group = app.find_tab_group(group_name);
+            }
+            previous_group = group_name;
+            if (group != nullptr && group->collapsed && i != app.active_tab && !dragging)
+            {
+                slots.push_back(x);
+                widths.push_back(0.f);
+                continue;
+            }
             float offset = 0.f;
             if (dragging)
             {
@@ -227,13 +456,21 @@ namespace imgit::ui
             slots.push_back(x);
             bool held = false;
             float width = 0.f;
-            if (tab_item(draw, x, origin.y, height, "repo", Icon::BRANCH, state.repo.name(), i == app.active_tab, true,
+            if (tab_item(draw, x, origin.y, height, "repo", Icon::BRANCH, app.tab_label(i), i == app.active_tab, true,
                          &close_request, i, state.repo.workdir().c_str(), app.active_tab != i + 1, false, offset, &held,
                          &width))
             {
                 app.active_tab = i;
             }
             widths.push_back(width);
+            if (group != nullptr)
+            {
+                // The group's colour along the tab's bottom edge.
+                const float left = slots.back() + offset;
+                draw->AddRectFilled(ImVec2(left + px(2.f), origin.y + height - px(2.f)),
+                                    ImVec2(left + width - px(2.f), origin.y + height),
+                                    theme::u32(theme::graph_color(group->color)));
+            }
             if (held)
             {
                 held_tab = i;
@@ -319,7 +556,7 @@ namespace imgit::ui
         }
 
         // Right: tabs list, notifications, preferences, profile.
-        const ImVec4 bright = theme::with_alpha(p.white, 0.9f);
+        const ImVec4 bright = theme::ink(0.9f);
         float right = origin.x + width;
         {
             const app::Profile& current = app.profiles.current();
@@ -403,6 +640,11 @@ namespace imgit::ui
             popup_menu(tab_menu(app, g_menu_tab));
             g_menu_tab = -1;
         }
+        else if (!g_menu_group.empty())
+        {
+            popup_menu(tab_group_menu(app, g_menu_group));
+        }
+        g_menu_group.clear();
     }
 
     // The New Tab page: a centred container (max 2000px, 40px 100px padding) holding Repositories (Open / Clone /
@@ -512,17 +754,8 @@ namespace imgit::ui
             for (std::size_t i = 0; i < app.recent_repos.size(); ++i)
             {
                 std::string path = app.recent_repos[i];
-                std::string name = path;
-                while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
-                {
-                    name.pop_back();
-                }
-                const auto slash = name.find_last_of("/\\");
-                if (slash != std::string::npos)
-                {
-                    name = name.substr(slash + 1);
-                }
-                if (!filter.empty() && !contains_ci(path, filter))
+                const std::string name = app.repo_display_name(path);
+                if (!filter.empty() && !contains_ci(path, filter) && !contains_ci(name, filter))
                 {
                     continue;
                 }

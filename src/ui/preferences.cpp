@@ -41,9 +41,10 @@ namespace imgit::ui
             return ImVec4(r / 255.f, g / 255.f, b / 255.f, a);
         }
 
-        constexpr ImVec4 white(float alpha)
+        // The theme's ink (white on a dark theme) at `alpha`, resolved where it is drawn.
+        constexpr theme::Ink white(float alpha)
         {
-            return ImVec4(1.f, 1.f, 1.f, alpha);
+            return theme::Ink{alpha};
         }
 
         // The current theme's colours, by reference so a theme switch reaches them.
@@ -53,7 +54,7 @@ namespace imgit::ui
         const ImVec4& RED = theme::palette().red;
         const ImVec4& PANEL_BG0 = theme::palette().panel_bg0;
         const ImVec4& PANEL_BG1 = theme::palette().panel_bg1;
-        constexpr ImVec4 FIELD_BG = ImVec4(0.f, 0.f, 0.f, 0.2f);
+        const ImVec4& FIELD_BG = theme::palette().input_bg;
         constexpr ImVec4 OUTLINE = rgb(119, 120, 123); // design-system outline buttons
         const ImVec4& CODE_TEXT = theme::palette().text_accent;
         constexpr ImVec4 CLEAR = ImVec4(0.f, 0.f, 0.f, 0.f);
@@ -75,10 +76,32 @@ namespace imgit::ui
             MONO,
         };
 
+        // A text colour: a fixed one, or the theme's ink at an opacity (resolved when drawn, so the styles below
+        // follow theme switches).
+        class TextColor
+        {
+        public:
+            constexpr TextColor(ImVec4 fixed): m_fixed(fixed)
+            {
+            }
+            constexpr TextColor(theme::Ink ink): m_ink(ink.alpha)
+            {
+            }
+
+            operator ImVec4() const noexcept
+            {
+                return m_ink >= 0.f ? theme::ink(m_ink) : m_fixed;
+            }
+
+        private:
+            ImVec4 m_fixed{};
+            float m_ink = -1.f;
+        };
+
         struct Style
         {
             float size = 14.f;
-            ImVec4 color = white(0.75f);
+            TextColor color = white(0.75f);
             Face face = Face::REGULAR;
         };
 
@@ -246,7 +269,7 @@ namespace imgit::ui
         {
             const ImVec2 min = page.at(x, y);
             draw_fa_duotone(page.draw, "fad:check-circle", ImVec2(min.x + px(7.f), min.y + px(7.f)), px(14.f),
-                            u32(white(1.f)), u32(BLUE));
+                            u32(theme::palette().white), u32(BLUE));
         }
 
         void svg(Page& page, std::string_view key, std::string_view path, float view_w, float view_h, float x, float y,
@@ -766,8 +789,8 @@ namespace imgit::ui
                 float line_y = text_pos.y;
                 for (const std::string_view line : wrap(style, placeholder, 1e9f))
                 {
-                    draw_text(page.draw, font, style.size, ImVec2(text_pos.x, line_y), IM_COL32(255, 255, 255, 102),
-                              line.data(), line.data() + line.size());
+                    draw_text(page.draw, font, style.size, ImVec2(text_pos.x, line_y), theme::ink_u32(102), line.data(),
+                              line.data() + line.size());
                     line_y += px(line_height);
                 }
             }
@@ -807,7 +830,7 @@ namespace imgit::ui
             const ImVec2 chevron[] = {ImVec2(right - px(12.5f), top + px(15.f)),
                                       ImVec2(right - px(9.f), top + px(18.6f)),
                                       ImVec2(right - px(5.4f), top + px(15.f))};
-            page.draw->AddPolyline(chevron, 3, u32(white(1.f)), 0, px(1.8f));
+            page.draw->AddPolyline(chevron, 3, u32(theme::ink(1.f)), 0, px(1.8f));
             if (hit(page, id, x, y, w, 34.f))
             {
                 open_options(page, x, y + 34.f, options, pick);
@@ -913,8 +936,8 @@ namespace imgit::ui
             if (ImGui::IsItemHovered() && !disabled)
             {
                 const ImVec2 min = page.at(x, y);
-                page.draw->AddRectFilled(min, ImVec2(min.x + px(w), min.y + px(shape.height)),
-                                         IM_COL32(255, 255, 255, 12), px(2.f));
+                page.draw->AddRectFilled(min, ImVec2(min.x + px(w), min.y + px(shape.height)), theme::ink_u32(12),
+                                         px(2.f));
             }
             return clicked;
         }
@@ -952,8 +975,7 @@ namespace imgit::ui
             if (ImGui::IsItemHovered() && !disabled)
             {
                 const ImVec2 min = page.at(x, y);
-                page.draw->AddRectFilled(min, ImVec2(min.x + px(w), min.y + px(h)), IM_COL32(255, 255, 255, 12),
-                                         px(2.f));
+                page.draw->AddRectFilled(min, ImVec2(min.x + px(w), min.y + px(h)), theme::ink_u32(12), px(2.f));
             }
             return clicked;
         }
@@ -2138,6 +2160,38 @@ namespace imgit::ui
                                   });
                     r.column = 34.f;
                 });
+            row(form, "Custom Themes",
+                [&](Row& r)
+                {
+                    // Outline buttons like the colour rows' reset: Reload reads the folder again, Open Folder shows it
+                    // (made first if needed).
+                    const Style style{12.f, white(0.75f)};
+                    float bx = r.x();
+                    const auto button = [&](const char* id, std::string_view icon_name, const char* label)
+                    {
+                        const float w = 13.f + 15.f + 5.f + measure(style, label) + 5.f + 13.f;
+                        box(page, bx, r.top, w, 31.140625f, {CLEAR, white(0.75f), 2.f});
+                        icon(page, icon_name, bx + 13.f, r.top + 9.5f, 15.f, 12.f, 12.f, white(0.75f));
+                        text(page, bx + 33.f, r.top + 7.f, style, label);
+                        const bool clicked = hit(page, id, bx, r.top, w, 31.140625f);
+                        bx += w + 10.f;
+                        return clicked;
+                    };
+                    if (button("##reload_themes", "far:sync", "Reload"))
+                    {
+                        app.reload_custom_themes(true);
+                    }
+                    if (button("##themes_folder", "far:folder-open", "Open Folder"))
+                    {
+                        std::error_code ec;
+                        std::filesystem::create_directories(app.config_path("themes"), ec);
+                        platform::shell::open_path(app.config_path("themes"));
+                    }
+                    r.column = 34.f;
+                });
+            paragraph(form, "Theme files (*.json) in your profile's themes folder show up in the Theme list. Each "
+                            "holds one theme: a \"name\", the built-in \"base\" theme it starts from, optional "
+                            "\"background\" and \"accent\" colours, and \"colors\" by palette name.");
             row(form, "Notification Location",
                 [&](Row& r)
                 {
@@ -2864,7 +2918,8 @@ namespace imgit::ui
         ImGui::GetWindowDrawList()->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), u32(PANEL_BG0));
 
         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(origin.x + px(299.f), origin.y),
-                                                  ImVec2(origin.x + px(300.f), origin.y + size.y), u32(white(0.08f)));
+                                                  ImVec2(origin.x + px(300.f), origin.y + size.y),
+                                                  u32(theme::ink(0.08f)));
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, px(8.f));
         ImGui::BeginChild("##prefs_sidebar", ImVec2(px(299.f), size.y), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoBackground);

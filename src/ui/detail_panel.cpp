@@ -481,7 +481,7 @@ namespace imgit::ui
                 {
                     draw->AddRectFilled(bmin, bmax, theme::u32(p.hover_row));
                 }
-                draw->AddRect(bmin, bmax, theme::u32(checked ? accent : theme::with_alpha(p.white, 0.2f)), 0.f, 0, 1.f);
+                draw->AddRect(bmin, bmax, theme::u32(checked ? accent : theme::ink(0.2f)), 0.f, 0, 1.f);
                 const ImU32 color = theme::u32(checked || hovered ? p.text_selected : p.text_normal);
                 const float icon_w = fa_icon_width(icons[i], px(12.f));
                 draw_fa_icon(draw, icons[i], ImVec2(bmin.x + px(11.f) + icon_w / 2.f, top + px(12.05f)), px(12.f),
@@ -1184,7 +1184,7 @@ namespace imgit::ui
                 }
                 if (ImGui::IsItemHovered())
                 {
-                    draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                    draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                 }
                 draw->AddRect(bmin, bmax, theme::u32(p.text_normal), px(2.f), 0, 1.f);
                 css_text(draw, theme::FONT_SIZE_ROW, ImVec2(bmin.x + px(6.f), bmin.y + px(2.5f)),
@@ -1507,8 +1507,7 @@ namespace imgit::ui
                     {
                         draw->AddRectFilled(bmin, bmax, theme::u32(p.hover_row));
                     }
-                    draw->AddRect(bmin, bmax, theme::u32(checked ? accent : theme::with_alpha(p.white, 0.2f)), 0.f, 0,
-                                  1.f);
+                    draw->AddRect(bmin, bmax, theme::u32(checked ? accent : theme::ink(0.2f)), 0.f, 0, 1.f);
                     const ImU32 color = theme::u32(checked || hovered ? p.text_selected : p.text_normal);
                     const float icon_w = fa_icon_width(icons[i], px(12.f));
                     draw_fa_icon(draw, icons[i], ImVec2(bmin.x + px(11.f) + icon_w / 2.f, row_top + px(12.05f)),

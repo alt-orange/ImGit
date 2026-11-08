@@ -30,8 +30,8 @@ namespace imgit::app
         constexpr const char* VERSION = "0.2.0";
 
         // Files that belong to a profile; before profiles existed they sat in the settings folder itself.
-        constexpr const char* PROFILE_FILES[] = {"settings.txt", "preferences.txt", "recent.txt", "tabs.txt",
-                                                 "favorites.txt"};
+        constexpr const char* PROFILE_FILES[] = {"settings.txt", "preferences.txt", "recent.txt",
+                                                 "tabs.txt",     "favorites.txt",   "aliases.txt"};
 
         // The settings folder: %APPDATA%\.imgit on Windows, ~/.imgit elsewhere.
         std::filesystem::path config_directory()
@@ -224,6 +224,19 @@ namespace imgit::app
                     }
                 }
             }
+            else if (key == "hidden_graph_columns")
+            {
+                hidden_graph_columns.clear();
+                std::stringstream stream(value);
+                std::string column;
+                while (std::getline(stream, column, ','))
+                {
+                    if (!column.empty())
+                    {
+                        hidden_graph_columns.insert(column);
+                    }
+                }
+            }
             else if (key == "hidden_left_sections")
             {
                 hidden_left_sections.clear();
@@ -284,6 +297,14 @@ namespace imgit::app
             separator = ",";
         }
         file << '\n';
+        file << "hidden_graph_columns=";
+        separator = "";
+        for (const std::string& zone : hidden_graph_columns)
+        {
+            file << separator << zone;
+            separator = ",";
+        }
+        file << '\n';
         file << "auto_fetch_minutes=" << auto_fetch_minutes << '\n'
              << "initial_commits=" << initial_commits << '\n'
              << "show_toolbar_labels=" << show_toolbar_labels << '\n'
@@ -313,6 +334,8 @@ namespace imgit::app
         apply_profile_identity(false);
         settings.load(config_path("settings.txt"));
         load_recent();
+        load_aliases();
+        load_custom_themes();
     }
 
     Application::~Application()
@@ -364,6 +387,7 @@ namespace imgit::app
         }
         save_recent();
         tabs.clear();
+        tab_groups.clear();
         closed_tabs.clear();
         recent_repos.clear();
         active_tab = -1;
@@ -376,6 +400,8 @@ namespace imgit::app
         settings = Settings{};
         settings.load(config_path("settings.txt"));
         load_recent();
+        load_aliases();
+        load_custom_themes();
         apply_settings();
         if (settings.remember_tabs)
         {
@@ -626,6 +652,7 @@ namespace imgit::app
             dialog.close();
         }
         tabs.erase(tabs.begin() + index);
+        drop_empty_tab_groups();
         // New Tab (-1) stays where it is; a repository tab right of the closed one keeps
         // showing the same repository.
         if (active_tab < 0)
@@ -700,6 +727,25 @@ namespace imgit::app
     void Application::set_zoom(float zoom)
     {
         settings.zoom = std::clamp(zoom, 0.5f, 2.f);
+        apply_settings();
+    }
+
+    void Application::load_custom_themes()
+    {
+        for (const std::string& problem : theme::load_custom_themes(config_path("themes")))
+        {
+            toasts.push(ToastKind::ERROR, "Custom theme not loaded", problem);
+        }
+    }
+
+    void Application::reload_custom_themes(bool report)
+    {
+        const int before = toasts.unread();
+        load_custom_themes();
+        if (report && toasts.unread() == before)
+        {
+            toasts.push(ToastKind::SUCCESS, "Custom themes reloaded");
+        }
         apply_settings();
     }
 
@@ -2263,12 +2309,29 @@ namespace imgit::app
         (void)write_text_file(config_path("recent.txt"), text);
     }
 
+    // tabs.txt: one line per tab, its path then (tab-separated) "name=" / "group=" fields when set; a line
+    // "#group=<colour>\t<collapsed>\t<name>" per tab group and "#active=<index>".
     void Application::save_tabs() const
     {
         std::string text;
+        for (const TabGroup& group : tab_groups)
+        {
+            text += "#group=" + std::to_string(group.color) + '\t' + (group.collapsed ? "1" : "0") + '\t' + group.name
+                    + '\n';
+        }
         for (const auto& tab : tabs)
         {
-            text += tab->root().repo.workdir() + '\n';
+            const RepoState& root = tab->root();
+            text += root.repo.workdir();
+            if (!root.tab_name.empty())
+            {
+                text += "\tname=" + root.tab_name;
+            }
+            if (!root.tab_group.empty())
+            {
+                text += "\tgroup=" + root.tab_group;
+            }
+            text += '\n';
         }
         text += "#active=" + std::to_string(active_tab) + '\n';
         (void)write_text_file(config_path("tabs.txt"), text);
@@ -2279,21 +2342,269 @@ namespace imgit::app
         std::ifstream file(config_path("tabs.txt"));
         std::string line;
         int wanted = -1;
+        tab_groups.clear();
         while (std::getline(file, line))
         {
-            line = trim(line);
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
             if (line.starts_with("#active="))
             {
                 wanted = std::atoi(line.c_str() + 8);
+                continue;
             }
-            else if (std::error_code ec; !line.empty() && std::filesystem::exists(line, ec))
+            std::vector<std::string> fields;
+            std::stringstream stream(line);
+            for (std::string field; std::getline(stream, field, '\t');)
             {
-                open_repository(line);
+                fields.push_back(field);
+            }
+            if (line.starts_with("#group="))
+            {
+                if (fields.size() >= 3 && !fields[2].empty() && find_tab_group(fields[2]) == nullptr)
+                {
+                    tab_groups.push_back({fields[2], std::max(0, std::atoi(fields[0].c_str() + 7)), fields[1] == "1"});
+                }
+                continue;
+            }
+            const std::string path = fields.empty() ? std::string{} : trim(fields[0]);
+            if (std::error_code ec; path.empty() || !std::filesystem::exists(path, ec))
+            {
+                continue;
+            }
+            const std::size_t before = tabs.size();
+            open_repository(path);
+            if (tabs.size() == before)
+            {
+                continue;
+            }
+            RepoState& opened = *tabs.back();
+            for (std::size_t i = 1; i < fields.size(); ++i)
+            {
+                if (fields[i].starts_with("name="))
+                {
+                    opened.tab_name = fields[i].substr(5);
+                }
+                else if (fields[i].starts_with("group=") && find_tab_group(fields[i].substr(6)) != nullptr)
+                {
+                    opened.tab_group = fields[i].substr(6);
+                }
             }
         }
+        drop_empty_tab_groups();
         if (wanted >= -1 && wanted < static_cast<int>(tabs.size()))
         {
             active_tab = wanted;
         }
+    }
+
+    RepoState& Application::tab_root(int index) const
+    {
+        RepoState* state = tabs[static_cast<std::size_t>(index)].get();
+        while (state->parent != nullptr)
+        {
+            state = state->parent.get();
+        }
+        return *state;
+    }
+
+    Application::TabGroup* Application::find_tab_group(const std::string& name)
+    {
+        const auto found = std::ranges::find(tab_groups, name, &TabGroup::name);
+        return found != tab_groups.end() ? &*found : nullptr;
+    }
+
+    void Application::drop_empty_tab_groups()
+    {
+        std::erase_if(tab_groups,
+                      [&](const TabGroup& group)
+                      {
+                          return std::ranges::none_of(tabs,
+                                                      [&](const std::unique_ptr<RepoState>& tab)
+                                                      {
+                                                          return tab->root().tab_group == group.name;
+                                                      });
+                      });
+    }
+
+    void Application::set_tab_group(int index, const std::string& group)
+    {
+        if (index < 0 || index >= static_cast<int>(tabs.size()))
+        {
+            return;
+        }
+        if (!group.empty() && find_tab_group(group) == nullptr)
+        {
+            // The next colour round the lanes' wheel after the groups already there.
+            int color = 0;
+            for (const TabGroup& existing : tab_groups)
+            {
+                color = std::max(color, existing.color + 1);
+            }
+            tab_groups.push_back({group, color % theme::GRAPH_COLOR_COUNT, false});
+        }
+        tab_root(index).tab_group = group;
+        if (!group.empty())
+        {
+            // Beside the group's last other tab, so the group stays one run.
+            int last = -1;
+            for (int i = 0; i < static_cast<int>(tabs.size()); ++i)
+            {
+                if (i != index && tab_root(i).tab_group == group)
+                {
+                    last = i;
+                }
+            }
+            if (last >= 0)
+            {
+                move_tab(index, last < index ? last + 1 : last);
+            }
+        }
+        drop_empty_tab_groups();
+        if (settings.remember_tabs)
+        {
+            save_tabs();
+        }
+    }
+
+    void Application::rename_tab_group(const std::string& from, const std::string& to)
+    {
+        TabGroup* group = find_tab_group(from);
+        if (group == nullptr || to.empty() || from == to || find_tab_group(to) != nullptr)
+        {
+            return;
+        }
+        group->name = to;
+        for (int i = 0; i < static_cast<int>(tabs.size()); ++i)
+        {
+            if (RepoState& root = tab_root(i); root.tab_group == from)
+            {
+                root.tab_group = to;
+            }
+        }
+        if (settings.remember_tabs)
+        {
+            save_tabs();
+        }
+    }
+
+    void Application::ungroup_tabs(const std::string& name)
+    {
+        for (int i = 0; i < static_cast<int>(tabs.size()); ++i)
+        {
+            if (RepoState& root = tab_root(i); root.tab_group == name)
+            {
+                root.tab_group.clear();
+            }
+        }
+        drop_empty_tab_groups();
+        if (settings.remember_tabs)
+        {
+            save_tabs();
+        }
+    }
+
+    void Application::close_tab_group(const std::string& name)
+    {
+        for (int i = static_cast<int>(tabs.size()) - 1; i >= 0; --i)
+        {
+            if (tab_root(i).tab_group == name)
+            {
+                close_tab(i);
+            }
+        }
+    }
+
+    void Application::rename_tab(int index, const std::string& name)
+    {
+        if (index < 0 || index >= static_cast<int>(tabs.size()))
+        {
+            return;
+        }
+        tab_root(index).tab_name = trim(name);
+        if (settings.remember_tabs)
+        {
+            save_tabs();
+        }
+    }
+
+    std::string Application::tab_label(int index) const
+    {
+        const RepoState& state = *tabs[static_cast<std::size_t>(index)];
+        if (state.parent != nullptr)
+        {
+            return state.repo.name(); // a submodule open in the tab
+        }
+        return state.tab_name.empty() ? repo_display_name(state.repo.workdir()) : state.tab_name;
+    }
+
+    namespace
+    {
+        // The key of a repository in the aliases: its path with forward slashes and no trailing one.
+        std::string alias_key(std::string path)
+        {
+            std::replace(path.begin(), path.end(), '\\', '/');
+            while (path.size() > 1 && path.back() == '/')
+            {
+                path.pop_back();
+            }
+            return path;
+        }
+    } // namespace
+
+    void Application::set_repo_alias(const std::string& workdir, const std::string& alias)
+    {
+        const std::string name = trim(alias);
+        if (name.empty())
+        {
+            repo_aliases.erase(alias_key(workdir));
+        }
+        else
+        {
+            repo_aliases[alias_key(workdir)] = name;
+        }
+        save_aliases();
+    }
+
+    std::string Application::repo_display_name(const std::string& workdir) const
+    {
+        const std::string key = alias_key(workdir);
+        if (const auto alias = repo_aliases.find(key); alias != repo_aliases.end())
+        {
+            return alias->second;
+        }
+        const auto slash = key.find_last_of('/');
+        return slash == std::string::npos ? key : key.substr(slash + 1);
+    }
+
+    // aliases.txt: "<path>\t<alias>" lines.
+    void Application::load_aliases()
+    {
+        repo_aliases.clear();
+        std::ifstream file(config_path("aliases.txt"));
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+            const auto tab = line.find('\t');
+            if (tab != std::string::npos && tab > 0 && tab + 1 < line.size())
+            {
+                repo_aliases[alias_key(line.substr(0, tab))] = line.substr(tab + 1);
+            }
+        }
+    }
+
+    void Application::save_aliases() const
+    {
+        std::string text;
+        for (const auto& [path, alias] : repo_aliases)
+        {
+            text += path + '\t' + alias + '\n';
+        }
+        (void)write_text_file(config_path("aliases.txt"), text);
     }
 } // namespace imgit::app
