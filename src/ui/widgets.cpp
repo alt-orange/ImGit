@@ -731,10 +731,29 @@ namespace imgit::ui
         return changed;
     }
 
-    bool input_multiline(const char* id, std::string& value, const char* hint, ImVec2 size)
+    bool input_multiline(const char* id, std::string& value, const char* hint, ImVec2 size, bool caret_to_end)
     {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const bool changed = ImGui::InputTextMultiline(id, &value, size);
+        // The field becomes active a frame after the focus request, so the request is kept until the callback runs.
+        static ImGuiID pending_caret = 0;
+        const ImGuiID item_id = ImGui::GetID(id);
+        if (caret_to_end)
+        {
+            pending_caret = item_id;
+        }
+        const bool changed = ImGui::InputTextMultiline(
+                id, &value, size, ImGuiInputTextFlags_CallbackAlways,
+                [](ImGuiInputTextCallbackData* data)
+                {
+                    const ImGuiID self = *static_cast<const ImGuiID*>(data->UserData);
+                    if (pending_caret == self)
+                    {
+                        data->CursorPos = data->SelectionStart = data->SelectionEnd = data->BufTextLen;
+                        pending_caret = 0;
+                    }
+                    return 0;
+                },
+                const_cast<ImGuiID*>(&item_id));
         text_field_menu(value);
         if (value.empty() && hint != nullptr && !ImGui::IsItemActive())
         {

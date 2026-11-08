@@ -81,6 +81,7 @@ namespace
     NSWindow* g_window = nil;
     NSToolbar* g_toolbar = nil; // held while full screen takes it off the window
     ImGitDragView* g_drag_view = nil;
+    bool g_dark = true; // the appearance set_dark_appearance() last asked for
 
     bool full_screen()
     {
@@ -97,9 +98,9 @@ namespace imgit::platform::detail
         {
             return;
         }
-        // ImGit draws a dark UI on every platform: the frame matches it instead of following the system
-        // appearance.
-        window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        // The frame matches ImGit's theme instead of following the system appearance.
+        window.appearance =
+                [NSAppearance appearanceNamed:g_dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
         // The title bar is hidden and the content runs under it, so the tabs bar is the top of the window with the
         // traffic lights over its left end (Electron's "hiddenInset" look). An empty toolbar in the compact style
         // makes that band toolbar-high, which centres the lights on the tabs bar and insets them a little.
@@ -137,6 +138,16 @@ namespace imgit::platform::detail
             g_drag_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
             g_drag_view.region = NSZeroRect;
             [content addSubview:g_drag_view];
+        }
+    }
+
+    void set_dark_appearance(bool dark)
+    {
+        g_dark = dark;
+        if (g_window != nil)
+        {
+            g_window.appearance =
+                    [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
         }
     }
 

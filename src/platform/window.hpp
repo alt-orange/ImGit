@@ -10,9 +10,13 @@ namespace imgit::platform
     // context, without which Cocoa gives no core profile.
     void apply_window_hints();
 
-    // Called once the main window exists: the dark caption on Windows, the dark title bar on macOS; remembers the
-    // window for main_window().
+    // Called once the main window exists: the caption on Windows, the title bar on macOS (dark until
+    // set_window_dark() says otherwise); remembers the window for main_window().
     void init_window(GLFWwindow* window);
+
+    // The window frame follows the theme: Windows' dark or light caption (DWM immersive dark mode), macOS' dark or
+    // light appearance; the window manager's frame elsewhere is left alone. Callable before init_window().
+    void set_window_dark(bool dark);
 
     // The factor the UI's logical (CSS) pixels are multiplied by for `window`: the monitor's content scale where
     // window coordinates are physical pixels (Windows, X11), 1 where they are points and the framebuffer alone is

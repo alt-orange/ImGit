@@ -130,14 +130,41 @@ namespace imgit::platform
     {
     }
 
+    namespace
+    {
+        bool g_dark_frame = true;
+
+        void apply_frame(HWND hwnd)
+        {
+            const BOOL dark = g_dark_frame ? TRUE : FALSE;
+            constexpr DWORD USE_IMMERSIVE_DARK_MODE = 20;
+            DwmSetWindowAttribute(hwnd, USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        }
+    } // namespace
+
+    void set_window_dark(bool dark)
+    {
+        if (dark == g_dark_frame)
+        {
+            return;
+        }
+        g_dark_frame = dark;
+        if (g_window != nullptr)
+        {
+            HWND hwnd = glfwGetWin32Window(g_window);
+            apply_frame(hwnd);
+            // Windows 10 repaints the caption only once the frame changes.
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+
     void init_window(GLFWwindow* window)
     {
         g_window = window;
-        // The window frame is the dark Windows caption.
-        const BOOL dark = TRUE;
-        constexpr DWORD USE_IMMERSIVE_DARK_MODE = 20;
+        // The window frame is the Windows caption in the theme's shade.
         HWND hwnd = glfwGetWin32Window(window);
-        DwmSetWindowAttribute(hwnd, USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        apply_frame(hwnd);
         g_glfw_window_proc = reinterpret_cast<WNDPROC>(
                 SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(cursor_window_proc)));
     }

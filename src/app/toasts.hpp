@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <imgui.h>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace imgit::app
@@ -29,6 +31,8 @@ namespace imgit::app
 
         void push(ToastKind kind, std::string title, std::string detail = {});
         void draw(); // call once per frame, after the main window
+        // Keeps this frame's toasts above a screen rectangle they would otherwise cover (buttons near the bottom).
+        void keep_clear(ImVec2 min, ImVec2 max);
         [[nodiscard]] std::vector<Entry>& history() noexcept
         {
             return m_history;
@@ -47,6 +51,7 @@ namespace imgit::app
             std::optional<double> hidden_at; // the slide out started (expired or dismissed)
         };
         std::vector<Toast> m_toasts;
+        std::vector<std::pair<ImVec2, ImVec2>> m_keep_clear; // this frame's rectangles, cleared by draw()
         std::vector<Entry> m_history; // newest first
     };
 } // namespace imgit::app

@@ -20,9 +20,10 @@ namespace imgit::platform
 #ifdef __APPLE__
     namespace detail
     {
-        // window_mac.mm: the dark appearance whatever the system setting, and the title bar hidden under the
+        // window_mac.mm: the theme's appearance whatever the system setting, and the title bar hidden under the
         // content (the traffic lights stay, over the tabs bar).
         void configure_window(void* ns_window);
+        void set_dark_appearance(bool dark);
         float title_bar_inset();
         void set_drag_region(float min_x, float min_y, float max_x, float max_y);
     } // namespace detail
@@ -40,7 +41,7 @@ namespace imgit::platform
     {
         g_window = window;
 #ifdef __APPLE__
-        // The app icon comes from the bundle; the window frame is dark like the rest of the window.
+        // The app icon comes from the bundle; the window frame follows the theme (set_window_dark).
         detail::configure_window(static_cast<void*>(glfwGetCocoaWindow(window)));
 #else
         // The frame belongs to the window manager.
@@ -49,6 +50,13 @@ namespace imgit::platform
             GLFWimage image{icon->width, icon->height, const_cast<unsigned char*>(icon->rgba.data())};
             glfwSetWindowIcon(window, 1, &image);
         }
+#endif
+    }
+
+    void set_window_dark([[maybe_unused]] bool dark)
+    {
+#ifdef __APPLE__
+        detail::set_dark_appearance(dark);
 #endif
     }
 

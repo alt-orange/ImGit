@@ -532,6 +532,8 @@ namespace imgit::ui
                 plan.reset();
                 g_reword.step = -1;
             }
+            // Toasts stack above the buttons instead of covering them.
+            app.toasts.keep_clear(ImVec2(right - w, btop), ImVec2(origin.x + size.x - px(PADDING), btop + bh));
         }
         ImGui::EndChild();
 

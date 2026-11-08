@@ -16,6 +16,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace imgit::app
@@ -450,6 +451,11 @@ namespace imgit::app
         void load_aliases();
         void load_custom_themes();
         void save_aliases() const;
+        // The refs hidden from the graph (the eye toggles) per repository, kept in hidden_refs.txt; a tab opening
+        // the repository starts from them and sync_hidden_refs() saves what the tabs changed.
+        std::map<std::string, std::unordered_set<std::string>> m_hidden_refs;
+        void load_hidden_refs();
+        void sync_hidden_refs();
         // The state the repository tab was opened on (under any submodule open in it).
         [[nodiscard]] RepoState& tab_root(int index) const;
         void drop_empty_tab_groups();

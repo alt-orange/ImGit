@@ -2343,11 +2343,12 @@ namespace imgit::ui
         case app::Dialog::Kind::REWORD_COMMIT:
         {
             secondary_text(("Commit " + git::short_sha(d.sha)).c_str());
-            if (ImGui::IsWindowAppearing())
+            const bool appearing = ImGui::IsWindowAppearing();
+            if (appearing)
             {
                 ImGui::SetKeyboardFocusHere();
             }
-            input_multiline("##message", d.text_a, "Commit message", ImVec2(-1.f, px(140.f)));
+            input_multiline("##message", d.text_a, "Commit message", ImVec2(-1.f, px(140.f)), appearing);
             if (buttons("Update Message", !d.text_a.empty(), false, false))
             {
                 const git::Sha sha = d.sha;
