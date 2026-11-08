@@ -2046,6 +2046,65 @@ namespace imgit::git
         return {};
     }
 
+    std::string Repository::default_branch(const std::string& remote) const
+    {
+        git_repository* repo = m_repo.get();
+        const auto exists = [repo](const std::string& full_name)
+        {
+            ReferenceHandle found;
+            return git_reference_lookup(found.out(), repo, full_name.c_str()) == 0;
+        };
+        ReferenceHandle remote_head;
+        if (git_reference_lookup(remote_head.out(), repo, ("refs/remotes/" + remote + "/HEAD").c_str()) == 0
+            && git_reference_type(remote_head) == GIT_REFERENCE_SYMBOLIC)
+        {
+            const std::string prefix = "refs/remotes/" + remote + "/";
+            const std::string symbolic = git_reference_symbolic_target(remote_head);
+            if (symbolic.starts_with(prefix) && exists("refs/heads/" + symbolic.substr(prefix.size())))
+            {
+                return symbolic.substr(prefix.size());
+            }
+        }
+        if (const std::string gitflow = config_string("gitflow.branch.master");
+            !gitflow.empty() && exists("refs/heads/" + gitflow))
+        {
+            return gitflow;
+        }
+        for (const char* fallback : {"main", "master"})
+        {
+            if (exists(std::string("refs/heads/") + fallback))
+            {
+                return fallback;
+            }
+        }
+        return {};
+    }
+
+    bool Repository::upstream_gone(const std::string& name) const
+    {
+        git_repository* repo = m_repo.get();
+        // The upstream's name comes from branch.<name>.remote / .merge alone; the ref itself may be gone.
+        git_buf upstream = GIT_BUF_INIT;
+        if (git_branch_upstream_name(&upstream, repo, ("refs/heads/" + name).c_str()) != 0)
+        {
+            return false;
+        }
+        const std::string upstream_name(upstream.ptr, upstream.size);
+        git_buf_dispose(&upstream);
+        ReferenceHandle found;
+        return git_reference_lookup(found.out(), repo, upstream_name.c_str()) == GIT_ENOTFOUND;
+    }
+
+    bool Repository::branch_checked_out(const std::string& name) const
+    {
+        ReferenceHandle ref;
+        if (git_branch_lookup(ref.out(), m_repo.get(), name.c_str(), GIT_BRANCH_LOCAL) != 0)
+        {
+            return false;
+        }
+        return git_branch_is_checked_out(ref) == 1;
+    }
+
     Result<void> Repository::rename_branch(const std::string& name, const std::string& new_name) const
     {
         ReferenceHandle ref;

@@ -345,6 +345,11 @@ namespace imgit::ui
                                        }));
             add("Blame", pick_file(FileAction::BLAME));
             add("Checkout", next(Stage::CHECKOUT));
+            add("Clean Up Branches", with_repo(
+                                             [&app](app::RepoState& r)
+                                             {
+                                                 open_branch_cleanup(app, r);
+                                             }));
             add("Clone",
                 [&app]
                 {
@@ -430,6 +435,18 @@ namespace imgit::ui
                                      {
                                          app.run_git_cli(r, "Fetch", {"fetch", "--all", "--prune"});
                                      }));
+            // Gitflow: Finish <the checked-out gitflow branch>, Start Feature / Release / Hotfix (once initialized).
+            if (s != nullptr)
+            {
+                for (MenuItem& flow : gitflow_finish_items(app, *s, s->history.head_branch))
+                {
+                    add("Gitflow: " + flow.label, std::move(flow.click));
+                }
+                for (MenuItem& flow : gitflow_start_items(app, *s))
+                {
+                    add("Gitflow: " + flow.label, std::move(flow.click));
+                }
+            }
             add("History", pick_file(FileAction::HISTORY));
             add("Increase Zoom",
                 [&app]

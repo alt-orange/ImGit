@@ -230,6 +230,7 @@ namespace imgit::app
         std::string stash_description;
         // The commit view's message editor (clicking HEAD's message): its own copy of the message.
         bool amending_message = false;
+        git::Sha amend_sha; // the commit whose message the detail panel is editing (HEAD or an older one)
         bool amend_focus_requested = false;
         std::string amend_summary;
         std::string amend_description;

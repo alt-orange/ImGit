@@ -11,6 +11,7 @@
 namespace imgit::app
 {
     class Application;
+    struct Dialog;
     class RepoState;
 } // namespace imgit::app
 
@@ -153,6 +154,29 @@ namespace imgit::ui
     // Stashes every change with `message` (empty for git's default); false when it failed.
     bool stash_changes(app::Application& app, app::RepoState& state, const std::string& message);
     void jump_to_commit(app::RepoState& state, const char* sha);
+
+    // Rewording a commit's message from the detail panel: HEAD, or a commit of HEAD's first-parent chain above its
+    // first merge commit (rebuilt with Repository::rewrite_history, with an undo entry). The reworded commit stays
+    // selected; false, with a toast, when it failed.
+    [[nodiscard]] bool can_reword(const app::RepoState& state, const git::Sha& sha);
+    bool reword_commit(app::Application& app, app::RepoState& state, const git::Sha& sha, const std::string& message);
+
+    // The workflows (ui/workflows.cpp).
+    // Branch cleanup: the review list of the local branches merged into the default branch or whose upstream is
+    // gone (never the checked-out, default, or gitflow main / develop branch); the ticked ones are deleted.
+    void open_branch_cleanup(app::Application& app, app::RepoState& state);
+    // The BRANCH_CLEANUP dialog's contents, inside its modal.
+    void draw_branch_cleanup(app::Application& app, app::RepoState& state, app::Dialog& dialog);
+    // Gitflow (git flow feature / release / hotfix start and finish) from the repository's gitflow.* config.
+    // Whether Initialize Gitflow has set the repository up (gitflow.branch.master is set).
+    [[nodiscard]] bool gitflow_initialized(const app::RepoState& state);
+    // Start Feature / Release / Hotfix, each asking for the name in the prompt bar.
+    [[nodiscard]] MenuItems gitflow_start_items(app::Application& app, app::RepoState& state);
+    // "Finish feature <name>" when `branch` is a gitflow branch (empty otherwise).
+    [[nodiscard]] MenuItems gitflow_finish_items(app::Application& app, app::RepoState& state,
+                                                 const std::string& branch);
+    // The local gitflow branches (feature/..., release/..., hotfix/...), sorted.
+    [[nodiscard]] std::vector<const git::Ref*> gitflow_branches(const app::RepoState& state);
 
     // Whether a ref dragged in the graph can be dropped on another.
     [[nodiscard]] bool can_drop_ref(const app::RepoState& state, const git::Ref& source, const git::Ref& target);
