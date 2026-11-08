@@ -527,8 +527,8 @@ namespace imgit::ui
             finder.focus_requested = false;
         }
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 0.75f));
-        ImGui::PushStyleColor(ImGuiCol_TextDisabled, ImVec4(1.f, 1.f, 1.f, 0.4f));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::ink(0.75f));
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::ink(0.4f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
         push_font(font, 14.f);
         ImGui::SetNextItemWidth(width - px(50.f));
@@ -564,7 +564,7 @@ namespace imgit::ui
         if (!matches.empty())
         {
             // .Select-menu-outer: #272A31, 1px rgba(255,255,255,.08) border, bottom corners 4px.
-            draw->AddRectFilled(list_min, list_max, theme::u32(ImVec4(1.f, 1.f, 1.f, 0.08f)), px(4.f),
+            draw->AddRectFilled(list_min, list_max, theme::u32(theme::ink(0.08f)), px(4.f),
                                 ImDrawFlags_RoundCornersBottom);
             draw->AddRectFilled(ImVec2(list_min.x + 1.f, list_min.y + 1.f), ImVec2(list_max.x - 1.f, list_max.y - 1.f),
                                 theme::u32(theme::palette().panel_bg0), px(3.f),
@@ -601,10 +601,9 @@ namespace imgit::ui
                                         theme::u32(theme::palette().hover_row));
                 }
                 list->AddRectFilled(ImVec2(pos.x, pos.y + px(39.f)), ImVec2(pos.x + row_w, pos.y + px(40.f)),
-                                    theme::u32(ImVec4(1.f, 1.f, 1.f, 0.08f)));
+                                    theme::u32(theme::ink(0.08f)));
                 draw_text_ellipsis(list, font, 14.f, ImVec2(pos.x + px(10.f), pos.y + px(8.f)), row_w - px(20.f),
-                                   theme::u32(ImVec4(1.f, 1.f, 1.f, 0.75f)),
-                                   matches[static_cast<std::size_t>(i)]->label.c_str());
+                                   theme::u32(theme::ink(0.75f)), matches[static_cast<std::size_t>(i)]->label.c_str());
             }
             ImGui::EndChild();
             ImGui::PopStyleVar();

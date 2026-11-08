@@ -80,9 +80,8 @@ namespace imgit::ui
             }
             // The glyph brightens from 90% white to text-selected on hover; disabled buttons fade to 20% / 30%.
             const float hover_t = smooth(id, hovered && enabled, 0.12f);
-            const ImVec4 icon_color =
-                    enabled ? theme::with_alpha(p.white, 0.9f + 0.1f * hover_t) : theme::with_alpha(p.white, 0.2f);
-            const ImVec4 label_color = enabled ? p.text_secondary : theme::with_alpha(p.white, 0.3f);
+            const ImVec4 icon_color = enabled ? theme::ink(0.9f + 0.1f * hover_t) : theme::ink(0.2f);
+            const ImVec4 label_color = enabled ? p.text_secondary : theme::ink(0.3f);
             const float center_x = pos.x + px(BUTTON_WIDTH) / 2.f;
             const float icon_y = labels ? pos.y + px(ICON_CENTER) : pos.y + height / 2.f;
             if (icon.fa != nullptr)
@@ -109,7 +108,7 @@ namespace imgit::ui
                 const bool on_dropdown = hovered && ImGui::GetIO().MousePos.x >= split_x;
                 draw_fa_icon(draw, open ? "fas:caret-up" : "fas:caret-down",
                              ImVec2(split_x + px(5.5f), pos.y + px(24.f)), px(14.f),
-                             theme::u32(enabled ? p.text_secondary : theme::with_alpha(p.white, 0.3f)));
+                             theme::u32(enabled ? p.text_secondary : theme::ink(0.3f)));
                 if (clicked)
                 {
                     (on_dropdown ? result.dropdown : result.clicked) = true;
@@ -156,8 +155,7 @@ namespace imgit::ui
                                     theme::u32(p.toolbar_bg0));
             }
             const float hover_t = smooth("##lfs", hovered && !busy, 0.12f);
-            const ImU32 color = theme::u32(busy ? theme::with_alpha(p.white, 0.2f)
-                                                : theme::with_alpha(p.white, 0.9f + 0.1f * hover_t));
+            const ImU32 color = theme::u32(busy ? theme::ink(0.2f) : theme::ink(0.9f + 0.1f * hover_t));
             const float baseline = pos.y + px(29.f);
             if (busy)
             {
@@ -181,7 +179,7 @@ namespace imgit::ui
         {
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             draw->AddLine(ImVec2(pos.x + 0.5f, pos.y + 1.f), ImVec2(pos.x + 0.5f, pos.y + height - 1.f),
-                          theme::u32(theme::with_alpha(theme::palette().white, 0.2f)), 1.f);
+                          theme::u32(theme::ink(0.2f)), 1.f);
             ImGui::Dummy(ImVec2(px(SEPARATOR_WIDTH), height));
             ImGui::SameLine(0.f, 0.f);
         }
@@ -384,8 +382,8 @@ namespace imgit::ui
         {
             levels.insert(levels.begin(), level);
         }
-        if (breadcrumb(draw, "##repo_crumb", "repository", levels.front()->repo.name(), item_h, true,
-                       ImGui::IsPopupOpen("##repo_crumb_menu")))
+        if (breadcrumb(draw, "##repo_crumb", "repository", app.repo_display_name(levels.front()->repo.workdir()),
+                       item_h, true, ImGui::IsPopupOpen("##repo_crumb_menu")))
         {
             crumb_search.clear();
             open_popover("##repo_crumb_menu");
@@ -407,12 +405,7 @@ namespace imgit::ui
                 {
                     continue;
                 }
-                std::string name = path;
-                while (!name.empty() && (name.back() == '/' || name.back() == '\\'))
-                {
-                    name.pop_back();
-                }
-                name = name.substr(name.find_last_of("/\\") + 1);
+                const std::string name = app.repo_display_name(path);
                 if (!crumb_search.empty() && !contains_ci(name, crumb_search))
                 {
                     continue;

@@ -29,7 +29,10 @@ namespace imgit::ui
         // The terminal colour theme.
         constexpr unsigned ANSI[16] = {0x1A1A1A, 0xF0716A, 0x5CCB7A, 0xEBC45A, 0x5A9CF0, 0xC77DE8, 0x4FC3D2, 0xDCDCDC,
                                        0x6C6C6C, 0xF79A94, 0x86DE9E, 0xF4D78A, 0x8BBBF7, 0xDDA6F2, 0x7FD7E2, 0xF5F5F5};
-        constexpr unsigned FOREGROUND = 0xDCDCDC;
+        // The same on a light background: darker, and white turned grey.
+        constexpr unsigned ANSI_LIGHT[16] = {0x1A1A1A, 0xC4312A, 0x2E8B48, 0x9A7A00, 0x2F6FD0, 0x9A48C4,
+                                             0x1F8A98, 0x6C6C6C, 0x5A5A5A, 0xD9473F, 0x3BA35A, 0xB38B00,
+                                             0x4A86E0, 0xB062D8, 0x2AA0AE, 0x2B2B2B};
 
         ImU32 rgb(unsigned value, float alpha)
         {
@@ -46,7 +49,12 @@ namespace imgit::ui
             return channel(color.x) << 16 | channel(color.y) << 8 | channel(color.z);
         }
 
-        // The theme's terminal background and its accent as the cursor.
+        // The theme's terminal text, its background and its accent as the cursor.
+        unsigned foreground_color()
+        {
+            return hex(theme::palette().terminal_fg);
+        }
+
         unsigned background_color()
         {
             return hex(theme::palette().terminal_bg);
@@ -71,7 +79,7 @@ namespace imgit::ui
             const unsigned index = color & 0xFF;
             if (index < 16)
             {
-                return ANSI[index];
+                return (theme::palette().light ? ANSI_LIGHT : ANSI)[index];
             }
             if (index < 232)
             {
@@ -444,7 +452,7 @@ namespace imgit::ui
         ImGui::BeginChild("##terminal_panel", size, ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        const ImU32 border = IM_COL32(255, 255, 255, 20); // --section-border
+        const ImU32 border = theme::ink_u32(20); // --section-border
         const ImU32 background = rgb(background_color(), 1.f);
         const float right = origin.x + size.x;
         draw->AddRectFilled(origin, ImVec2(right, origin.y + size.y), background);
@@ -462,8 +470,8 @@ namespace imgit::ui
         if (panel.minimized)
         {
             draw_fa_icon(draw, "far:terminal", ImVec2(origin.x + px(17.5f), origin.y + px(14.92f)), px(12.f),
-                         rgb(FOREGROUND, 1.f));
-            text_at(origin.x + px(30.f), origin.y + px(6.42f), rgb(FOREGROUND, 1.f), "Terminal");
+                         rgb(foreground_color(), 1.f));
+            text_at(origin.x + px(30.f), origin.y + px(6.42f), rgb(foreground_color(), 1.f), "Terminal");
         }
         else
         {
@@ -490,14 +498,14 @@ namespace imgit::ui
                 const bool close_hovered = ImGui::IsItemHovered();
                 if (active || hovered || close_hovered)
                 {
-                    draw->AddRectFilled(tmin, tmax, IM_COL32(255, 255, 255, active ? 77 : 26), px(2.f));
+                    draw->AddRectFilled(tmin, tmax, theme::ink_u32(active ? 77 : 26), px(2.f));
                 }
-                const ImU32 color = active ? IM_COL32(255, 255, 255, 255) : rgb(FOREGROUND, 1.f);
+                const ImU32 color = active ? theme::ink_u32(255) : rgb(foreground_color(), 1.f);
                 draw_fa_icon(draw, "far:terminal", ImVec2(x + px(10.f), tab_y + px(10.56f)), px(9.6f), color);
                 text_at(x + px(18.f), tab_y + px(2.f), color, label);
                 const float cx = x + px(18.f) + label_w + px(4.f);
                 draw_svg_path(draw, "close", svg_path("close"), 24.f, 24.f, ImVec2(cx, tab_y + px(4.56f)),
-                              ImVec2(cx + px(12.f), tab_y + px(16.56f)), rgb(FOREGROUND, 1.f));
+                              ImVec2(cx + px(12.f), tab_y + px(16.56f)), rgb(foreground_color(), 1.f));
                 if (clicked)
                 {
                     tabs.active = static_cast<int>(i);
@@ -519,7 +527,7 @@ namespace imgit::ui
             }
             draw_svg_path(draw, "plus", svg_path("plus"), 24.f, 24.f,
                           ImVec2(plus_min.x + px(2.f), plus_min.y + px(2.f)),
-                          ImVec2(plus_min.x + px(14.f), plus_min.y + px(14.f)), rgb(FOREGROUND, 1.f));
+                          ImVec2(plus_min.x + px(14.f), plus_min.y + px(14.f)), rgb(foreground_color(), 1.f));
             if (close_index >= 0)
             {
                 app.close_terminal_tab(state, close_index);
@@ -748,7 +756,7 @@ namespace imgit::ui
                 {
                     fg_color += 8;
                 }
-                unsigned fg = resolve(fg_color, FOREGROUND);
+                unsigned fg = resolve(fg_color, foreground_color());
                 unsigned bg = resolve(cell.bg, background_color());
                 const bool default_bg = cell.bg == app::vt_color::DEFAULT;
                 bool paint_bg = !default_bg;
@@ -822,7 +830,8 @@ namespace imgit::ui
                     track_top + (track_h - slider_h) * static_cast<float>(top_index) / static_cast<float>(scrollback);
             const float sx = right - px(RULER_WIDTH) - 1.f;
             draw->AddRectFilled(ImVec2(sx, std::round(slider_top)),
-                                ImVec2(sx + px(RULER_WIDTH), std::round(slider_top + slider_h)), rgb(FOREGROUND, 0.2f));
+                                ImVec2(sx + px(RULER_WIDTH), std::round(slider_top + slider_h)),
+                                rgb(foreground_color(), 0.2f));
         }
         ImGui::EndChild();
     }

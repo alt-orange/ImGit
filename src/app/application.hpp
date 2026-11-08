@@ -51,6 +51,9 @@ namespace imgit::app
         float commit_message_height = 150.f; // layout.CommitMessage.rightPanelHeight (initialCommitMessageHeight)
         std::map<std::string, float> graph_column_widths; // by zone: ref, graph, message, author...
         std::vector<std::string> graph_column_order; // the zones' keys as dragged into place; empty: the default
+        // The graph columns without a show_* flag of their own (ref, graph, message) switched off from the header's
+        // menu.
+        std::set<std::string> hidden_graph_columns;
 
         void load(const std::string& path);
         void save(const std::string& path) const;
@@ -67,6 +70,7 @@ namespace imgit::app
             CREATE_BRANCH,
             CREATE_TAG,
             RENAME_BRANCH,
+            TEXT_PROMPT, // the rename prompt bar for any name: message / text_a / flag (empty allowed) / on_text
             DELETE_BRANCH,
             DELETE_TAG,
             DELETE_STASH,
@@ -107,6 +111,7 @@ namespace imgit::app
         std::string confirm_label;
         bool danger = false;
         std::function<void()> on_confirm;
+        std::function<void(const std::string&)> on_text; // TEXT_PROMPT
 
         void open(Kind new_kind)
         {
@@ -254,6 +259,37 @@ namespace imgit::app
 
         // Paths of closed tabs, most recent last (File > Reopen Closed Tab).
         std::vector<std::string> closed_tabs;
+
+        // Repository tab groups: named, coloured runs of tabs that the tabs bar marks with a label in front of
+        // them. A collapsed group shows only that label (and the active tab, when it is one of them). Saved with
+        // the tabs.
+        struct TabGroup
+        {
+            std::string name;
+            int color = 0; // a graph lane colour index
+            bool collapsed = false;
+        };
+        std::vector<TabGroup> tab_groups;
+        [[nodiscard]] TabGroup* find_tab_group(const std::string& name);
+        // Moves the tab into `group` (created with the next colour when new) beside the group's other tabs; an
+        // empty name takes it out of its group. A group left without tabs goes.
+        void set_tab_group(int index, const std::string& group);
+        void rename_tab_group(const std::string& from, const std::string& to);
+        // Takes every tab out of the group and drops it.
+        void ungroup_tabs(const std::string& name);
+        void close_tab_group(const std::string& name);
+        // The tab's own name instead of its repository's; empty: back to the repository's.
+        void rename_tab(int index, const std::string& name);
+        // What a repository tab is called: its own name, else its repository's alias or folder name (in a
+        // submodule, the submodule's).
+        [[nodiscard]] std::string tab_label(int index) const;
+
+        // Repository aliases by working directory (Alias repository), shown wherever the repository's name is.
+        std::map<std::string, std::string> repo_aliases;
+        // An empty alias removes it.
+        void set_repo_alias(const std::string& workdir, const std::string& alias);
+        // The repository's alias, else its folder's name.
+        [[nodiscard]] std::string repo_display_name(const std::string& workdir) const;
         // Window-level actions provided by main().
         std::function<void()> quit;
         std::function<void()> relaunch;
@@ -295,6 +331,9 @@ namespace imgit::app
         void copy_to_clipboard(const std::string& text);
         void set_zoom(float zoom);
         void apply_settings();
+        // Reads the profile's custom themes (its "themes" folder) again, reports files that could not be used
+        // (and, with `report`, that it worked) and applies the theme.
+        void reload_custom_themes(bool report);
         // A file of the current profile (settings, tabs, recent repositories...).
         [[nodiscard]] std::string config_path(const char* file) const;
         // A file shared by every profile (the avatar cache).
@@ -364,6 +403,12 @@ namespace imgit::app
         void auto_fetch(RepoState& state);
         void handle_shortcuts(RepoState* state);
         void load_recent();
+        void load_aliases();
+        void load_custom_themes();
+        void save_aliases() const;
+        // The state the repository tab was opened on (under any submodule open in it).
+        [[nodiscard]] RepoState& tab_root(int index) const;
+        void drop_empty_tab_groups();
         void save_tabs() const;
         void draw_menu_bar(RepoState* state);
         [[nodiscard]] ui::MenuItems bar_menu(int index);

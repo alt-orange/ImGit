@@ -364,7 +364,7 @@ namespace imgit::ui
             draw->AddRectFilled(min, max, theme::u32(p.toolbar_bg1));
             draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(p.accent, 0.2f)));
 
-            const ImU32 text = IM_COL32(255, 255, 255, 230);
+            const ImU32 text = theme::ink_u32(230);
             const char* cancel = "Cancel";
             const float message_w = text_size(fonts().regular, 14.f, message.c_str()).x;
             const float confirm_w = text_size(fonts().bold, 12.f, confirm_label.c_str()).x + px(12.f);
@@ -395,9 +395,9 @@ namespace imgit::ui
                 {
                     if (hovered)
                     {
-                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                     }
-                    draw->AddRect(bmin, bmax, IM_COL32(255, 255, 255, 255), px(2.f), 0, 1.f);
+                    draw->AddRect(bmin, bmax, theme::ink_u32(255), px(2.f), 0, 1.f);
                 }
                 const float ascent12 = 12.f * 2189.f / 2048.f * dpi_scale();
                 draw_text(draw, fonts().bold, 12.f,
@@ -453,9 +453,9 @@ namespace imgit::ui
             const ImVec2 max(min.x + size.x, min.y + size.y);
             draw->AddRectFilled(min, max, theme::u32(p.toolbar_bg1));
             draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(p.accent, 0.2f)));
-            const ImU32 text = IM_COL32(255, 255, 255, 230);
-            const ImU32 field_bg = IM_COL32(0, 0, 0, 51);
-            const ImU32 field_border = IM_COL32(255, 255, 255, 51);
+            const ImU32 text = theme::ink_u32(230);
+            const ImU32 field_bg = theme::u32(p.input_bg);
+            const ImU32 field_border = theme::ink_u32(51);
             const auto text_at =
                     [&](ImFont* font, float font_size, float x, float box_top, ImU32 color, const char* label)
             {
@@ -561,9 +561,9 @@ namespace imgit::ui
                 {
                     if (hovered)
                     {
-                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                     }
-                    draw->AddRect(bmin, bmax, IM_COL32(255, 255, 255, 191), px(2.f), 0, 1.f);
+                    draw->AddRect(bmin, bmax, theme::ink_u32(191), px(2.f), 0, 1.f);
                 }
                 text_at(fonts().bold, 12.f, bmin.x + px(6.f), bmin.y + px(2.f), text, label);
                 x += w + px(12.f);
@@ -696,9 +696,9 @@ namespace imgit::ui
             const ImVec2 max(min.x + size.x, min.y + size.y);
             draw->AddRectFilled(min, max, theme::u32(p.toolbar_bg1));
             draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(p.accent, 0.2f)));
-            const ImU32 text = IM_COL32(255, 255, 255, 230);
-            const ImU32 field_bg = IM_COL32(0, 0, 0, 51);
-            const ImU32 field_border = IM_COL32(255, 255, 255, 51);
+            const ImU32 text = theme::ink_u32(230);
+            const ImU32 field_bg = theme::u32(p.input_bg);
+            const ImU32 field_border = theme::ink_u32(51);
             const auto text_at =
                     [&](ImFont* font, float font_size, float x, float box_top, ImU32 color, const char* label)
             {
@@ -788,11 +788,11 @@ namespace imgit::ui
                 {
                     if (hovered)
                     {
-                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                     }
-                    draw->AddRect(bmin, bmax, IM_COL32(255, 255, 255, 191), px(2.f), 0, 1.f);
+                    draw->AddRect(bmin, bmax, theme::ink_u32(191), px(2.f), 0, 1.f);
                 }
-                const ImU32 label_color = primary && !complete ? IM_COL32(255, 255, 255, 115) : text;
+                const ImU32 label_color = primary && !complete ? theme::ink_u32(115) : text;
                 text_at(fonts().bold, 12.f, bmin.x + px(6.f), bmin.y + px(2.f), label_color, label);
                 x += w + px(12.f);
                 return clicked;
@@ -829,7 +829,7 @@ namespace imgit::ui
             else
             {
                 draw->AddRectFilled(cmin, cmax, field_bg, px(2.f));
-                draw->AddRect(cmin, cmax, IM_COL32(255, 255, 255, 140), px(2.f), 0, 1.f);
+                draw->AddRect(cmin, cmax, theme::ink_u32(140), px(2.f), 0, 1.f);
             }
             text_at(fonts().regular, 14.f, cmax.x + px(6.f), min.y + px(14.f), text, remember_label);
 
@@ -865,9 +865,9 @@ namespace imgit::ui
             const ImVec2 max(min.x + size.x, min.y + size.y);
             draw->AddRectFilled(min, max, theme::u32(p.toolbar_bg1));
             draw->AddRectFilled(min, max, theme::u32(theme::with_alpha(p.accent, 0.2f)));
-            const ImU32 text = IM_COL32(255, 255, 255, 230);
-            const ImU32 field_bg = IM_COL32(0, 0, 0, 51);
-            const ImU32 field_border = IM_COL32(255, 255, 255, 51);
+            const ImU32 text = theme::ink_u32(230);
+            const ImU32 field_bg = theme::u32(p.input_bg);
+            const ImU32 field_border = theme::ink_u32(51);
             const auto text_at =
                     [&](ImFont* font, float font_size, float x, float box_top, ImU32 color, const char* label)
             {
@@ -876,7 +876,8 @@ namespace imgit::ui
                           ImVec2(x, std::round(box_top + std::round(ascent)) - std::ceil(ascent)), color, label);
             };
 
-            const std::string message = "Rename '" + d.ref_name + "' to:";
+            const std::string message =
+                    d.kind == app::Dialog::Kind::TEXT_PROMPT ? d.message : "Rename '" + d.ref_name + "' to:";
             const float field_w = px(230.f);
             const float message_w = text_size(fonts().regular, 14.f, message.c_str()).x;
             const float submit_w = text_size(fonts().bold, 12.f, "Submit").x + px(12.f);
@@ -927,7 +928,8 @@ namespace imgit::ui
             draw->AddRect(imin, imax, active ? theme::u32(p.accent) : field_border, px(4.f), 0, 1.f);
             x = imax.x + px(12.f);
 
-            const bool complete = !d.text_a.empty();
+            // TEXT_PROMPT's `flag`: an empty answer is one too (it clears the name).
+            const bool complete = !d.text_a.empty() || (d.kind == app::Dialog::Kind::TEXT_PROMPT && d.flag);
             int result = 0;
             const auto button = [&](const char* id, const char* label, float w, bool primary)
             {
@@ -947,11 +949,11 @@ namespace imgit::ui
                 {
                     if (hovered)
                     {
-                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(p.white, 0.1f)), px(2.f));
+                        draw->AddRectFilled(bmin, bmax, theme::u32(theme::ink(0.1f)), px(2.f));
                     }
-                    draw->AddRect(bmin, bmax, IM_COL32(255, 255, 255, 191), px(2.f), 0, 1.f);
+                    draw->AddRect(bmin, bmax, theme::ink_u32(191), px(2.f), 0, 1.f);
                 }
-                const ImU32 label_color = primary && !complete ? IM_COL32(255, 255, 255, 115) : text;
+                const ImU32 label_color = primary && !complete ? theme::ink_u32(115) : text;
                 text_at(fonts().bold, 12.f, bmin.x + px(6.f), bmin.y + px(2.f), label_color, label);
                 x += w + px(12.f);
                 return clicked;
@@ -1500,7 +1502,7 @@ namespace imgit::ui
         const bool needs_repo = d.kind != app::Dialog::Kind::CLONE_REPO && d.kind != app::Dialog::Kind::INIT_REPO
                                 && d.kind != app::Dialog::Kind::PREFERENCES
                                 && d.kind != app::Dialog::Kind::KEYBOARD_SHORTCUTS && d.kind != app::Dialog::Kind::ABOUT
-                                && d.kind != app::Dialog::Kind::CONFIRM;
+                                && d.kind != app::Dialog::Kind::CONFIRM && d.kind != app::Dialog::Kind::TEXT_PROMPT;
         // A confirmation's action may be repository-free, but one opened from a tab must not outlive it (its
         // action may refer to that tab).
         if (state == nullptr && (needs_repo || (d.kind == app::Dialog::Kind::CONFIRM && !d.workdir.empty())))
@@ -1528,6 +1530,22 @@ namespace imgit::ui
                 const std::string target = request.text_b.empty() ? request.ref_name : request.text_b;
                 app.run_git_cli(*state, "Push",
                                 {"push", "--set-upstream", request.text_a, request.ref_name + ":" + target});
+            }
+            return;
+        }
+        // Tab, tab group and repository names are asked for in the same prompt bar.
+        if (d.kind == app::Dialog::Kind::TEXT_PROMPT)
+        {
+            const int answer = draw_rename_prompt(d);
+            if (answer == 0)
+            {
+                return;
+            }
+            const app::Dialog request = d;
+            d.close();
+            if (answer > 0 && request.on_text)
+            {
+                request.on_text(request.text_a);
             }
             return;
         }
@@ -2400,6 +2418,7 @@ namespace imgit::ui
         }
         case app::Dialog::Kind::NONE:
         case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
+        case app::Dialog::Kind::TEXT_PROMPT:
         case app::Dialog::Kind::PUSH_NEW_BRANCH:
         case app::Dialog::Kind::ADD_SUBMODULE: // the slide panel
         case app::Dialog::Kind::EDIT_SUBMODULE:

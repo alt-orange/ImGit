@@ -40,7 +40,7 @@ namespace imgit::ui
         const ImVec4& INSERT_BG = theme::palette().added_line; // the current theme's, by reference
         const ImVec4& DELETE_BG = theme::palette().deleted_line;
         const ImU32 LINE_NUMBER = IM_COL32(133, 133, 133, 255);
-        const ImU32 EDITOR_TEXT = IM_COL32(255, 255, 255, 255);
+        const theme::InkU32 EDITOR_TEXT{255};
 
         // One line of the inline / split / file layouts: indices into the diff's lines, -1 for none.
         struct Row
@@ -99,7 +99,7 @@ namespace imgit::ui
             {
                 draw->AddRectFilled(pos, max, theme::u32(p.hover_row));
             }
-            draw->AddRect(pos, max, theme::u32(checked ? accent : theme::with_alpha(p.white, 0.2f)), 0.f, 0, 1.f);
+            draw->AddRect(pos, max, theme::u32(checked ? accent : theme::ink(0.2f)), 0.f, 0, 1.f);
             const ImU32 color = theme::u32(checked || hovered ? p.text_selected : p.text_normal);
             if (icon != nullptr)
             {

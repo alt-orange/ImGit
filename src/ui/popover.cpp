@@ -22,8 +22,8 @@ namespace imgit::ui
         const ImVec4& HOVER = theme::palette().hover_row;
         const ImVec4& CURRENT = theme::palette().checked_out;
         const ImVec4& FOCUS = theme::palette().accent;
-        const ImVec4 TEXT(1.f, 1.f, 1.f, 0.9f);
-        const ImVec4 SECONDARY(1.f, 1.f, 1.f, 0.6f);
+        const theme::Ink TEXT{0.9f};
+        const theme::Ink SECONDARY{0.6f};
 
         struct PopoverState
         {
@@ -212,7 +212,7 @@ namespace imgit::ui
         }
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
         ImGui::PushStyleColor(ImGuiCol_Text, TEXT);
-        ImGui::PushStyleColor(ImGuiCol_TextDisabled, ImVec4(1.f, 1.f, 1.f, 0.4f));
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, theme::ink(0.4f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
         push_font(font, 14.f);
@@ -262,7 +262,7 @@ namespace imgit::ui
         {
             draw->AddRectFilled(min, max, theme::u32(HOVER));
         }
-        const ImU32 color = theme::u32(current || hovered ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT);
+        const ImU32 color = theme::u32(current || hovered ? theme::ink(1.f) : TEXT);
         const float top = std::round(s.origin.y + px(s.y + 5.f));
         float x = s.origin.x + px(20.f);
         if (icon != nullptr)
@@ -323,7 +323,7 @@ namespace imgit::ui
         {
             draw->AddRectFilled(min, max, theme::u32(HOVER));
         }
-        const ImU32 color = theme::u32(selected ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT);
+        const ImU32 color = theme::u32(selected ? theme::ink(1.f) : TEXT);
         const float top = std::round(s.origin.y + px(s.y + 5.f));
         draw_fa_icon(draw, selected ? "far:dot-circle" : "far:circle",
                      ImVec2(s.origin.x + px(17.f), std::round(s.origin.y + px(s.y + 6.5f)) + px(7.f)), px(14.f),
@@ -352,7 +352,7 @@ namespace imgit::ui
             draw->AddRectFilled(min, max, theme::u32(HOVER));
         }
         draw_text(draw, fonts().regular, 12.f, ImVec2(s.origin.x + px(12.f), std::round(s.origin.y + px(s.y + 6.f))),
-                  theme::u32(hovered ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT), text);
+                  theme::u32(hovered ? theme::ink(1.f) : TEXT), text);
         s.y += HEIGHT;
         return clicked;
     }

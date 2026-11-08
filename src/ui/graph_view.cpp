@@ -11,12 +11,14 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <numbers>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -25,6 +27,39 @@ namespace imgit::ui
     namespace
     {
         constexpr float PI = std::numbers::pi_v<float>;
+
+        // The graph's row, lane and node sizes, in CSS px: the rich layout (avatars in 22px nodes on 28px rows) or
+        // the compact one (Settings::compact_graph: plain dots on 20px rows, narrower lanes and smaller pills).
+        struct GraphMetrics
+        {
+            float row_height;
+            float row_inner_height;
+            float margin; // above and below the inner height
+            float column_width;
+            float gutter_width;
+            float node_diameter;
+            float merge_node_diameter;
+            float node_avatar_diameter; // 0: the node is a plain dot
+            float arc_radius;
+            float avatar_diameter; // the AUTHOR zone's
+            float ref_height;
+        };
+
+        constexpr GraphMetrics RICH_METRICS{theme::GRAPH_ROW_HEIGHT,
+                                            theme::GRAPH_ROW_INNER_HEIGHT,
+                                            theme::COMMIT_ZONE_MARGIN,
+                                            theme::COMMIT_COLUMN_WIDTH,
+                                            theme::COMMIT_ZONE_GUTTER_WIDTH,
+                                            theme::COMMIT_NODE_DIAMETER,
+                                            theme::COMMIT_MERGE_NODE_DIAMETER,
+                                            theme::COMMIT_ZONE_AVATAR_DIAMETER,
+                                            theme::COMMIT_ZONE_EDGE_ARC_RADIUS,
+                                            theme::AVATAR_DIAMETER,
+                                            theme::REF_ZONE_TEXT_HEIGHT};
+        constexpr GraphMetrics COMPACT_METRICS{20.f, 16.f, 2.f, 14.f, 16.f, 10.f, 6.f, 0.f, 7.f, 16.f, 16.f};
+
+        // The metrics of the graph being drawn (set at the start of draw_graph_view).
+        GraphMetrics g_metrics = RICH_METRICS;
 
         // The graph zone when it is narrower than its lanes (GraphContainer's node offsets), in CSS px:
         // the lanes scroll sideways between two opaque gutters that cast a shadow over them, the nodes stay
@@ -160,7 +195,7 @@ namespace imgit::ui
             case ZoneType::SHA:
                 return settings.show_sha;
             default:
-                return true;
+                return !settings.hidden_graph_columns.contains(zone_key(type));
             }
         }
 
@@ -354,8 +389,8 @@ namespace imgit::ui
                 }
             }
             // getCommitZoneContentWidth: the lanes plus the gutters and paddings on both sides.
-            const float content = static_cast<float>(std::max(max_columns, 1)) * theme::COMMIT_COLUMN_WIDTH
-                                  + 2.f * theme::COMMIT_ZONE_GUTTER_WIDTH + 2.f * theme::COMMIT_ZONE_PADDING;
+            const float content = static_cast<float>(std::max(max_columns, 1)) * g_metrics.column_width
+                                  + 2.f * g_metrics.gutter_width + 2.f * theme::COMMIT_ZONE_PADDING;
             const float graph_maximum = max_columns > 0 ? content : 0.f;
 
             bool same = shown.size() == g_zones.zones.size();
@@ -642,9 +677,9 @@ namespace imgit::ui
 
         GraphLanes graph_lanes(int max_columns)
         {
-            constexpr float GUTTER = theme::COMMIT_ZONE_GUTTER_WIDTH;
+            const float GUTTER = g_metrics.gutter_width;
             constexpr float PADDING = theme::COMMIT_ZONE_PADDING;
-            constexpr float COLUMN = theme::COMMIT_COLUMN_WIDTH;
+            const float COLUMN = g_metrics.column_width;
             GraphLanes lanes;
             for (const GraphZone& zone : g_zones.zones)
             {
@@ -676,31 +711,30 @@ namespace imgit::ui
         // A lane's centre, scrolled with the edges (getAbsoluteNodeLeftByColumn).
         float column_x(const Zones& z, int column)
         {
-            return lanes_x(z) + px(theme::COMMIT_ZONE_GUTTER_WIDTH)
-                   + static_cast<float>(column) * px(theme::COMMIT_COLUMN_WIDTH)
-                   - std::round(z.lanes.scroll * dpi_scale()) + px(theme::COMMIT_COLUMN_WIDTH) / 2.f;
+            return lanes_x(z) + px(g_metrics.gutter_width) + static_cast<float>(column) * px(g_metrics.column_width)
+                   - std::round(z.lanes.scroll * dpi_scale()) + px(g_metrics.column_width) / 2.f;
         }
 
         // A node's centre: its lane kept between getMinNodeOffset and getMaxNodeOffset (getNodeOffsetByColumn).
         float node_x(const Zones& z, int column)
         {
-            constexpr float GUTTER = theme::COMMIT_ZONE_GUTTER_WIDTH;
+            const float GUTTER = g_metrics.gutter_width;
             constexpr float PADDING = theme::COMMIT_ZONE_PADDING;
             const GraphLanes& l = z.lanes;
             const float lowest = (1.f - l.factor) * 2.f * PADDING + l.factor * GUTTER;
             const float highest = (1.f - l.factor) * (l.width + PADDING - GUTTER) + l.factor * GUTTER;
-            const float left = GUTTER + static_cast<float>(column) * theme::COMMIT_COLUMN_WIDTH - l.scroll;
+            const float left = GUTTER + static_cast<float>(column) * g_metrics.column_width - l.scroll;
             return lanes_x(z) + std::round(std::max(lowest, std::min(left, highest)) * dpi_scale())
-                   + px(theme::COMMIT_COLUMN_WIDTH) / 2.f;
+                   + px(g_metrics.column_width) / 2.f;
         }
 
         // getNodeOpacityByColumn: nodes within half a gutter of the zone's edges fade to 50%.
         float node_opacity(const Zones& z, int column)
         {
-            constexpr float GUTTER = theme::COMMIT_ZONE_GUTTER_WIDTH;
+            const float GUTTER = g_metrics.gutter_width;
             constexpr float PADDING = theme::COMMIT_ZONE_PADDING;
             const GraphLanes& l = z.lanes;
-            const float left = GUTTER + static_cast<float>(column) * theme::COMMIT_COLUMN_WIDTH - l.scroll;
+            const float left = GUTTER + static_cast<float>(column) * g_metrics.column_width - l.scroll;
             const float from_left = left - PADDING;
             const float from_right = l.width - PADDING - left - GUTTER * (1.f - l.slide_out);
             const float fade = std::max(std::min(from_left, from_right) / (GUTTER / 2.f), l.factor);
@@ -857,10 +891,10 @@ namespace imgit::ui
         // A turn is EDGE_ARC_RADIUS (11) from its corner, drawn as an arc of radius 11 - EDGE_ARC_PADDING (3).
         void draw_edges(ImDrawList* draw, const Zones& z, const graph::RowLayout& row, float y0, float alpha)
         {
-            const float h = px(theme::GRAPH_ROW_HEIGHT);
-            const float turn = px(theme::COMMIT_ZONE_EDGE_ARC_RADIUS);
-            const float radius = turn - px(theme::COMMIT_ZONE_MARGIN);
-            const float pad = px(theme::COMMIT_ZONE_MARGIN);
+            const float h = px(g_metrics.row_height);
+            const float turn = px(g_metrics.arc_radius);
+            const float radius = turn - px(g_metrics.margin);
+            const float pad = px(g_metrics.margin);
             const float thickness = px(theme::COMMIT_ZONE_LINE_WIDTH);
             const float mid_y = y0 + h / 2.f;
             const int node_column = row.column;
@@ -942,19 +976,20 @@ namespace imgit::ui
                        float y0, bool is_head, float alpha)
         {
             const theme::Palette& p = theme::palette();
-            const float h = px(theme::GRAPH_ROW_HEIGHT);
+            const float h = px(g_metrics.row_height);
             const ImVec2 center(node_x(z, row.column), y0 + h / 2.f);
             const ImVec4 color = theme::with_alpha(theme::graph_color(row.column), alpha);
             const ImU32 color_u32 = theme::u32(color);
             switch (commit.type)
             {
             case git::NodeType::MERGE:
-                draw->AddCircleFilled(center, px(theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f, color_u32, 16);
+                draw->AddCircleFilled(center, px(g_metrics.merge_node_diameter) / 2.f, color_u32, 16);
                 break;
             case git::NodeType::STASH:
             {
                 // .node.stash-node: the 22px node with a 2px dotted border in the lane colour around far:inbox.
-                const float half = px(theme::COMMIT_NODE_DIAMETER) / 2.f;
+                const float half = px(g_metrics.node_diameter) / 2.f;
+                const float icon_em = g_metrics.node_diameter * 12.f / theme::COMMIT_NODE_DIAMETER;
                 const ImVec2 min(center.x - half, center.y - half);
                 const ImVec2 max(center.x + half, center.y + half);
                 draw->AddRectFilled(min, max, theme::u32(p.app_bg0));
@@ -967,15 +1002,16 @@ namespace imgit::ui
                     draw->AddRectFilled(ImVec2(min.x, min.y + t), ImVec2(min.x + dot, min.y + e), color_u32);
                     draw->AddRectFilled(ImVec2(max.x - dot, min.y + t), ImVec2(max.x, min.y + e), color_u32);
                 }
-                draw_fa_icon(draw, "far:inbox", ImVec2(center.x - px(0.25f), center.y + px(0.5f)), px(12.f), color_u32);
+                draw_fa_icon(draw, "far:inbox", ImVec2(center.x - px(0.25f), center.y + px(0.5f)), px(icon_em),
+                             color_u32);
                 break;
             }
             case git::NodeType::WORK_DIR:
             {
                 // .node.work-dir-changes: the empty 22px node under an SVG circle r=10, stroke-width 2,
                 // stroke-dasharray "2 3" with round caps, starting at 3 o'clock and running clockwise.
-                const float radius = px(10.f);
-                draw->AddCircleFilled(center, px(theme::COMMIT_NODE_DIAMETER) / 2.f, theme::u32(p.app_bg0), 32);
+                const float radius = px(g_metrics.node_diameter / 2.f - 1.f);
+                draw->AddCircleFilled(center, px(g_metrics.node_diameter) / 2.f, theme::u32(p.app_bg0), 32);
                 const float circumference = 2.f * PI * radius;
                 const float dash = px(2.f) / radius;
                 const float period = px(5.f) / radius;
@@ -996,9 +1032,12 @@ namespace imgit::ui
             case git::NodeType::COMMIT:
             {
                 // .node { border: 2px solid lane } around the 18px avatar.
-                const float radius = px(theme::COMMIT_NODE_DIAMETER) / 2.f;
+                const float radius = px(g_metrics.node_diameter) / 2.f;
                 draw->AddCircleFilled(center, radius, color_u32, 32);
-                draw_avatar(draw, center, px(theme::COMMIT_ZONE_AVATAR_DIAMETER), commit.author);
+                if (g_metrics.node_avatar_diameter > 0.f)
+                {
+                    draw_avatar(draw, center, px(g_metrics.node_avatar_diameter), commit.author);
+                }
                 (void)is_head;
                 break;
             }
@@ -1239,7 +1278,7 @@ namespace imgit::ui
                                ImVec2 pos, float width, ImVec4 lane_color, float opacity, const char* id)
         {
             (void)app;
-            const float h = px(theme::REF_ZONE_TEXT_HEIGHT);
+            const float h = px(g_metrics.ref_height);
             const git::Ref& primary = *group.refs.front();
             RefNodeResult result;
             ImGui::SetCursorScreenPos(pos);
@@ -1325,7 +1364,7 @@ namespace imgit::ui
             const theme::Palette& p = theme::palette();
             const std::string text = "+" + std::to_string(count);
             const float w = overflow_count_width(count);
-            const float h = px(theme::REF_ZONE_TEXT_HEIGHT);
+            const float h = px(g_metrics.ref_height);
             const ImVec4 bg = theme::mix(lane_color, p.app_bg0, 0.25f);
             draw->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), theme::u32(theme::with_alpha(bg, bg.w * opacity)),
                                 px(2.f));
@@ -1487,12 +1526,14 @@ namespace imgit::ui
             }
         }
 
-        // WIP row stats: "✎ 66  + 34  − 3" (modified / added / deleted files), coloured.
-        float draw_wip_stats(ImDrawList* draw, ImVec2 pos, const git::WorkDirStatus& status)
+        // Files changed by a commit or the working directory, by kind.
+        struct FileCounts
         {
-            const theme::Palette& p = theme::palette();
-            int modified = 0, added = 0, deleted = 0;
-            const auto count = [&](const std::vector<git::FileChange>& changes)
+            int modified = 0;
+            int added = 0;
+            int deleted = 0;
+
+            void count(const std::vector<git::FileChange>& changes)
             {
                 for (const git::FileChange& change : changes)
                 {
@@ -1510,10 +1551,90 @@ namespace imgit::ui
                         break;
                     }
                 }
-            };
-            count(status.staged);
-            count(status.unstaged);
-            count(status.conflicted);
+            }
+        };
+
+        // The CHANGES column's counts per commit, by repository: read on a worker thread (with its own
+        // libgit2 repository) for the rows on screen, a batch at a time, and kept for good (a commit never changes).
+        struct ChangeCountCache
+        {
+            std::unordered_map<git::Sha, FileCounts> counts;
+            std::future<std::vector<std::pair<git::Sha, FileCounts>>> job;
+        };
+
+        std::unordered_map<std::string, ChangeCountCache> g_change_counts; // by working directory
+
+        constexpr std::size_t CHANGE_COUNT_BATCH = 48;
+
+        // Collects the finished batch of `workdir` and, when none runs, starts one for the `wanted` commits not yet
+        // counted.
+        void update_change_counts(const std::string& workdir, const std::vector<git::Sha>& wanted)
+        {
+            ChangeCountCache& cache = g_change_counts[workdir];
+            if (cache.job.valid())
+            {
+                if (cache.job.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                {
+                    return;
+                }
+                for (auto& [sha, counts] : cache.job.get())
+                {
+                    cache.counts[sha] = counts;
+                }
+            }
+            std::vector<git::Sha> batch;
+            for (const git::Sha& sha : wanted)
+            {
+                if (!cache.counts.contains(sha) && batch.size() < CHANGE_COUNT_BATCH)
+                {
+                    batch.push_back(sha);
+                }
+            }
+            if (batch.empty())
+            {
+                return;
+            }
+            cache.job = std::async(std::launch::async,
+                                   [workdir, batch = std::move(batch)]
+                                   {
+                                       std::vector<std::pair<git::Sha, FileCounts>> result;
+                                       auto worker = git::Repository::open(workdir);
+                                       for (const git::Sha& sha : batch)
+                                       {
+                                           // A commit that cannot be read counts as no changes rather than being
+                                           // asked for again every frame.
+                                           FileCounts counts;
+                                           if (worker)
+                                           {
+                                               if (auto changes = worker->commit_changes(sha))
+                                               {
+                                                   counts.count(*changes);
+                                               }
+                                           }
+                                           result.emplace_back(sha, counts);
+                                       }
+                                       return result;
+                                   });
+        }
+
+        const FileCounts* change_counts(const std::string& workdir, const git::Sha& sha)
+        {
+            const auto cache = g_change_counts.find(workdir);
+            if (cache == g_change_counts.end())
+            {
+                return nullptr;
+            }
+            const auto found = cache->second.counts.find(sha);
+            return found != cache->second.counts.end() ? &found->second : nullptr;
+        }
+
+        // "✎ 66  + 34  − 3" (modified / added / deleted files), coloured.
+        float draw_file_counts(ImDrawList* draw, ImVec2 pos, const FileCounts& counts, float alpha = 1.f)
+        {
+            const theme::Palette& p = theme::palette();
+            const int modified = counts.modified;
+            const int added = counts.added;
+            const int deleted = counts.deleted;
             // .tiny-files-readout: a 10px solid icon in the status colour, 5px, the count in text-normal, 6px.
             float x = pos.x;
             const float mid = pos.y + text_size(fonts().regular, theme::FONT_SIZE_ROW, "A").y / 2.f;
@@ -1524,17 +1645,89 @@ namespace imgit::ui
                     return;
                 }
                 const float icon_w = fa_icon_width(icon, px(10.f));
-                draw_fa_icon(draw, icon, ImVec2(x + icon_w / 2.f, mid), px(10.f), theme::u32(color));
+                draw_fa_icon(draw, icon, ImVec2(x + icon_w / 2.f, mid), px(10.f),
+                             theme::u32(theme::with_alpha(color, color.w * alpha)));
                 x += icon_w + px(5.f);
                 const std::string text = std::to_string(value);
-                draw_text(draw, fonts().regular, theme::FONT_SIZE_ROW, ImVec2(x, pos.y), theme::u32(p.text_normal),
-                          text.c_str());
+                draw_text(draw, fonts().regular, theme::FONT_SIZE_ROW, ImVec2(x, pos.y),
+                          theme::u32(theme::with_alpha(p.text_normal, p.text_normal.w * alpha)), text.c_str());
                 x += text_size(fonts().regular, theme::FONT_SIZE_ROW, text.c_str()).x + px(6.f);
             };
             item("fas:pencil", modified, p.orange);
             item("fas:plus", added, p.green);
             item("fas:minus", deleted, p.red);
             return x - pos.x;
+        }
+
+        // The WIP row's counts: every staged, unstaged and conflicted file.
+        float draw_wip_stats(ImDrawList* draw, ImVec2 pos, const git::WorkDirStatus& status)
+        {
+            FileCounts counts;
+            counts.count(status.staged);
+            counts.count(status.unstaged);
+            counts.count(status.conflicted);
+            return draw_file_counts(draw, pos, counts);
+        }
+
+        // Marks along the rows' vertical scrollbar where the branches sit, at their rows' share of the list: a
+        // short tick in the lane colour per local branch (half as strong for remote ones), the checked-out
+        // commit a full-width bar in the accent and the selected commits a thin bar in the text colour. Call
+        // inside the rows' window, after its rows.
+        void draw_scroll_markers(const app::RepoState& state, float row_h, int list_rows)
+        {
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            if (!window->ScrollbarY || list_rows <= 0)
+            {
+                return;
+            }
+            const theme::Palette& p = theme::palette();
+            const ImRect track = ImGui::GetWindowScrollbarRect(window, ImGuiAxis_Y);
+            const float content = std::max(static_cast<float>(list_rows) * row_h, track.GetHeight());
+            const float scale = track.GetHeight() / content;
+            ImDrawList* draw = window->DrawList;
+            draw->PushClipRect(track.Min, track.Max, false);
+            const auto mark_at = [&](std::size_t row, float inset, float height, ImU32 color)
+            {
+                const float centre = track.Min.y + (static_cast<float>(row) + 0.5f) * row_h * scale;
+                const float top = std::round(std::clamp(centre - height / 2.f, track.Min.y, track.Max.y - height));
+                draw->AddRectFilled(ImVec2(track.Min.x + inset, top), ImVec2(track.Max.x - inset, top + height), color);
+            };
+            const auto row_of = [&](const git::Sha& sha) -> std::optional<std::size_t>
+            {
+                const auto found = state.history.row_by_sha.find(sha);
+                if (found == state.history.row_by_sha.end())
+                {
+                    return std::nullopt;
+                }
+                return found->second;
+            };
+            for (const git::Ref& ref : state.history.refs)
+            {
+                if (ref.type != git::RefType::LOCAL_BRANCH && ref.type != git::RefType::REMOTE_BRANCH)
+                {
+                    continue;
+                }
+                const auto row = row_of(ref.target);
+                if (!row || *row >= state.layout.rows.size())
+                {
+                    continue;
+                }
+                const ImVec4 lane = theme::graph_color(state.layout.rows[*row].column);
+                const bool local = ref.type == git::RefType::LOCAL_BRANCH;
+                mark_at(*row, px(2.f), px(2.f), theme::u32(theme::with_alpha(lane, local ? 1.f : 0.5f)));
+            }
+            for (const git::Sha& sha : state.selected)
+            {
+                if (const auto row = row_of(sha))
+                {
+                    mark_at(*row, 0.f, px(1.f), theme::u32(p.text_normal));
+                }
+            }
+            if (const auto head = row_of(state.history.head_sha))
+            {
+                mark_at(*head, 0.f, px(3.f), theme::u32(p.accent));
+            }
+            draw->PopClipRect();
         }
 
         // The commit search (Ctrl+F), absolute 4px below the graph's top and 12px from its right edge, over
@@ -1585,7 +1778,7 @@ namespace imgit::ui
             // the border pixels under it don't show through).
             const ImVec4 bar = theme::mix(p.accent, p.panel_bg1, 0.5f);
             const ImVec4 fill = theme::mix(ImVec4(0.f, 0.f, 0.f, 1.f), bar, 0.2f);
-            draw->AddRectFilled(input_min, input_max, theme::u32(theme::mix(p.white, fill, 0.08f)), px(2.f));
+            draw->AddRectFilled(input_min, input_max, theme::u32(theme::mix(p.ink, fill, 0.08f)), px(2.f));
             draw->AddRectFilled(ImVec2(input_min.x + 1.f, input_min.y + 1.f),
                                 ImVec2(input_max.x - 1.f, input_max.y - 1.f), theme::u32(fill), px(1.f));
             const ImGuiID input_id = ImGui::GetID("##commit_search");
@@ -1693,8 +1886,9 @@ namespace imgit::ui
             return;
         }
 
+        g_metrics = app.settings.compact_graph ? COMPACT_METRICS : RICH_METRICS;
         const float header_h = px(theme::GRAPH_HEADER_HEIGHT);
-        const float row_h = px(theme::GRAPH_ROW_HEIGHT);
+        const float row_h = px(g_metrics.row_height);
         const float scrollbar = ImGui::GetStyle().ScrollbarSize;
         const float gear_w = px(26.f);
         // The zones fill the graph from the rows' left edge, 4px left of the first header cell, to the panel's right
@@ -2060,7 +2254,7 @@ namespace imgit::ui
                     source >= 0 ? ref_groups(state.refs_at(commits[static_cast<std::size_t>(source)].sha))
                                 : std::vector<RefGroup>{};
             const ImVec4 zone_popover_lane = theme::graph_color(state.layout.rows[row].column);
-            float top = rows_origin_y + static_cast<float>(zone_popover_row) * row_h + px(theme::COMMIT_ZONE_MARGIN);
+            float top = rows_origin_y + static_cast<float>(zone_popover_row) * row_h + px(g_metrics.margin);
             for (std::size_t g = 0; g < zone_popover_groups.size() && g < 50; ++g)
             {
                 const RefGroup& group = zone_popover_groups[g];
@@ -2088,11 +2282,11 @@ namespace imgit::ui
                     open_ref_menu = true;
                 }
                 if (zone_window_hovered && mouse.x >= z.ref_x && mouse.x < z.ref_x + width && mouse.y >= top
-                    && mouse.y < top + px(theme::REF_ZONE_TEXT_HEIGHT))
+                    && mouse.y < top + px(g_metrics.ref_height))
                 {
                     hovered_zone_now = hovered_zone_sha;
                 }
-                top += px(theme::REF_ZONE_TEXT_HEIGHT);
+                top += px(g_metrics.ref_height);
             }
         }
         popover_layer.SetCurrentChannel(rows_draw, 0);
@@ -2127,6 +2321,7 @@ namespace imgit::ui
             }
         }
 
+        std::vector<git::Sha> counts_wanted; // rows on screen whose CHANGES counts are not known yet
         ImGuiListClipper clipper;
         clipper.Begin(row_count + (state.history.has_more ? 1 : 0), row_h);
         while (clipper.Step())
@@ -2136,7 +2331,8 @@ namespace imgit::ui
                 const float y0 = ImGui::GetCursorScreenPos().y;
                 if (i >= row_count)
                 {
-                    ImGui::SetCursorScreenPos(ImVec2(z.message_x + px(10.f), y0 + px(3.f)));
+                    ImGui::SetCursorScreenPos(
+                            ImVec2((z.message_w > 0.f ? z.message_x : zones_x) + px(10.f), y0 + px(3.f)));
                     const std::string footer = "Displaying " + std::to_string(row_count) + " commits.";
                     secondary_text(footer.c_str());
                     ImGui::SameLine();
@@ -2162,7 +2358,7 @@ namespace imgit::ui
                 // --text-dimmed (20% white), --text-dimmed-selected (50%) on a selected row.
                 const auto dim_text = [&](ImVec4 color)
                 {
-                    const ImVec4 to = selected ? ImVec4(1.f, 1.f, 1.f, 0.5f) : ImVec4(1.f, 1.f, 1.f, 0.2f);
+                    const ImVec4 to = selected ? theme::ink(0.5f) : theme::ink(0.2f);
                     return ImVec4(color.x + (to.x - color.x) * row_dim, color.y + (to.y - color.y) * row_dim,
                                   color.z + (to.z - color.z) * row_dim, color.w + (to.w - color.w) * row_dim);
                 };
@@ -2183,8 +2379,8 @@ namespace imgit::ui
                 ImGui::PushID(i);
                 // The zones but the ref and graph ones get the row background over the inner 22px
                 // (GRAPH_ROW_INNER_HEIGHT); the last one carries it to the panel's edge.
-                const float inner_top = y0 + px(theme::COMMIT_ZONE_MARGIN);
-                const float inner_bottom = inner_top + px(theme::GRAPH_ROW_INNER_HEIGHT);
+                const float inner_top = y0 + px(g_metrics.margin);
+                const float inner_bottom = inner_top + px(g_metrics.row_inner_height);
                 const auto fill_row = [&](ImU32 color)
                 {
                     for (std::size_t zi = 0; zi < g_zones.zones.size(); ++zi)
@@ -2238,7 +2434,7 @@ namespace imgit::ui
                     ImU32 color;
                 };
                 std::optional<RefLine> ref_line;
-                if (!groups.empty() || creating)
+                if ((!groups.empty() || creating) && z.ref_w > 0.f && z.graph_w > 0.f)
                 {
                     // .ref-line: the lane colour from the zone (+3px) to the node, 1px at 25% opacity; 2px opaque on
                     // the row of the checked-out branch.
@@ -2248,17 +2444,17 @@ namespace imgit::ui
                                                           return g.current;
                                                       });
                     float node_edge = node_x(z, row.column);
-                    float node_half = px(theme::COMMIT_NODE_DIAMETER) / 2.f;
+                    float node_half = px(g_metrics.node_diameter) / 2.f;
                     if (commit.type == git::NodeType::MERGE)
                     {
-                        node_half = px(theme::COMMIT_MERGE_NODE_DIAMETER) / 2.f;
+                        node_half = px(g_metrics.merge_node_diameter) / 2.f;
                     }
                     // From the zone to the node's near edge, whichever side of the graph the zone is on; with
                     // other zones between them it stops at the graph zone's edge instead of crossing their text.
                     const bool ref_left = z.ref_x < z.graph_x;
                     const bool ref_adjacent = std::abs(zone_index(ZoneType::REF) - zone_index(ZoneType::GRAPH)) == 1;
                     node_edge += ref_left ? -node_half : node_half;
-                    const float line_y = inner_top + px(head_row ? 10.f : 11.f);
+                    const float line_y = inner_top + px(g_metrics.row_inner_height / 2.f - (head_row ? 1.f : 0.f));
                     const float body_left = lanes_x(z);
                     const float body_right = body_left + z.graph_w;
                     const float line_min_x = ref_left ? (ref_adjacent ? z.ref_x : body_left) : node_edge;
@@ -2283,9 +2479,11 @@ namespace imgit::ui
                 {
                     // .form-control in the ref zone: the whole zone and row, rgba(0,0,0,.2), a 1px #4D88FF focus
                     // border, radius 4, 12px text 12px in.
+                    // With the ref zone hidden, the input takes the first column's place.
                     app::RepoState::InlineRef& inline_ref = *state.inline_ref;
-                    const ImVec2 min(z.ref_x - px(2.f), y0);
-                    const ImVec2 max(min.x + z.ref_w + px(1.f), y0 + row_h);
+                    const ZoneType box_zone = z.ref_w > 0.f ? ZoneType::REF : g_zones.zones.front().type;
+                    const ImVec2 min(*zone_x_of(z, box_zone) - px(2.f), y0);
+                    const ImVec2 max(min.x + *zone_w_of(z, box_zone) + px(1.f), y0 + row_h);
                     rows_draw->AddRectFilled(min, max, theme::u32(p.app_bg0), px(4.f));
                     rows_draw->AddRectFilled(min, max, theme::u32(p.input_bg), px(4.f));
                     ImGui::SetCursorScreenPos(min);
@@ -2329,7 +2527,7 @@ namespace imgit::ui
                         state.inline_ref.reset();
                     }
                 }
-                else if (!shown_groups.empty() && !zone_hovered)
+                else if (!shown_groups.empty() && !zone_hovered && z.ref_w > 0.f)
                 {
                     const float opacity = ghost ? (zone_hovered ? 0.65f : 0.5f) : alpha;
                     const std::size_t more = shown_groups.size() - 1;
@@ -2377,6 +2575,7 @@ namespace imgit::ui
 
                 // Graph zone: the commit's background streak from its node to the zone's end (.commit-bg-color,
                 // lane colour at 10%, 50% when selected) ending in the 2px .color-strip.
+                if (z.graph_w > 0.f)
                 {
                     const float node_center = column_x(z, row.column);
                     const float graph_end = z.graph_x + z.graph_w;
@@ -2400,14 +2599,13 @@ namespace imgit::ui
                 {
                     // The gutters (.app-bg0 over the scrolled lanes): the left one LeftGutterWidth wide from the
                     // zone's start, the right one ending at the zone's end and carrying the row's streak.
-                    constexpr float GUTTER = theme::COMMIT_ZONE_GUTTER_WIDTH;
+                    const float GUTTER = g_metrics.gutter_width;
                     const GraphLanes& l = z.lanes;
                     const float left_end = body_x + std::round((GUTTER + GUTTER / 2.f * l.factor) * dpi_scale());
                     rows_draw->AddRectFilled(ImVec2(body_x, y0), ImVec2(left_end, y0 + row_h), theme::u32(p.app_bg0));
                     const float left_alpha =
                             0.4f
-                            * (1.f
-                               - std::max(l.factor, std::clamp(1.f - l.scroll / theme::COMMIT_COLUMN_WIDTH, 0.f, 1.f)));
+                            * (1.f - std::max(l.factor, std::clamp(1.f - l.scroll / g_metrics.column_width, 0.f, 1.f)));
                     gutter_shadow(rows_draw, left_end, 1.f, y0, y0 + row_h, left_alpha);
                     const float right_w = (1.f - l.slide_out) * GUTTER;
                     if (right_w > 0.f)
@@ -2435,9 +2633,10 @@ namespace imgit::ui
                 rows_draw->PopClipRect();
 
                 // Message
+                if (z.message_w > 0.f)
                 {
                     const float text_h = text_size(fonts().regular, theme::FONT_SIZE_ROW, "A").y;
-                    const float ty = inner_top + (px(theme::GRAPH_ROW_INNER_HEIGHT) - text_h) / 2.f;
+                    const float ty = inner_top + (px(g_metrics.row_inner_height) - text_h) / 2.f;
                     const float text_x = z.message_x + px(8.f); // .graph-zone { margin-left: 8px }
                     if (is_wip)
                     {
@@ -2457,7 +2656,7 @@ namespace imgit::ui
                         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.f, 0.f, 0.f, 0.f));
                         ImGui::PushStyleColor(ImGuiCol_Text, p.text_normal);
                         push_font(fonts().regular, theme::FONT_SIZE_ROW);
-                        rows_draw->AddRectFilled(box_min, box_max, IM_COL32(0, 0, 0, 51), px(4.f));
+                        rows_draw->AddRectFilled(box_min, box_max, theme::u32(p.input_bg), px(4.f));
                         ImGui::SetNextItemWidth(box_max.x - box_min.x);
                         ImGui::InputText("##wip_summary", &state.commit_summary);
                         text_field_menu(state.commit_summary);
@@ -2466,7 +2665,7 @@ namespace imgit::ui
                         ImGui::PopStyleColor(4);
                         ImGui::PopStyleVar(2);
                         rows_draw->AddRect(box_min, box_max,
-                                           editing ? theme::u32(theme::palette().accent) : IM_COL32(255, 255, 255, 20), px(4.f),
+                                           editing ? theme::u32(theme::palette().accent) : theme::ink_u32(20), px(4.f),
                                            0, 1.f);
                         if (state.commit_summary.empty() && !editing)
                         {
@@ -2503,7 +2702,7 @@ namespace imgit::ui
                 // Author
                 if (z.author_w > 0.f)
                 {
-                    const float avatar = px(theme::AVATAR_DIAMETER);
+                    const float avatar = px(g_metrics.avatar_diameter);
                     draw_avatar(rows_draw, ImVec2(z.author_x + px(10.f) + avatar / 2.f, y0 + row_h / 2.f), avatar,
                                 commit.author);
                     if (z.author_w > px(60.f))
@@ -2538,11 +2737,26 @@ namespace imgit::ui
                               ImVec2(z.sha_x + px(10.f), y0 + (row_h - text_h) / 2.f),
                               theme::u32(theme::with_alpha(p.text_secondary, alpha)), sha.c_str());
                 }
-                // Changes (only known for the working directory without a diff per row)
-                if (z.changes_w > 0.f && is_wip)
+                // Changes: the working directory's, or the commit's once the background count has it.
+                if (z.changes_w > 0.f)
                 {
                     const float text_h = text_size(fonts().regular, theme::FONT_SIZE_ROW, "A").y;
-                    draw_wip_stats(rows_draw, ImVec2(z.changes_x + px(8.f), y0 + (row_h - text_h) / 2.f), state.status);
+                    const ImVec2 at(z.changes_x + px(8.f), y0 + (row_h - text_h) / 2.f);
+                    rows_draw->PushClipRect(ImVec2(z.changes_x, y0), ImVec2(z.changes_x + z.changes_w, y0 + row_h),
+                                            true);
+                    if (is_wip)
+                    {
+                        draw_wip_stats(rows_draw, at, state.status);
+                    }
+                    else if (const FileCounts* counts = change_counts(state.repo.workdir(), commit.sha))
+                    {
+                        draw_file_counts(rows_draw, at, *counts, alpha);
+                    }
+                    else
+                    {
+                        counts_wanted.push_back(commit.sha);
+                    }
+                    rows_draw->PopClipRect();
                 }
 
                 // The row itself, last: pills submitted above keep the hover when the mouse is on them.
@@ -2574,6 +2788,10 @@ namespace imgit::ui
             }
         }
         clipper.End();
+        if (z.changes_w > 0.f)
+        {
+            update_change_counts(state.repo.workdir(), counts_wanted);
+        }
         // Over the rows, under the ref zone's popover.
         popover_layer.SetCurrentChannel(rows_draw, 0);
         {
@@ -2594,7 +2812,7 @@ namespace imgit::ui
                 if (marker.row > 0)
                 {
                     rows_draw->AddLine(ImVec2(origin.x, y + 0.5f), ImVec2(rows_right, y + 0.5f),
-                                       theme::u32(theme::with_alpha(p.white, 0.08f)), 1.f);
+                                       theme::u32(theme::ink(0.08f)), 1.f);
                 }
                 const float label_y = marker.row > 0 ? y : y + label_h / 2.f;
                 const ImVec2 label_size = text_size(fonts().regular, 10.f, marker.label.c_str());
@@ -2607,6 +2825,7 @@ namespace imgit::ui
             }
         }
         popover_layer.Merge(rows_draw);
+        draw_scroll_markers(state, row_h, row_count + (state.history.has_more ? 1 : 0));
         ImGui::PopStyleVar();
         if (!g_drag.active)
         {
@@ -2628,7 +2847,7 @@ namespace imgit::ui
             // The drag image was captured on dragstart: hovered (45%), or the checked-out branch's 50%.
             const ImVec2 min(mouse.x - g_drag.grab.x, mouse.y - g_drag.grab.y);
             draw_ref_pill(ImGui::GetForegroundDrawList(), dragged, min,
-                          ImVec2(min.x + g_drag.width, min.y + px(theme::REF_ZONE_TEXT_HEIGHT)), g_drag.lane, 0.75f,
+                          ImVec2(min.x + g_drag.width, min.y + px(g_metrics.ref_height)), g_drag.lane, 0.75f,
                           g_drag.current ? 0.50f : 0.45f, true, false);
             set_drag_cursor(g_drop_target ? DragCursor::MOVE : DragCursor::NO_DROP);
         }

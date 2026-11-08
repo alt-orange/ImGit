@@ -25,10 +25,10 @@ namespace imgit::ui
     {
 
         const ImVec4& POPOVER_BG = theme::palette().toolbar_bg2; // the current theme's, by reference
-        const ImVec4 TEXT(1.f, 1.f, 1.f, 0.9f);
-        const ImVec4 SECONDARY(1.f, 1.f, 1.f, 0.6f);
-        const ImVec4 DISABLED(1.f, 1.f, 1.f, 0.4f);
-        const ImVec4 DIVIDER(1.f, 1.f, 1.f, 0.2f);
+        const theme::Ink TEXT{0.9f};
+        const theme::Ink SECONDARY{0.6f};
+        const theme::Ink DISABLED{0.4f};
+        const theme::Ink DIVIDER{0.2f};
         const ImVec4& HOVER = theme::palette().hover_row;
 
         // Text whose CSS line box starts at `line_top` (logical, from `origin`), Chromium-style baseline.
@@ -99,7 +99,7 @@ namespace imgit::ui
             draw_fa_icon(draw, icon, ImVec2(origin.x + px(30.f), origin.y + px(y + 20.f)), px(16.f),
                          theme::u32(DISABLED));
             text_at(draw, fonts().regular, 14.f, origin, 50.f, y + 10.f, 20.f,
-                    theme::u32(hovered ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT), label);
+                    theme::u32(hovered ? theme::ink(1.f) : TEXT), label);
             return clicked;
         }
 
@@ -149,7 +149,7 @@ namespace imgit::ui
         std::vector<Item> items;
         for (int i = 0; i < static_cast<int>(app.tabs.size()); ++i)
         {
-            items.push_back({i, app.tabs[static_cast<std::size_t>(i)]->repo.name()});
+            items.push_back({i, app.tab_label(i)});
         }
         items.push_back({-1, "New Tab"});
         std::erase_if(items,
@@ -266,7 +266,7 @@ namespace imgit::ui
             ImGui::SetCursorScreenPos(ImVec2(x_center.x - px(10.f), x_center.y - px(10.f)));
             const bool close_clicked = ImGui::InvisibleButton("##close", ImVec2(px(20.f), px(20.f)));
             draw_fa_icon(draw, "far:times", x_center, px(14.f),
-                         theme::u32(ImGui::IsItemHovered() ? ImVec4(1.f, 1.f, 1.f, 1.f) : SECONDARY));
+                         theme::u32(ImGui::IsItemHovered() ? theme::ink(1.f) : SECONDARY));
             ImGui::PopID();
             if (close_clicked)
             {
@@ -440,7 +440,7 @@ namespace imgit::ui
         {
             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         }
-        const ImU32 filter_color = theme::u32(filter_hovered || filter_open ? ImVec4(1.f, 1.f, 1.f, 1.f) : TEXT);
+        const ImU32 filter_color = theme::u32(filter_hovered || filter_open ? theme::ink(1.f) : TEXT);
         text_at(draw, fonts().regular, 12.f, o, 139.6f, 16.9f, 17.1429f, filter_color, filter_label);
         const float tri_x = 139.6f + label_w + 4.8f;
         draw->AddTriangleFilled(ImVec2(o.x + px(tri_x), o.y + px(24.8f)),
@@ -520,7 +520,7 @@ namespace imgit::ui
                 entry.read = !entry.read;
             }
             draw_fa_icon(draw, entry.read ? "far:eye-slash" : "far:eye", eye, px(12.f),
-                         theme::u32(ImGui::IsItemHovered() ? ImVec4(1.f, 1.f, 1.f, 1.f) : DISABLED));
+                         theme::u32(ImGui::IsItemHovered() ? theme::ink(1.f) : DISABLED));
             const ImVec2 trash(o.x + px(421.f), o.y + px(y + 19.f));
             ImGui::SetCursorScreenPos(ImVec2(trash.x - px(9.f), trash.y - px(9.f)));
             if (ImGui::InvisibleButton("##delete", ImVec2(px(18.f), px(18.f))))
@@ -528,7 +528,7 @@ namespace imgit::ui
                 remove = static_cast<int>(i);
             }
             draw_fa_icon(draw, "far:trash", trash, px(12.f),
-                         theme::u32(ImGui::IsItemHovered() ? ImVec4(1.f, 1.f, 1.f, 1.f) : DISABLED));
+                         theme::u32(ImGui::IsItemHovered() ? theme::ink(1.f) : DISABLED));
             ImGui::PopID();
             const std::string body = entry.detail.empty() ? entry.title : entry.title + " " + entry.detail;
             const float size = font_px(font, 12.f);

@@ -905,8 +905,7 @@ namespace imgit::ui
             ImGui::SetCursorScreenPos(ImVec2(center.x - box / 2.f, center.y - box / 2.f));
             ImGui::InvisibleButton("##collapse_left", ImVec2(box, box));
             const bool hovered = ImGui::IsItemHovered();
-            draw_icon(draw, Icon::BACK, center, px(16.f),
-                      theme::u32(hovered ? p.text_selected : theme::with_alpha(p.white, 0.7f)));
+            draw_icon(draw, Icon::BACK, center, px(16.f), theme::u32(hovered ? p.text_selected : theme::ink(0.7f)));
             if (hovered)
             {
                 tooltip("Collapse Panel (Ctrl+J)");

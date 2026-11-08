@@ -109,6 +109,11 @@ namespace imgit::ui
     [[nodiscard]] MenuItems file_history_commit_menu(app::Application& app, app::RepoState& state, const git::Sha& sha,
                                                      const std::string& path);
     [[nodiscard]] MenuItems tab_menu(app::Application& app, int index);
+    // The repository tab's naming entries (ui/tabs_bar.cpp): rename tab, its group, Alias repository.
+    [[nodiscard]] MenuItems tab_naming_items(app::Application& app, int index);
+    // Asks for a name in the prompt bar, starting from `initial`; `allow_empty` lets an empty answer through.
+    void open_text_prompt(app::Application& app, std::string message, std::string initial, bool allow_empty,
+                          std::function<void(const std::string&)> on_text);
     [[nodiscard]] MenuItems graph_header_menu(app::Application& app);
     [[nodiscard]] MenuItems left_section_menu(app::Application& app, app::RepoState& state, const std::string& section,
                                               const std::vector<std::string>& sections);

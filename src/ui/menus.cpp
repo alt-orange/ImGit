@@ -2282,9 +2282,8 @@ namespace imgit::ui
                                  app.close_tab(i);
                              }
                          },
-                         index < count - 1),
-                 item("Alias repository",
-                      placeholder(app, "Alias repository", "Repository aliases are not available in ImGit yet."))},
+                         index < count - 1)},
+                tab_naming_items(app, index),
                 {[&app]
                  {
                      MenuItem reopen = item(
@@ -2305,8 +2304,14 @@ namespace imgit::ui
         // The column checkboxes (a column cannot be hidden when it is the last one shown),
         // the layout toggles and the resets.
         app::Settings& s = app.settings;
-        const std::function<void()> fixed_column =
-                placeholder(app, "Graph columns", "This column cannot be hidden in ImGit yet.");
+        const auto fixed_shown = [&s](const char* key)
+        {
+            return !s.hidden_graph_columns.contains(key);
+        };
+        const int shown = static_cast<int>(fixed_shown("ref")) + static_cast<int>(fixed_shown("graph"))
+                          + static_cast<int>(fixed_shown("message")) + static_cast<int>(s.show_author)
+                          + static_cast<int>(s.show_date) + static_cast<int>(s.show_sha)
+                          + static_cast<int>(s.show_changes);
         const auto toggle = [&app](bool* value)
         {
             return [&app, value]
@@ -2315,12 +2320,30 @@ namespace imgit::ui
                 app.settings.save(app.config_path("settings.txt"));
             };
         };
+        const auto column = [&](const char* label, bool* value)
+        {
+            return menu_checkbox(label, *value, toggle(value), !*value || shown > 1);
+        };
+        const auto fixed_column = [&](const char* label, const char* key)
+        {
+            const bool on = fixed_shown(key);
+            return menu_checkbox(
+                    label, on,
+                    [&app, key = std::string(key)]
+                    {
+                        std::set<std::string>& hidden = app.settings.hidden_graph_columns;
+                        if (!hidden.erase(key))
+                        {
+                            hidden.insert(key);
+                        }
+                        app.settings.save(app.config_path("settings.txt"));
+                    },
+                    !on || shown > 1);
+        };
         return separated_menu({
-                {menu_checkbox("Branch / Tag", true, fixed_column), menu_checkbox("Graph", true, fixed_column),
-                 menu_checkbox("Commit message", true, fixed_column),
-                 menu_checkbox("Author", s.show_author, toggle(&s.show_author)),
-                 menu_checkbox("Date / Time", s.show_date, toggle(&s.show_date)),
-                 menu_checkbox("Sha", s.show_sha, toggle(&s.show_sha))},
+                {fixed_column("Branch / Tag", "ref"), fixed_column("Graph", "graph"),
+                 fixed_column("Commit message", "message"), column("Author", &s.show_author),
+                 column("Date / Time", &s.show_date), column("Sha", &s.show_sha), column("Changes", &s.show_changes)},
                 {menu_checkbox("Compact Graph Column", s.compact_graph, toggle(&s.compact_graph)),
                  menu_checkbox("Smart Branch Visibility", false,
                                placeholder(app, "Smart Branch Visibility", "Not available in ImGit yet."))},
@@ -2330,6 +2353,8 @@ namespace imgit::ui
                           app.settings.show_author = false;
                           app.settings.show_date = false;
                           app.settings.show_sha = false;
+                          app.settings.show_changes = false;
+                          app.settings.hidden_graph_columns.clear();
                           app.settings.compact_graph = false;
                           app.settings.graph_column_order.clear();
                           app.settings.save(app.config_path("settings.txt"));
@@ -2340,6 +2365,8 @@ namespace imgit::ui
                           app.settings.show_author = false;
                           app.settings.show_date = false;
                           app.settings.show_sha = false;
+                          app.settings.show_changes = false;
+                          app.settings.hidden_graph_columns.clear();
                           app.settings.compact_graph = true;
                           app.settings.graph_column_order.clear();
                           app.settings.save(app.config_path("settings.txt"));

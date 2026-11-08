@@ -56,6 +56,7 @@ add_executable(imgit
     src/app/repo_state.cpp
     src/app/merge_tool.cpp
     src/app/theme.cpp
+    src/app/theme_file.cpp
     src/app/toasts.cpp
     src/app/vt_screen.cpp
     src/git/git_cli.cpp

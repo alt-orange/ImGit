@@ -84,8 +84,7 @@ namespace imgit::ui
             else
             {
                 draw->AddRectFilled(min, max, theme::u32(p.input_bg), px(1.f));
-                draw->AddRect(min, max, theme::u32(theme::with_alpha(p.white, ImGui::IsItemHovered() ? 0.7f : 0.4f)),
-                              px(1.f), 0, 1.f);
+                draw->AddRect(min, max, theme::u32(theme::ink(ImGui::IsItemHovered() ? 0.7f : 0.4f)), px(1.f), 0, 1.f);
             }
             return clicked;
         }

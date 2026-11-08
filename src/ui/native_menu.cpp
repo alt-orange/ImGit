@@ -1,4 +1,5 @@
 #include "ui/native_menu.hpp"
+#include "app/theme.hpp"
 #include "platform/system.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
@@ -28,12 +29,27 @@ namespace imgit::ui
         constexpr float CORNER_RADIUS = 8.f;
         constexpr float FONT_SIZE = 12.f;
 
-        constexpr ImU32 BACKGROUND = IM_COL32(0x1F, 0x1F, 0x1F, 0xFF);
-        constexpr ImU32 HOT_ROW = IM_COL32(0x36, 0x36, 0x35, 0xFF);
-        constexpr ImU32 TEXT = IM_COL32(0xE3, 0xE3, 0xE3, 0xFF);
-        constexpr ImU32 ACCELERATOR = IM_COL32(0xC7, 0xC7, 0xC7, 0xFF);
-        constexpr ImU32 DISABLED = IM_COL32(0x9A, 0xA0, 0xA6, 0xFF);
-        constexpr ImU32 SEPARATOR = IM_COL32(0x5E, 0x5E, 0x5E, 0xFF);
+        struct MenuColors
+        {
+            ImU32 background;
+            ImU32 hot_row;
+            ImU32 text;
+            ImU32 accelerator;
+            ImU32 disabled;
+            ImU32 separator;
+        };
+
+        // The dark menus, or Windows' light ones under a light theme.
+        const MenuColors& menu_colors()
+        {
+            static constexpr MenuColors DARK{IM_COL32(0x1F, 0x1F, 0x1F, 0xFF), IM_COL32(0x36, 0x36, 0x35, 0xFF),
+                                             IM_COL32(0xE3, 0xE3, 0xE3, 0xFF), IM_COL32(0xC7, 0xC7, 0xC7, 0xFF),
+                                             IM_COL32(0x9A, 0xA0, 0xA6, 0xFF), IM_COL32(0x5E, 0x5E, 0x5E, 0xFF)};
+            static constexpr MenuColors LIGHT{IM_COL32(0xF9, 0xF9, 0xF9, 0xFF), IM_COL32(0xE6, 0xE6, 0xE6, 0xFF),
+                                              IM_COL32(0x1A, 0x1A, 0x1A, 0xFF), IM_COL32(0x5F, 0x5F, 0x5F, 0xFF),
+                                              IM_COL32(0x9A, 0x9A, 0x9A, 0xFF), IM_COL32(0xD9, 0xD9, 0xD9, 0xFF)};
+            return theme::palette().light ? LIGHT : DARK;
+        }
 
         // Shadow opacity per pixel of distance outside each edge (the corners combine them). Above the menu it is
         // below one grey level.
@@ -583,7 +599,7 @@ namespace imgit::ui
             const ImVec2 min = level.pos;
             const ImVec2 max(level.pos.x + level.size.x, level.pos.y + level.size.y);
             draw_shadow(draw, min, max);
-            draw->AddRectFilled(min, max, BACKGROUND, px(CORNER_RADIUS));
+            draw->AddRectFilled(min, max, menu_colors().background, px(CORNER_RADIUS));
 
             ImFont* font = fonts().system;
             const float line = font_px(font, FONT_SIZE);
@@ -594,23 +610,24 @@ namespace imgit::ui
                 if (item.type == MenuItem::Type::SEPARATOR)
                 {
                     const float sy = y + px(8.f);
-                    draw->AddRectFilled(ImVec2(min.x, sy), ImVec2(max.x, sy + px(1.f)), SEPARATOR);
+                    draw->AddRectFilled(ImVec2(min.x, sy), ImVec2(max.x, sy + px(1.f)), menu_colors().separator);
                     y += px(SEPARATOR_HEIGHT);
                     continue;
                 }
                 const float row = px(ROW_HEIGHT);
                 if (i == level.hot && item.enabled)
                 {
-                    draw->AddRectFilled(ImVec2(min.x, y), ImVec2(max.x, y + row), HOT_ROW);
+                    draw->AddRectFilled(ImVec2(min.x, y), ImVec2(max.x, y + row), menu_colors().hot_row);
                 }
-                const ImU32 color = item.enabled ? TEXT : DISABLED;
+                const ImU32 color = item.enabled ? menu_colors().text : menu_colors().disabled;
                 const float text_y = std::round(y + (row - line) / 2.f);
                 draw_label(draw, ImVec2(min.x + level.label_start, text_y), color, item.label, g_keyboard);
                 if (!item.accelerator.empty())
                 {
                     const float w = text_size(font, FONT_SIZE, item.accelerator.c_str()).x;
                     draw_text(draw, font, FONT_SIZE, ImVec2(std::round(min.x + level.accelerator_right - w), text_y),
-                              item.enabled ? ACCELERATOR : DISABLED, item.accelerator.c_str());
+                              item.enabled ? menu_colors().accelerator : menu_colors().disabled,
+                              item.accelerator.c_str());
                 }
                 if (item.type == MenuItem::Type::CHECKBOX && item.checked)
                 {

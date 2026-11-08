@@ -22,7 +22,8 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | New Tab page | ✅ | Open / Clone / Create, search, Recent |
 | Repository Management view | ✅ | Open / Favorites / Recent sections with branch, ahead / behind and WIP summaries |
 | Reorder tabs | 🟡 | Drag a repository tab along the bar (the drag-and-drop cursor, the tab over the others, swapping as its centre passes a neighbour's); the order is saved with the tabs |
-| Repo tab groups, rename tab | ⬜ | |
+| Repo tab groups, rename tab | ✅ | Tab menu → Rename tab / Reset tab name (the prompt bar), Add tab to group (New group... or an existing one; the tab moves beside the group) / Remove tab from group. A group is a coloured label in front of its tabs (a click collapses it to the label and its tab count, the active tab staying shown) and a line of its colour under them; the label's menu has Rename / Expand-Collapse / Next color / Ungroup / Close group. Names and groups are saved with the tabs |
+| Repository aliases | ✅ | Tab menu → Alias repository (empty removes it), kept per profile in aliases.txt; shown in the tab, the tabs list, the repository breadcrumb and its recent list, the New Tab page and Repository Management |
 | Toolbar breadcrumbs *repository › branch* with dropdowns | ✅ | |
 | Toolbar Undo / Redo / Pull ▾ / Push / Branch / Stash / Pop / Terminal / LFS ▾ / Actions / Search | ✅ | LFS menu (Fetch / Checkout / Pull / Push / Prune) runs `git lfs` on PATH |
 | Toolbar labels on/off | ✅ | Preferences → UI |
@@ -30,8 +31,8 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Zoom (Ctrl+= / Ctrl+- / Ctrl+0) | ✅ | |
 | Panels open and close at once; dialog / palette fade, toolbar hover fade | ✅ | |
 | Panel resize: left panel 215–800, detail panel 353–(window − 687), terminal; col-resize cursor; sizes saved | ✅ | |
-| Themes | ✅ | ImGit Dark (orange accent, the default), Ocean, Midnight Teal, Amethyst, Rose, Claude Code: Preferences → UI Customization or Ctrl+P → Switch Theme, applied at once |
-| Light theme, custom themes | ⬜ | Text colours are still white-based in places |
+| Themes | ✅ | ImGit Dark (orange accent, the default), ImGit Light, Ocean, Midnight Teal, Amethyst, Rose, Claude Code: Preferences → UI Customization or Ctrl+P → Switch Theme, applied at once |
+| Light theme, custom themes | ✅ | A light background derives its own surfaces, dark text, darker lanes, Windows' light context menus and a light terminal; text and overlays use the theme's ink instead of white. Custom themes: *.json files in the profile's themes folder (a name, the built-in base, optional background / accent / link colours, palette colours by name), with Reload / Open Folder in UI Customization and a toast per file that cannot be used. The window caption and the menu bar stay dark |
 | Remember tabs, recent repositories | ✅ | |
 
 ## Left panel
@@ -63,14 +64,14 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Inline "enter branch name" / "enter tag name" in the ref zone | ✅ | |
 | Highlight rows when hovering a branch label | ✅ | Rows whose own or child refs miss the hovered group fade after 1s; Ctrl dims around the selected commit's branch |
 | Commit message + dimmed description | ✅ | |
-| Columns: BRANCH / TAG, GRAPH, COMMIT MESSAGE, AUTHOR, DATE / TIME, SHA, CHANGES with gear settings | ✅ | CHANGES only shows the WIP row's counts (no per-commit stats) |
+| Columns: BRANCH / TAG, GRAPH, COMMIT MESSAGE, AUTHOR, DATE / TIME, SHA, CHANGES with gear settings | ✅ | Every column can be hidden from the header menu but the last one shown. CHANGES counts each commit's modified / added / deleted files: read on a worker thread for the rows on screen and cached by sha |
 | Column drag-reorder and resize | 🟡 | Resize (preferred widths, the last zone fills, handles in the header and over the rows, widths saved); drag a header cell to reorder the columns (the cell follows the mouse, the columns swap as it passes their centres, the order saved; "Reset columns" restores the default). A GRAPH zone narrower than its lanes scrolls them (Shift + wheel, horizontal wheel, scrollbar) under shadowed gutters, nodes pinned and fading at the edges, single-column mode below one lane |
 | Commit search (Ctrl+F) with n of m navigation | ✅ | Floating bar over the graph |
 | Multi-select (Ctrl / Shift), keyboard j / k / arrows / Home / End | ✅ | |
 | Lazy loading / "Show more commits" | ✅ | |
 | Timeline markers | 🟡 | A line and an age label ("1 hour ago", "yesterday", "3 weeks ago"...) on the first row past each age step |
-| Scroll markers for HEAD / branches | ⬜ | |
-| Compact graph mode | ⬜ | Setting exists, rendering is always "rich" |
+| Scroll markers for HEAD / branches | ✅ | On the rows' scrollbar: HEAD a full-width accent bar, local branches a tick in their lane colour (remote ones fainter), the selected commits a thin bar |
+| Compact graph mode | ✅ | 20px rows, 14px lanes, plain 10px dots without avatars and 16px ref pills (header menu → Compact Graph Column) |
 | Pin branch to left | ✅ | Context menu |
 
 ## Right panel

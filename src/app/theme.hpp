@@ -1,8 +1,11 @@
 #pragma once
 
+#include <filesystem>
 #include <imgui.h>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 // The palette of the current theme, resolved to RGBA. Themes share the layout and the semantic colours (red, green,
 // the graph lanes...) and differ in their backgrounds and accent.
@@ -12,7 +15,11 @@ namespace imgit::theme
 
     struct Palette
     {
-        ImVec4 white{1.f, 1.f, 1.f, 1.f};
+        bool light = false; // a light background with dark text
+        ImVec4 white{1.f, 1.f, 1.f, 1.f}; // white itself: marks on the accent or a lane colour
+        // The text and overlay base: white on a dark theme, near black on a light one. Use it (ink()) where a colour
+        // is "the foreground at some opacity".
+        ImVec4 ink{1.f, 1.f, 1.f, 1.f};
         ImVec4 red;
         ImVec4 orange;
         ImVec4 yellow;
@@ -87,13 +94,46 @@ namespace imgit::theme
 
     [[nodiscard]] const Palette& palette() noexcept;
 
+    // The current theme's ink at `alpha`.
+    [[nodiscard]] ImVec4 ink(float alpha) noexcept;
+    // The same with an alpha out of 255, packed.
+    [[nodiscard]] ImU32 ink_u32(int alpha) noexcept;
+
+    // The ink at a fixed opacity, resolved when it is used, so a constant made of it follows theme switches.
+    struct Ink
+    {
+        float alpha = 1.f;
+
+        operator ImVec4() const noexcept
+        {
+            return ink(alpha);
+        }
+    };
+
+    // The same, packed, with an alpha out of 255.
+    struct InkU32
+    {
+        int alpha = 255;
+
+        operator ImU32() const noexcept
+        {
+            return ink_u32(alpha);
+        }
+    };
+
     constexpr const char* DEFAULT_THEME = "ImGit Dark";
-    // The built-in themes, the default first.
+    constexpr const char* LIGHT_THEME = "ImGit Light";
+    // The themes: the built-in ones (the default first), then the custom ones loaded from the profile.
     [[nodiscard]] std::span<const char* const> theme_names() noexcept;
     // Switches the palette to the theme called `name` (the default one for a name it does not know). Call
     // apply_imgui_style() after it.
     void set_theme(std::string_view name);
     [[nodiscard]] const char* current_theme() noexcept;
+
+    // Custom themes: every *.json file in `folder` (the profile's themes folder), replacing the ones loaded
+    // before. A file holds one theme (see theme_file.hpp); a theme named like a built-in one is skipped. Returns
+    // one message per file that could not be used. Call set_theme() after it.
+    std::vector<std::string> load_custom_themes(const std::filesystem::path& folder);
 
     // Applies the palette to the current ImGui style (colors, rounding, paddings).
     void apply_imgui_style();
