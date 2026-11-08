@@ -52,6 +52,12 @@ namespace imgit::platform::shell
         }
     }
 
+    bool launch(const std::vector<std::string>& args, const std::string& workdir, bool hide_console)
+    {
+        (void)hide_console;
+        return spawn_detached(args, workdir);
+    }
+
     void open_url(const std::string& url)
     {
         open_with_desktop(url);

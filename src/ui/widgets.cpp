@@ -1,4 +1,6 @@
 #include "ui/widgets.hpp"
+#include "app/date_format.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "gfx/lcd_renderer.hpp"
 #include "git/repository.hpp"
@@ -993,31 +995,38 @@ namespace imgit::ui
         }
     } // namespace
 
+    namespace
+    {
+        // `unix_seconds` in the Date/Time preference `format` (its placeholder when empty), in the chosen locale.
+        std::string format_preference(std::int64_t unix_seconds, const app::Preference& format,
+                                      std::string_view fallback)
+        {
+            static const std::string system = platform::system_locale();
+            const app::Preferences& p = app::preferences();
+            const std::string chosen = p.get(format);
+            return app::moment_format(chosen.empty() ? fallback : std::string_view(chosen), local_time(unix_seconds),
+                                      app::locale_code(p.get(app::pref::LOCALE), system));
+        }
+    } // namespace
+
     std::string format_date_time(std::int64_t unix_seconds)
     {
-        // ImGit: "10/24/2026 @ 4:43 PM" (no leading zeros on month, day and hour).
-        const std::tm tm = local_time(unix_seconds);
-        const int hour = tm.tm_hour % 12 == 0 ? 12 : tm.tm_hour % 12;
-        char buffer[64];
-        std::snprintf(buffer, sizeof(buffer), "%d/%d/%d @ %d:%02d %s", tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900,
-                      hour, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
-        return buffer;
+        return format_preference(unix_seconds, app::pref::DATE_TIME_FORMAT, app::DEFAULT_DATE_TIME_FORMAT);
     }
 
     std::string format_date(std::int64_t unix_seconds)
     {
-        const std::tm tm = local_time(unix_seconds);
-        char buffer[32];
-        std::snprintf(buffer, sizeof(buffer), "%d/%d/%d", tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900);
-        return buffer;
+        return format_preference(unix_seconds, app::pref::DATE_FORMAT, app::DEFAULT_DATE_FORMAT);
+    }
+
+    std::string format_date_word(std::int64_t unix_seconds)
+    {
+        return format_preference(unix_seconds, app::pref::DATE_WORD_FORMAT, app::DEFAULT_DATE_WORD_FORMAT);
     }
 
     std::string format_date_long(std::int64_t unix_seconds)
     {
-        const std::tm tm = local_time(unix_seconds);
-        char buffer[96];
-        std::strftime(buffer, sizeof(buffer), "%A, %B %d, %Y %I:%M %p", &tm);
-        return buffer;
+        return format_preference(unix_seconds, app::pref::DATE_VERBOSE_FORMAT, app::DEFAULT_DATE_VERBOSE_FORMAT);
     }
 
     std::string format_relative(std::int64_t unix_seconds)

@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
@@ -12,7 +13,8 @@
 #include <string>
 
 // The file view's editor: the working directory's copy of a file as plain text in the code font, with Save and
-// Cancel in place of the toolbar. Line endings are edited as "\n" and written back as the file had them.
+// Cancel in place of the toolbar. Line endings are edited as "\n" and written back as the file had them (a file
+// without any gets the End of Line preference's).
 namespace imgit::ui
 {
     namespace
@@ -28,6 +30,26 @@ namespace imgit::ui
         {
             const float ascent = size * 2189.f / 2048.f * dpi_scale();
             return std::round(box_top + std::round(ascent)) - std::ceil(ascent);
+        }
+
+        // ImGui advances a tab by IM_TABSIZE spaces; the Tab Size preference replaces that in the editor font at
+        // this size. Set again each frame: ImGui rebuilds a baked size it dropped.
+        void set_tab_size(ImFontBaked* baked, int tab_size)
+        {
+            const ImFontGlyph* space = baked->FindGlyphNoFallback(' ');
+            if (space == nullptr)
+            {
+                return;
+            }
+            const float advance = space->AdvanceX * static_cast<float>(tab_size);
+            if (ImFontGlyph* tab = baked->FindGlyphNoFallback('\t'); tab != nullptr)
+            {
+                tab->AdvanceX = advance;
+                if ('\t' < baked->IndexAdvanceX.Size)
+                {
+                    baked->IndexAdvanceX['\t'] = advance;
+                }
+            }
         }
 
         // A .btn-xs (20px) in `tone` with an optional 12px icon before the label, at `pos`; `width` gets its width.
@@ -62,7 +84,12 @@ namespace imgit::ui
         {
             app::RepoState::FileEdit& edit = *state.file_edit;
             std::string text = edit.text;
-            if (edit.crlf)
+            // A file keeps its own line endings; one that had no line break yet (or was empty) gets the
+            // End of Line preference's.
+            const bool crlf = edit.saved.find('\n') != std::string::npos
+                                      ? edit.crlf
+                                      : app::preferences().get(app::pref::EDITOR_EOL) == "CRLF";
+            if (crlf)
             {
                 std::string converted;
                 converted.reserve(text.size() + text.size() / 32);
@@ -135,7 +162,17 @@ namespace imgit::ui
         }
         app::RepoState::FileEdit edit;
         edit.path = path;
-        edit.crlf = bytes.find("\r\n") != std::string::npos;
+        // The file's line endings: CRLF when most of its line breaks are.
+        std::size_t breaks = 0, crlf_breaks = 0;
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+        {
+            if (bytes[i] == '\n')
+            {
+                ++breaks;
+                crlf_breaks += i > 0 && bytes[i - 1] == '\r' ? 1 : 0;
+            }
+        }
+        edit.crlf = crlf_breaks * 2 > breaks;
         edit.text.reserve(bytes.size());
         for (std::size_t i = 0; i < bytes.size(); ++i)
         {
@@ -187,7 +224,10 @@ namespace imgit::ui
         ImGui::PushStyleColor(ImGuiCol_FrameBg, p.app_bg0);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(10.f), px(4.f)));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
-        push_font(fonts().mono, 12.f);
+        const app::Preferences& prefs = app::preferences();
+        push_font(fonts().editor != nullptr ? fonts().editor : fonts().mono,
+                  static_cast<float>(prefs.number(app::pref::EDITOR_FONT_SIZE, 6, 40)));
+        set_tab_size(ImGui::GetFontBaked(), prefs.number(app::pref::EDITOR_TAB_SIZE, 1, 16));
         if (edit.focus)
         {
             ImGui::SetKeyboardFocusHere();

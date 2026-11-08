@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "git/repository.hpp"
 #include "ui/panels.hpp"
@@ -17,10 +18,10 @@ namespace imgit::ui
     namespace
     {
         // The file view: a 36px header, a 53px toolbar row, then Monaco's diff editor
-        // with Consolas 12px on 16px lines.
+        // with Consolas 12px on 16px lines (by default: the Editor preferences, code_style()).
         constexpr float HEADER_H = 36.f;
         constexpr float TOOLBAR_H = 53.f;
-        constexpr float LINE_H = 16.f;
+        constexpr float FILE_TEXT_X = 43.f; // the file view's text, after the numbers
         constexpr float OLD_NUMBERS_RIGHT = 33.f; // the original editor's 33px line-number margin
         constexpr float NEW_NUMBERS_RIGHT = 66.f;
         constexpr float TEXT_X = 76.f; // after the 10px +/- sign column
@@ -58,22 +59,70 @@ namespace imgit::ui
             return std::round(box_top + std::round(ascent)) - std::ceil(ascent);
         }
 
+        // ImGui advances a tab by IM_TABSIZE spaces; the Tab Size preference replaces that in the editor font at
+        // this size. Set again each frame: ImGui rebuilds a baked size it dropped.
+        void set_tab_size(ImFontBaked* baked, int tab_size)
+        {
+            const ImFontGlyph* space = baked->FindGlyphNoFallback(' ');
+            if (space == nullptr)
+            {
+                return;
+            }
+            const float advance = space->AdvanceX * static_cast<float>(tab_size);
+            if (ImFontGlyph* tab = baked->FindGlyphNoFallback('\t'); tab != nullptr)
+            {
+                tab->AdvanceX = advance;
+                if ('\t' < baked->IndexAdvanceX.Size)
+                {
+                    baked->IndexAdvanceX['\t'] = advance;
+                }
+            }
+        }
+
+        // Preferences → Editor as the code is drawn: the face and size, Monaco's line height for the size (16px at
+        // the default 12px), the glyph box's offset in the line, and whether the line numbers show.
+        struct CodeStyle
+        {
+            ImFont* font = nullptr;
+            float size = 12.f;
+            float line_h = 16.f; // CSS px, as the offset
+            float text_dy = 2.f;
+            bool line_numbers = true;
+        };
+
+        CodeStyle code_style()
+        {
+            const app::Preferences& prefs = app::preferences();
+            CodeStyle code;
+            code.font = fonts().editor != nullptr ? fonts().editor : fonts().mono;
+            code.size = static_cast<float>(prefs.number(app::pref::EDITOR_FONT_SIZE, 6, 40));
+            code.line_h = std::round(code.size * 1.35f);
+            // Chromium centres the glyph box in the line; its baseline lands a pixel lower (measured).
+            code.text_dy = std::round((code.line_h - code.size * font_em_scale(code.font)) / 2.f) + 1.f;
+            code.line_numbers = prefs.flag(app::pref::EDITOR_LINE_NUMBERS);
+            set_tab_size(code.font->GetFontBaked(font_px(code.font, code.size)),
+                         prefs.number(app::pref::EDITOR_TAB_SIZE, 1, 16));
+            return code;
+        }
+
         // Monaco text: Consolas 12px on the 16px line; Chromium puts its baseline 12px under the 14px glyph box
         // that starts 1px into the line (measured).
-        void mono_text(ImDrawList* draw, float x, float line_top, ImU32 color, const char* text)
+        void mono_text(const CodeStyle& code, ImDrawList* draw, float x, float line_top, ImU32 color, const char* text)
         {
-            draw_text(draw, fonts().mono, 12.f, ImVec2(x, css_text_y(12.f, line_top + px(2.f), true)), color, text);
+            draw_text(draw, code.font, code.size, ImVec2(x, css_text_y(code.size, line_top + px(code.text_dy), true)),
+                      color, text);
         }
 
         // Monaco's line numbers: rgb(133,133,133), rgb(198,198,198) on the editor's cursor line.
-        void mono_number(ImDrawList* draw, float right, float line_top, int number, bool active = false)
+        void mono_number(const CodeStyle& code, ImDrawList* draw, float right, float line_top, int number,
+                         bool active = false)
         {
-            if (number <= 0)
+            if (number <= 0 || !code.line_numbers)
             {
                 return;
             }
             const std::string text = std::to_string(number);
-            mono_text(draw, right - text_size(fonts().mono, 12.f, text.c_str()).x, line_top,
+            mono_text(code, draw, right - text_size(code.font, code.size, text.c_str()).x, line_top,
                       active ? IM_COL32(198, 198, 198, 255) : LINE_NUMBER, text.c_str());
         }
 
@@ -227,7 +276,7 @@ namespace imgit::ui
 
         // Word wrap: each row as many times as its longer side needs `wrap_w` wide visual lines (whole characters of
         // the monospace font), the copies numbered by `segment`. Hunk headers stay one line.
-        std::vector<Row> wrap_rows(const std::vector<Row>& rows, float wrap_w)
+        std::vector<Row> wrap_rows(const CodeStyle& code, const std::vector<Row>& rows, float wrap_w)
         {
             std::vector<Row> wrapped;
             wrapped.reserve(rows.size());
@@ -237,7 +286,7 @@ namespace imgit::ui
                 {
                     return 1;
                 }
-                const float w = text_size(fonts().mono, 12.f, line->text.c_str()).x;
+                const float w = text_size(code.font, code.size, line->text.c_str()).x;
                 return std::max(1, static_cast<int>(std::ceil(w / wrap_w - 0.001f)));
             };
             for (const Row& row : rows)
@@ -255,18 +304,18 @@ namespace imgit::ui
 
         // The whitespace of `text` drawn at `x` (where the text starts): a middle dot centred in each space's cell,
         // an arrow over each tab, in Monaco's editorWhitespace.foreground (rgba(227,228,226,.16)).
-        void draw_whitespace(ImDrawList* draw, float x, float line_top, const std::string& text)
+        void draw_whitespace(const CodeStyle& code, ImDrawList* draw, float x, float line_top, const std::string& text)
         {
             const ImU32 color = IM_COL32(227, 228, 226, 72);
-            const float y = line_top + px(LINE_H) / 2.f;
+            const float y = line_top + px(code.line_h) / 2.f;
             for (std::size_t i = 0; i < text.size(); ++i)
             {
                 if (text[i] != ' ' && text[i] != '\t')
                 {
                     continue;
                 }
-                const float x0 = x + text_size(fonts().mono, 12.f, text.data(), text.data() + i).x;
-                const float x1 = x + text_size(fonts().mono, 12.f, text.data(), text.data() + i + 1).x;
+                const float x0 = x + text_size(code.font, code.size, text.data(), text.data() + i).x;
+                const float x1 = x + text_size(code.font, code.size, text.data(), text.data() + i + 1).x;
                 if (text[i] == ' ')
                 {
                     draw->AddCircleFilled(ImVec2((x0 + x1) / 2.f, y), px(1.f), color, 8);
@@ -334,25 +383,28 @@ namespace imgit::ui
             return nullptr;
         }
         const git::FileDiff& diff = *diff_ptr;
+        const CodeStyle code = code_style();
         const bool gutter = options.file_view && options.blame_gutter;
+        // Without line numbers the plain file view's text moves into their margin.
+        const float file_text_x = code.line_numbers ? FILE_TEXT_X : 10.f;
         const float text_offset = gutter ? (options.blame_columns ? BLAME_COLUMNS_TEXT_X : BLAME_TEXT_X)
-                                         : (options.file_view ? 43.f : TEXT_X);
+                                         : (options.file_view ? file_text_x : TEXT_X);
         // Word wrap: the text column's width, in whole characters (less the vertical scrollbar).
         float wrap_w = 0.f;
         if (options.word_wrap)
         {
             const float view_w = editor_max.x - px(DIFF_RULER_W) - editor_min.x - ImGui::GetStyle().ScrollbarSize;
             const float column_w = split ? view_w / 2.f - px(43.f) : view_w - px(text_offset) - px(10.f);
-            const float char_w = std::max(1.f, text_size(fonts().mono, 12.f, "M").x);
+            const float char_w = std::max(1.f, text_size(code.font, code.size, "M").x);
             wrap_w = std::max(char_w * 8.f, std::floor(column_w / char_w) * char_w);
         }
-        const std::vector<Row> rows = options.word_wrap
-                                              ? wrap_rows(build_rows(diff, options.mode, options.file_view), wrap_w)
-                                              : build_rows(diff, options.mode, options.file_view);
+        const std::vector<Row> rows =
+                options.word_wrap ? wrap_rows(code, build_rows(diff, options.mode, options.file_view), wrap_w)
+                                  : build_rows(diff, options.mode, options.file_view);
         // The syntax colours of the diff's lines, kept per editor until the diff changes; null for plain text.
         static std::unordered_map<std::string, syntax::DiffCache> syntax_caches;
         const syntax::DiffSpans* colours = options.syntax_highlighting ? syntax_caches[options.id].get(diff) : nullptr;
-        const float line_h = px(LINE_H);
+        const float line_h = px(code.line_h);
         const float rulers_w = px(DIFF_RULER_W);
         const float content_right = editor_max.x - rulers_w;
         // The file view with a blame gutter: the avatar column, the numbers, the commit columns, the bar, the text.
@@ -368,14 +420,14 @@ namespace imgit::ui
             const float shift = static_cast<float>(row.segment) * wrap_w;
             if (options.word_wrap)
             {
-                body->PushClipRect(ImVec2(x, line_top), ImVec2(x + wrap_w, line_top + px(LINE_H)), true);
+                body->PushClipRect(ImVec2(x, line_top), ImVec2(x + wrap_w, line_top + line_h), true);
             }
             if (options.show_whitespace && line.origin != ' ')
             {
-                draw_whitespace(body, x - shift, line_top, line.text);
+                draw_whitespace(code, body, x - shift, line_top, line.text);
             }
-            draw_code_text(body, fonts().mono, 12.f, ImVec2(x - shift, css_text_y(12.f, line_top + px(2.f), true)),
-                           line.text,
+            draw_code_text(body, code.font, code.size,
+                           ImVec2(x - shift, css_text_y(code.size, line_top + px(code.text_dy), true)), line.text,
                            colours != nullptr ? colours->line(diff, row.hunk, &line) : std::span<const syntax::Span>(),
                            EDITOR_TEXT);
             if (options.word_wrap)
@@ -470,7 +522,7 @@ namespace imgit::ui
                 {
                     body->AddRectFilled(ImVec2(base_x, pos.y), ImVec2(right, pos.y + line_h),
                                         theme::u32(p.hunk_header));
-                    mono_text(body, base_x + px(TEXT_X), pos.y, theme::u32(p.text_secondary),
+                    mono_text(code, body, base_x + px(TEXT_X), pos.y, theme::u32(p.text_secondary),
                               diff.hunks[row.hunk].header.c_str());
                     // Stage / Unstage Hunk at the visible right edge, whatever the horizontal scroll.
                     if (options.hunk_action != nullptr && options.hunk_clicked != nullptr)
@@ -516,7 +568,8 @@ namespace imgit::ui
                         }
                         if (options.blame_columns && first)
                         {
-                            const float y = css_text_y(12.f, pos.y + px(2.f), true);
+                            const float y =
+                                    css_text_y(12.f, pos.y + px(std::round((code.line_h - 16.f) / 2.f) + 2.f), true);
                             draw_text_ellipsis(body, fonts().mono, 12.f, ImVec2(base_x + px(BLAME_SUMMARY_X), y),
                                                px(BLAME_SUMMARY_W), theme::u32(p.text_normal), hunk->summary.c_str());
                             draw_text(body, fonts().mono, 12.f, ImVec2(base_x + px(BLAME_DATE_X), y),
@@ -537,15 +590,16 @@ namespace imgit::ui
                             }
                         }
                     }
-                    mono_number(body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, number_of(row, lineno));
+                    mono_number(code, body, base_x + px(BLAME_NUMBERS_RIGHT), pos.y, number_of(row, lineno));
                     code_text(text_x, pos.y, row, *row.left);
-                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
+                    max_text = std::max(max_text, text_size(code.font, code.size, row.left->text.c_str()).x);
                 }
                 else if (options.file_view)
                 {
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, number_of(row, row.left->new_lineno));
-                    code_text(base_x + px(43.f), pos.y, row, *row.left);
-                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, row.left->text.c_str()).x);
+                    mono_number(code, body, base_x + px(OLD_NUMBERS_RIGHT), pos.y,
+                                number_of(row, row.left->new_lineno));
+                    code_text(base_x + px(file_text_x), pos.y, row, *row.left);
+                    max_text = std::max(max_text, text_size(code.font, code.size, row.left->text.c_str()).x);
                 }
                 else if (split)
                 {
@@ -566,11 +620,11 @@ namespace imgit::ui
                                                 theme::u32(line->origin == '+' ? INSERT_BG : DELETE_BG));
                             if (row.segment == 0)
                             {
-                                mono_text(body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
+                                mono_text(code, body, x0 + px(34.f), pos.y, theme::u32(p.text_normal),
                                           line->origin == '+' ? "+" : "-");
                             }
                         }
-                        mono_number(body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
+                        mono_number(code, body, x0 + px(OLD_NUMBERS_RIGHT), pos.y,
                                     number_of(row, side == 0 ? line->old_lineno : line->new_lineno));
                         body->PushClipRect(ImVec2(x0 + px(43.f), pos.y), ImVec2(x1, pos.y + line_h), true);
                         code_text(x0 + px(43.f), pos.y, row, *line);
@@ -637,12 +691,12 @@ namespace imgit::ui
                             body->AddRectFilled(ImVec2(cx, cy - px(5.f)), ImVec2(cx + 1.f, cy + px(5.f) + 1.f), sign);
                         }
                     }
-                    mono_number(body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, number_of(row, line.old_lineno),
+                    mono_number(code, body, base_x + px(OLD_NUMBERS_RIGHT), pos.y, number_of(row, line.old_lineno),
                                 line.old_lineno == 1);
-                    mono_number(body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, number_of(row, line.new_lineno),
+                    mono_number(code, body, base_x + px(NEW_NUMBERS_RIGHT), pos.y, number_of(row, line.new_lineno),
                                 line.new_lineno == new_cursor);
                     code_text(base_x + px(TEXT_X), pos.y, row, line);
-                    max_text = std::max(max_text, text_size(fonts().mono, 12.f, line.text.c_str()).x);
+                    max_text = std::max(max_text, text_size(code.font, code.size, line.text.c_str()).x);
                 }
                 ImGui::Dummy(ImVec2(options.word_wrap ? 1.f : max_text + px(text_offset + 40.f), line_h));
             }

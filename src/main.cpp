@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 #include "app/assets.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "gfx/lcd_renderer.hpp"
 #include "gfx/native_font_loader.hpp"
@@ -605,6 +606,23 @@ namespace
         {
             fonts.arial = fonts.regular;
         }
+        // The Editor and In-App Terminal faces, each an ImFont of its own (even on the system face) so the editor's
+        // tab width can be set on it alone.
+        const auto preferred_mono = [&](const imgit::app::Preference& preference)
+        {
+            std::filesystem::path path =
+                    imgit::platform::monospace_font_file(imgit::app::preferences().get(preference));
+            if (path.empty())
+            {
+                path = imgit::platform::system_font_file(SystemFont::MONOSPACE);
+            }
+            ImFont* font = path.empty()
+                                   ? nullptr
+                                   : io.Fonts->AddFontFromFileTTF(path.string().c_str(), imgit::theme::FONT_SIZE_SMALL);
+            return font != nullptr ? font : fonts.mono;
+        };
+        fonts.editor = preferred_mono(imgit::app::pref::EDITOR_FONT);
+        fonts.terminal = preferred_mono(imgit::app::pref::TERMINAL_FONT);
         io.FontDefault = fonts.regular;
         ImGuiStyle& style = ImGui::GetStyle();
         style.FontSizeBase = imgit::theme::FONT_SIZE_NORMAL * imgit::ui::font_em_scale(fonts.regular);
@@ -710,7 +728,6 @@ int main(int argc, char** argv)
         glfwGetFramebufferSize(window, &fw, &fh);
         density = w > 0 ? static_cast<float>(fw) / static_cast<float>(w) : 1.f;
     }
-    load_fonts(dpi_scale, density);
 
     // A scripted run takes no real input: the backend's GLFW callbacks would feed the user's mouse and keyboard
     // into the script's frames.
@@ -721,6 +738,8 @@ int main(int argc, char** argv)
     imgit::git::Library git_library;
     {
         imgit::app::Application app;
+        // After the Application, which loads the profile's preferences (the Editor and Terminal fonts).
+        load_fonts(dpi_scale, density);
         app.base_dpi_scale = dpi_scale;
         app.quit = [window]
         {

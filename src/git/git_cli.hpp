@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Network operations go through the user's `git` executable so the configured credential helpers and SSH
@@ -28,6 +29,11 @@ namespace imgit::git::cli
 
     // Called from the running thread with each chunk of git's output as it arrives.
     using OutputSink = std::function<void(std::string_view)>;
+
+    // Variables every run() adds to git's environment (GIT_SSH_COMMAND...), asked for on the running thread at
+    // each run; returns name / value pairs, an empty value meaning "leave it as inherited".
+    using EnvironmentProvider = std::function<std::vector<std::pair<std::string, std::string>>()>;
+    void set_environment_provider(EnvironmentProvider provider);
 
     // Runs `git <args>` in `workdir` without a console window and waits for it to finish; `input` is written to
     // its stdin (closed after it). Credential helpers never show their own UI; git's username / password prompts

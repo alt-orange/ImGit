@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 
 namespace imgit::git::cli
 {
@@ -12,6 +13,9 @@ namespace imgit::git::cli
     {
         constexpr const char* ASKPASS_MARKER = "IMGIT_ASKPASS";
         constexpr const char* CREDENTIALS_VARIABLE = "IMGIT_ASKPASS_CREDENTIALS";
+
+        std::mutex g_provider_mutex;
+        EnvironmentProvider g_provider;
 
         // The credentials travel to the askpass child as hex fields (url:username:password;...), so any byte is safe.
         std::string hex(const std::string& text)
@@ -95,6 +99,12 @@ namespace imgit::git::cli
         }
     } // namespace
 
+    void set_environment_provider(EnvironmentProvider provider)
+    {
+        std::lock_guard lock(g_provider_mutex);
+        g_provider = std::move(provider);
+    }
+
     Output run(const std::string& workdir, const std::vector<std::string>& args, const std::string& input,
                const std::vector<Credential>& credentials, const OutputSink& on_output)
     {
@@ -112,14 +122,33 @@ namespace imgit::git::cli
         // prompt), and the helpers still answer with what they have stored. GIT_ASKPASS is a bare path: git
         // executes it directly, not through a shell, so a quoted path (even one with a space) is "not found"
         // and every prompt fails with "could not read Username".
-        const platform::ProcessOutput process =
-                platform::run_process(workdir, command, input,
-                                      {{"GIT_TERMINAL_PROMPT", "0"},
-                                       {"GCM_INTERACTIVE", "never"},
-                                       {"GIT_ASKPASS", platform::executable_path()},
-                                       {ASKPASS_MARKER, "1"},
-                                       {CREDENTIALS_VARIABLE, encode(credentials)}},
-                                      on_output);
+        platform::Environment environment{{"GIT_TERMINAL_PROMPT", "0"},
+                                          {"GCM_INTERACTIVE", "never"},
+                                          {"GIT_ASKPASS", platform::executable_path()},
+                                          {ASKPASS_MARKER, "1"},
+                                          {CREDENTIALS_VARIABLE, encode(credentials)}};
+        EnvironmentProvider provider;
+        {
+            std::lock_guard lock(g_provider_mutex);
+            provider = g_provider;
+        }
+        if (provider)
+        {
+            // The provider's variables replace the defaults above (GCM_INTERACTIVE) or are added.
+            for (auto& [name, value] : provider())
+            {
+                std::erase_if(environment,
+                              [&name](const auto& entry)
+                              {
+                                  return entry.first == name;
+                              });
+                if (!value.empty())
+                {
+                    environment.emplace_back(std::move(name), std::move(value));
+                }
+            }
+        }
+        const platform::ProcessOutput process = platform::run_process(workdir, command, input, environment, on_output);
         Output output{process.exit_code, process.text};
         if (!process.started)
         {

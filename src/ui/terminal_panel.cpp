@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "platform/system.hpp"
 #include "ui/panels.hpp"
@@ -8,11 +9,14 @@
 #include <cmath>
 #include <imgui.h>
 #include <string>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 // The terminal panel: a 30px toolbar with the shell tabs, +, and Minimize / Kill All /
-// Hide, over xterm.js (Consolas 12px, line height 1.2: 6x16 cells, 1.2rem padding) running PowerShell on a
-// pseudo console. The content dims to 60% while the terminal does not have focus.
+// Hide, over xterm.js (by default Consolas 12px, line height 1.2: 6x16 cells, 1.2rem padding) running PowerShell on
+// a pseudo console. The content dims to 60% while the terminal does not have focus. Preferences → In-App Terminal
+// pick the face, size, line height, cursor, dimming and the shell new tabs run.
 namespace imgit::ui
 {
     namespace
@@ -20,11 +24,67 @@ namespace imgit::ui
 
         constexpr float TOOLBAR_HEIGHT = 30.f;
         constexpr float PADDING = 12.f; // .terminal-panel { padding: 1.2rem 0 1.2rem 1.2rem }
-        constexpr float FONT_SIZE = 12.f;
-        constexpr float CELL_WIDTH = 6.f; // floor(Consolas 12px advance)
-        constexpr float CELL_HEIGHT = 16.f; // floor(14 * 1.2)
-        constexpr float BASELINE = 12.f; // from the cell top
         constexpr float RULER_WIDTH = 10.f; // overviewRuler / scrollbar
+
+        // The cell grid for the font preferences, in CSS px: xterm's cell is the font's advance wide and its line
+        // box times the line height tall (both floored), the baseline centred in it. 6x16, baseline 12, for
+        // Consolas 12px at 1.2.
+        struct CellMetrics
+        {
+            ImFont* font = nullptr;
+            float glyph_size = 0.f; // device px, as ImGui sizes the font
+            float width = 6.f;
+            float height = 16.f;
+            float baseline = 12.f; // from the cell top
+        };
+
+        CellMetrics cell_metrics()
+        {
+            const app::Preferences& prefs = app::preferences();
+            CellMetrics cell;
+            cell.font = fonts().terminal != nullptr ? fonts().terminal : fonts().mono;
+            const float size = static_cast<float>(prefs.number(app::pref::TERMINAL_FONT_SIZE, 6, 40));
+            const float line_height =
+                    static_cast<float>(app::parse_tenths(prefs.get(app::pref::TERMINAL_LINE_HEIGHT), 12, 10, 30))
+                    / 10.f;
+            cell.glyph_size = font_px(cell.font, size);
+            ImFontBaked* baked = cell.font->GetFontBaked(cell.glyph_size);
+            const float line_box = size * font_em_scale(cell.font);
+            cell.width = std::max(1.f, std::floor(baked->GetCharAdvance('M') / dpi_scale()));
+            cell.height = std::max(1.f, std::floor(line_box * line_height));
+            const float ascent_share =
+                    baked->Ascent - baked->Descent > 0.f ? baked->Ascent / (baked->Ascent - baked->Descent) : 0.8f;
+            cell.baseline = std::round((cell.height - line_box) / 2.f) + std::round(line_box * ascent_share);
+            return cell;
+        }
+
+        // The shell each session runs (its tab's title), fixed when it starts: the Default preference may change
+        // meanwhile. Entries of closed sessions are dropped as the panel draws.
+        std::unordered_map<const app::TerminalSession*, std::string> g_shell_labels;
+
+        void drop_closed_sessions(const app::TerminalPanel& panel)
+        {
+            std::erase_if(g_shell_labels,
+                          [&](const auto& entry)
+                          {
+                              for (const auto& [workdir, tabs] : panel.repos)
+                              {
+                                  for (const auto& session : tabs.sessions)
+                                  {
+                                      if (session.get() == entry.first)
+                                      {
+                                          return false;
+                                      }
+                                  }
+                              }
+                              return true;
+                          });
+        }
+
+        platform::Shell preferred_shell()
+        {
+            return platform::terminal_shell(app::preferences().get(app::pref::TERMINAL_SHELL));
+        }
 
         // The terminal colour theme.
         constexpr unsigned ANSI[16] = {0x1A1A1A, 0xF0716A, 0x5CCB7A, 0xEBC45A, 0x5A9CF0, 0xC77DE8, 0x4FC3D2, 0xDCDCDC,
@@ -480,10 +540,13 @@ namespace imgit::ui
             const float tab_y = origin.y + px(4.42f);
             const float tab_h = px(21.14f);
             int close_index = -1;
+            drop_closed_sessions(panel);
             for (std::size_t i = 0; i < tabs.sessions.size(); ++i)
             {
                 ImGui::PushID(static_cast<int>(i));
-                static const std::string shell_label = platform::default_shell().label;
+                const auto started = g_shell_labels.find(tabs.sessions[i].get());
+                const std::string shell_label =
+                        started != g_shell_labels.end() ? started->second : preferred_shell().label;
                 const char* label = shell_label.c_str();
                 const float label_w = text_size(fonts().regular, 12.f, label).x;
                 const float w = std::max(px(48.f), px(4.f + 12.f + 2.f) + label_w + px(4.f + 12.f + 4.f));
@@ -580,8 +643,9 @@ namespace imgit::ui
         draw->AddRectFilled(ImVec2(origin.x, body_top), ImVec2(right, body_top + 1.f), border);
         draw->AddRectFilled(ImVec2(origin.x, body_top), ImVec2(origin.x + 1.f, origin.y + size.y), border);
         const ImVec2 grid(origin.x + 1.f + px(PADDING), body_top + 1.f + px(PADDING));
-        const float cell_w = std::floor(px(CELL_WIDTH));
-        const float cell_h = std::floor(px(CELL_HEIGHT));
+        const CellMetrics metrics = cell_metrics();
+        const float cell_w = std::floor(px(metrics.width));
+        const float cell_h = std::floor(px(metrics.height));
         const float grid_w = right - grid.x - px(RULER_WIDTH);
         const float grid_h = origin.y + size.y - px(PADDING) - grid.y;
         const int columns = std::max(2, static_cast<int>(grid_w / cell_w));
@@ -590,7 +654,9 @@ namespace imgit::ui
         if (!session->started && !session->failed)
         {
             screen.resize(columns, rows);
-            session->started = session->console.start(platform::default_shell().args, session->workdir, columns, rows);
+            const platform::Shell shell = preferred_shell();
+            g_shell_labels[session] = shell.label;
+            session->started = session->console.start(shell.args, session->workdir, columns, rows);
             session->failed = !session->started;
             session->console.write(std::exchange(session->pending_input, {}));
         }
@@ -640,7 +706,7 @@ namespace imgit::ui
         session->scrolled_seen = screen.scrolled_lines();
         if (mouse_inside && ImGui::GetIO().MouseWheel != 0.f)
         {
-            const int lines = static_cast<int>(std::lround(ImGui::GetIO().MouseWheel * 100.f / CELL_HEIGHT));
+            const int lines = static_cast<int>(std::lround(ImGui::GetIO().MouseWheel * 100.f / metrics.height));
             if (screen.alternate_screen())
             {
                 std::string keys;
@@ -729,14 +795,15 @@ namespace imgit::ui
             handle_keyboard(app, *session);
         }
 
-        // The cells: backgrounds, the selection, glyphs, underlines, then the cursor; 60% while unfocused.
-        const float opacity = panel.focused ? 1.f : 0.6f;
+        // The cells: backgrounds, the selection, glyphs, underlines, then the cursor; 60% while unfocused (unless
+        // Dim when unfocused is off).
+        const float opacity = panel.focused || !app::preferences().flag(app::pref::TERMINAL_DIM) ? 1.f : 0.6f;
         draw->PushClipRect(grid,
                            ImVec2(grid.x + cell_w * static_cast<float>(screen.columns()),
                                   grid.y + cell_h * static_cast<float>(rows)),
                            true);
-        ImFont* mono = fonts().mono;
-        const float glyph_size = font_px(mono, FONT_SIZE);
+        ImFont* mono = metrics.font;
+        const float glyph_size = metrics.glyph_size;
         const float ascent = mono->GetFontBaked(glyph_size)->Ascent;
         const Range range = selection_range(*session);
         for (int y = 0; y < rows && top_index + static_cast<std::size_t>(y) < screen.line_count(); ++y)
@@ -745,7 +812,7 @@ namespace imgit::ui
             const app::VtLine& line = screen.line(index);
             const std::uint64_t id = screen.first_line_id() + index;
             const float cy = grid.y + cell_h * static_cast<float>(y);
-            const float baseline = std::round(cy + px(BASELINE));
+            const float baseline = std::round(cy + px(metrics.baseline));
             for (int x = 0; x < static_cast<int>(line.cells.size()); ++x)
             {
                 const app::VtCell& cell = line.cells[static_cast<std::size_t>(x)];
@@ -802,13 +869,38 @@ namespace imgit::ui
                 }
             }
         }
-        // xterm's bar cursor while focused, an outlined cell otherwise.
+        // While focused the Cursor Style's block (the glyph over it in the background colour), underline or bar;
+        // an outlined cell otherwise.
         const int cursor_row = screen.cursor_y() + session->scroll;
         if (screen.cursor_visible() && cursor_row < rows)
         {
             const ImVec2 cmin(grid.x + cell_w * static_cast<float>(screen.cursor_x()),
                               grid.y + cell_h * static_cast<float>(cursor_row));
-            if (panel.focused)
+            const std::string cursor_style = app::preferences().get(app::pref::TERMINAL_CURSOR);
+            if (panel.focused && cursor_style == "Block")
+            {
+                draw->AddRectFilled(cmin, ImVec2(cmin.x + cell_w, cmin.y + cell_h), rgb(cursor_color(), 1.f));
+                const std::size_t index = top_index + static_cast<std::size_t>(cursor_row);
+                if (index < screen.line_count())
+                {
+                    const std::vector<app::VtCell>& cells = screen.line(index).cells;
+                    const std::size_t x = static_cast<std::size_t>(screen.cursor_x());
+                    if (const char32_t ch = x < cells.size() ? cells[x].ch : 0; ch != 0 && ch != U' ')
+                    {
+                        const ImWchar glyph = ch <= 0xFFFF ? static_cast<ImWchar>(ch) : static_cast<ImWchar>(0xFFFD);
+                        mono->RenderChar(draw, glyph_size,
+                                         ImVec2(cmin.x, std::round(cmin.y + px(metrics.baseline)) - ascent),
+                                         rgb(background_color(), 1.f), glyph);
+                    }
+                }
+            }
+            else if (panel.focused && cursor_style == "Underline")
+            {
+                const float thickness = std::max(1.f, std::round(px(2.f)));
+                draw->AddRectFilled(ImVec2(cmin.x, cmin.y + cell_h - thickness),
+                                    ImVec2(cmin.x + cell_w, cmin.y + cell_h), rgb(cursor_color(), 1.f));
+            }
+            else if (panel.focused)
             {
                 draw->AddRectFilled(cmin, ImVec2(cmin.x + 1.f, cmin.y + cell_h), rgb(cursor_color(), 1.f));
             }

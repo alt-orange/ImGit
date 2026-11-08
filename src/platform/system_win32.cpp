@@ -1,6 +1,8 @@
+#include "platform/process.hpp"
 #include "platform/system.hpp"
 #include "platform/win32_util.hpp"
 #include <cstdlib>
+#include <utility>
 // winhttp.h needs windows.h first; the blank line keeps clang-format from reordering them.
 
 #include <winhttp.h>
@@ -41,6 +43,16 @@ namespace imgit::platform
         return local;
     }
 
+    std::string system_locale()
+    {
+        wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
+        if (GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH) == 0)
+        {
+            return {};
+        }
+        return win32::narrow(name);
+    }
+
     float menu_show_delay()
     {
         static const float delay = []
@@ -67,10 +79,149 @@ namespace imgit::platform
         return std::filesystem::exists(path, error) ? path : std::filesystem::path();
     }
 
+    namespace
+    {
+        struct MonospaceFont
+        {
+            std::string name;
+            std::filesystem::path file;
+        };
+
+        // The faces Windows ships, then popular ones a user installs (for everyone, or for themselves only).
+        const std::vector<MonospaceFont>& installed_monospace_fonts()
+        {
+            static const std::vector<MonospaceFont> fonts = []
+            {
+                static constexpr std::pair<const char*, const wchar_t*> KNOWN[] = {
+                        {"Cascadia Code", L"CascadiaCode.ttf"},
+                        {"Cascadia Mono", L"CascadiaMono.ttf"},
+                        {"Consolas", L"consola.ttf"},
+                        {"Courier New", L"cour.ttf"},
+                        {"Lucida Console", L"lucon.ttf"},
+                        {"Fira Code", L"FiraCode-Regular.ttf"},
+                        {"Hack", L"Hack-Regular.ttf"},
+                        {"JetBrains Mono", L"JetBrainsMono-Regular.ttf"},
+                        {"Source Code Pro", L"SourceCodePro-Regular.ttf"},
+                };
+                std::vector<std::filesystem::path> folders;
+                if (wchar_t windows[MAX_PATH] = {}; GetWindowsDirectoryW(windows, MAX_PATH) != 0)
+                {
+                    folders.push_back(std::filesystem::path(windows) / L"Fonts");
+                }
+                if (const wchar_t* local = _wgetenv(L"LOCALAPPDATA"); local != nullptr && *local != L'\0')
+                {
+                    folders.push_back(std::filesystem::path(local) / L"Microsoft" / L"Windows" / L"Fonts");
+                }
+                std::vector<MonospaceFont> found;
+                for (const auto& [name, file] : KNOWN)
+                {
+                    for (const std::filesystem::path& folder : folders)
+                    {
+                        std::error_code error;
+                        if (std::filesystem::path path = folder / file; std::filesystem::exists(path, error))
+                        {
+                            found.push_back({name, std::move(path)});
+                            break;
+                        }
+                    }
+                }
+                return found;
+            }();
+            return fonts;
+        }
+
+        // Git for Windows' bash: next to the git on PATH (<git>/mingw64/libexec/git-core -> <git>/bin/bash.exe),
+        // else where its installer puts it. Empty when there is none.
+        const std::filesystem::path& git_bash()
+        {
+            static const std::filesystem::path bash = []
+            {
+                std::vector<std::filesystem::path> candidates;
+                if (const ProcessOutput exec_path = run_process({}, {"git", "--exec-path"}); exec_path.exit_code == 0)
+                {
+                    std::string text = exec_path.text;
+                    while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
+                    {
+                        text.pop_back();
+                    }
+                    const std::filesystem::path root =
+                            std::filesystem::path(win32::widen(text)).parent_path().parent_path().parent_path();
+                    candidates.push_back(root / L"bin" / L"bash.exe");
+                }
+                for (const wchar_t* variable : {L"ProgramFiles", L"ProgramW6432", L"LOCALAPPDATA"})
+                {
+                    if (const wchar_t* folder = _wgetenv(variable); folder != nullptr && *folder != L'\0')
+                    {
+                        const std::filesystem::path base = std::wstring_view(variable) == L"LOCALAPPDATA"
+                                                                   ? std::filesystem::path(folder) / L"Programs"
+                                                                   : std::filesystem::path(folder);
+                        candidates.push_back(base / L"Git" / L"bin" / L"bash.exe");
+                    }
+                }
+                for (const std::filesystem::path& candidate : candidates)
+                {
+                    std::error_code error;
+                    if (std::filesystem::is_regular_file(candidate, error))
+                    {
+                        return candidate;
+                    }
+                }
+                return std::filesystem::path();
+            }();
+            return bash;
+        }
+    } // namespace
+
+    std::vector<std::string> monospace_font_names()
+    {
+        std::vector<std::string> names;
+        for (const MonospaceFont& font : installed_monospace_fonts())
+        {
+            names.push_back(font.name);
+        }
+        return names;
+    }
+
+    std::filesystem::path monospace_font_file(std::string_view name)
+    {
+        for (const MonospaceFont& font : installed_monospace_fonts())
+        {
+            if (font.name == name)
+            {
+                return font.file;
+            }
+        }
+        return {};
+    }
+
     Shell default_shell()
     {
         // The default terminal on Windows.
         return {{"powershell.exe", "-NoLogo", "-ExecutionPolicy", "RemoteSigned"}, "powershell.exe"};
+    }
+
+    std::vector<std::string> terminal_shell_names()
+    {
+        std::vector<std::string> names = {"PowerShell", "Command Prompt"};
+        if (!git_bash().empty())
+        {
+            names.emplace_back("Git Bash");
+        }
+        return names;
+    }
+
+    Shell terminal_shell(std::string_view name)
+    {
+        if (name == "Command Prompt")
+        {
+            return {{"cmd.exe"}, "cmd.exe"};
+        }
+        if (name == "Git Bash" && !git_bash().empty())
+        {
+            // A login shell, as Git Bash's own shortcut starts it, so ~/.bash_profile runs.
+            return {{win32::narrow(git_bash().c_str()), "--login", "-i"}, "bash"};
+        }
+        return default_shell();
     }
 
     std::string system_proxy()

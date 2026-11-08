@@ -658,10 +658,12 @@ namespace imgit::ui
         // The commit options' rows under "Commit options", 22px apart.
         constexpr float COMMIT_OPTION_ROW = 22.f;
 
-        // An empty commit form starts from commit.template: its first line the summary, the rest the description.
+        // An empty commit form starts from commit.template: its first line the summary, the rest the description
+        // (unless Preferences → Commit turns "Apply this template" off).
         void apply_commit_template(app::RepoState& state)
         {
-            if (state.commit_template.empty() || !state.commit_summary.empty() || !state.commit_description.empty())
+            if (state.commit_template.empty() || !state.commit_summary.empty() || !state.commit_description.empty()
+                || !state.repo.config_bool("imgit.applyCommitTemplate", true))
             {
                 return;
             }
@@ -875,6 +877,8 @@ namespace imgit::ui
             {
                 state.commit_form_ready = true;
                 state.commit_sign = state.repo.config_bool("commit.gpgsign", false);
+                // Preferences → Git Hooks / Commit: "Skip git hooks by default when committing".
+                state.commit_skip_hooks = state.repo.config_bool("imgit.skipHooks", false);
                 state.commit_template = state.repo.commit_template();
                 apply_commit_template(state);
             }
@@ -1246,6 +1250,7 @@ namespace imgit::ui
                 commit_options.amend = amend;
                 commit_options.sign = state.commit_sign;
                 commit_options.skip_hooks = state.commit_skip_hooks;
+                commit_options.strip_comments = state.repo.config_bool("imgit.stripComments", false);
                 const bool with_git = commit_options.sign || (!commit_options.skip_hooks && repo->has_commit_hooks());
                 if (app.run(
                             state, amend ? "Amend" : "Commit",
@@ -1562,8 +1567,19 @@ namespace imgit::ui
                 const float verb_w = text_size(fonts().regular, theme::FONT_SIZE_ROW, verb).x;
                 css_text(draw, theme::FONT_SIZE_ROW, ImVec2(name_x, author_top + px(22.1f)),
                          theme::u32(p.text_secondary), verb);
-                css_text(draw, theme::FONT_SIZE_ROW, ImVec2(name_x + verb_w + px(5.f), author_top + px(22.1f)),
-                         theme::u32(p.text_normal), format_date_time(commit.author_time).c_str());
+                const std::string date = format_date_time(commit.author_time);
+                const ImVec2 date_pos(name_x + verb_w + px(5.f), author_top + px(22.1f));
+                css_text(draw, theme::FONT_SIZE_ROW, date_pos, theme::u32(p.text_normal), date.c_str());
+                // The date alone in the Date word Format, and the commit's.
+                std::string dates = "Authored " + format_date_word(commit.author_time);
+                if (commit.time != commit.author_time)
+                {
+                    dates += "\nCommitted " + format_date_long(commit.time);
+                }
+                tooltip_on_rect(date_pos,
+                                ImVec2(date_pos.x + text_size(fonts().regular, theme::FONT_SIZE_ROW, date.c_str()).x,
+                                       date_pos.y + px(20.f)),
+                                dates.c_str());
                 tooltip_on_rect(ImVec2(left, author_top), ImVec2(left + avatar, author_top + avatar),
                                 (commit.author.name + " <" + commit.author.email + ">").c_str());
 

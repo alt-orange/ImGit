@@ -319,6 +319,13 @@ namespace imgit::ui
     void create_tag_at(app::Application& app, app::RepoState& state, const std::string& name, const git::Sha& sha,
                        const std::string& message)
     {
+        // Sign Tags by Default (tag.gpgSign): git signs it, an annotated tag (the message, else its name).
+        if (state.repo.config_bool("tag.gpgSign", false))
+        {
+            app.run_git_cli(state, "Create signed tag",
+                            {"tag", "-s", name, sha, "-m", message.empty() ? name : message});
+            return;
+        }
         git::Repository* repo = &state.repo;
         if (app.run(
                     state, "Create tag",

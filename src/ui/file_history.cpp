@@ -164,8 +164,15 @@ namespace imgit::ui
                     const std::string by = format_relative(entry.commit.time) + " by " + entry.commit.author.name;
                     draw_text_ellipsis(draw, fonts().regular, 11.f, ImVec2(text_x, css_text_y(11.f, pos.y + px(24.f))),
                                        pos.x + width - px(16.f) - text_x, theme::u32(p.text_secondary), by.c_str());
-                    // A clipped summary shows whole in a tooltip.
-                    if (hovered && text_size(fonts().semibold, 12.f, entry.commit.summary.c_str()).x > summary_w)
+                    // The by-line shows the date in the Date verbose Format; a clipped summary shows whole.
+                    const ImVec2 by_min(text_x, pos.y + px(22.f));
+                    const ImVec2 by_max(pos.x + width - px(16.f), pos.y + row_h);
+                    const bool on_by = hovered && ImGui::IsMouseHoveringRect(by_min, by_max);
+                    if (on_by)
+                    {
+                        styled_tooltip(by_min, by_max, format_date_long(entry.commit.time).c_str());
+                    }
+                    else if (hovered && text_size(fonts().semibold, 12.f, entry.commit.summary.c_str()).x > summary_w)
                     {
                         styled_tooltip(pos, ImVec2(pos.x + width, pos.y + row_h), entry.commit.summary.c_str());
                     }

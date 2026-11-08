@@ -459,16 +459,16 @@ namespace imgit::ui
                     app.repo_management_open = true;
                 });
             add("Open in External Diff/Merge Tool", pick_file(FileAction::EXTERNAL_DIFF));
-            add("Open in VS Code", with_repo(
-                                           [](app::RepoState& r)
-                                           {
-                                               platform::shell::open_in_editor(r.repo.workdir());
-                                           }));
-            add("Open in default terminal", with_repo(
-                                                    [](app::RepoState& r)
-                                                    {
-                                                        platform::shell::open_external_terminal(r.repo.workdir());
-                                                    }));
+            add("Open in external editor", with_repo(
+                                                   [&app](app::RepoState& r)
+                                                   {
+                                                       app.open_in_editor(r.repo.workdir());
+                                                   }));
+            add("Open in external terminal", with_repo(
+                                                     [&app](app::RepoState& r)
+                                                     {
+                                                         app.open_terminal(&r, r.repo.workdir());
+                                                     }));
             add("Open in file manager", with_repo(
                                                 [](app::RepoState& r)
                                                 {

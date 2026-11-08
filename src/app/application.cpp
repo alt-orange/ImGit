@@ -1,13 +1,17 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "platform/app_menu.hpp"
+#include "platform/process.hpp"
 #include "platform/shell.hpp"
 #include "platform/system.hpp"
+#include "platform/window.hpp"
 #include "ui/avatars.hpp"
 #include "ui/native_menu.hpp"
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
+#include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -18,6 +22,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -167,6 +172,10 @@ namespace imgit::app
             else if (key == "show_description")
             {
                 show_description = truthy;
+            }
+            else if (key == "description_on_hover")
+            {
+                description_on_hover = truthy;
             }
             else if (key == "show_ghost_refs")
             {
@@ -351,6 +360,7 @@ namespace imgit::app
              << "show_sha=" << show_sha << '\n'
              << "show_changes=" << show_changes << '\n'
              << "show_description=" << show_description << '\n'
+             << "description_on_hover=" << description_on_hover << '\n'
              << "show_ghost_refs=" << show_ghost_refs << '\n'
              << "highlight_rows_on_ref_hover=" << highlight_rows_on_ref_hover << '\n'
              << "remember_tabs=" << remember_tabs << '\n'
@@ -375,6 +385,24 @@ namespace imgit::app
         profiles.load(config_directory(), git::global_user_name(), git::global_user_email(), PROFILE_FILES);
         apply_profile_identity(false);
         settings.load(config_path("settings.txt"));
+        preferences().load(config_path("preferences.txt"));
+        // Preferences → SSH, read at each git run (on its thread): the chosen key, and whether the credential
+        // manager may show its own sign-in window.
+        git::cli::set_environment_provider(
+                []
+                {
+                    const Preferences& p = preferences();
+                    std::vector<std::pair<std::string, std::string>> environment;
+                    if (const auto command = ssh_command(p.get(pref::SSH_PRIVATE_KEY), p.flag(pref::SSH_AGENT)))
+                    {
+                        environment.emplace_back("GIT_SSH_COMMAND", *command);
+                    }
+                    if (p.flag(pref::CREDENTIAL_MANAGER))
+                    {
+                        environment.emplace_back("GCM_INTERACTIVE", "");
+                    }
+                    return environment;
+                });
         load_recent();
         load_aliases();
         load_custom_themes();
@@ -441,6 +469,7 @@ namespace imgit::app
         apply_profile_identity(profiles.keep_git_config());
         settings = Settings{};
         settings.load(config_path("settings.txt"));
+        preferences().load(config_path("preferences.txt"));
         load_recent();
         load_aliases();
         load_custom_themes();
@@ -589,10 +618,11 @@ namespace imgit::app
             }
         }
         auto state = std::make_unique<RepoState>(std::move(*repo));
-        state->commit_limit = static_cast<std::size_t>(settings.initial_commits);
+        state->commit_limit = commit_limit();
         state->push_after_commit = settings.push_after_commit;
         tabs.push_back(std::move(state));
         active_tab = static_cast<int>(tabs.size()) - 1;
+        group_worktree_tab(active_tab);
 
         std::erase(recent_repos, workdir);
         recent_repos.insert(recent_repos.begin(), workdir);
@@ -649,7 +679,7 @@ namespace imgit::app
             return;
         }
         auto submodule = std::make_unique<RepoState>(std::move(*repo));
-        submodule->commit_limit = static_cast<std::size_t>(settings.initial_commits);
+        submodule->commit_limit = commit_limit();
         submodule->push_after_commit = settings.push_after_commit;
         submodule->parent = std::move(*tab);
         *tab = std::move(submodule);
@@ -766,6 +796,98 @@ namespace imgit::app
         toasts.push(ToastKind::INFO, "Copied to clipboard", text.size() > 80 ? text.substr(0, 77) + "..." : text);
     }
 
+    namespace
+    {
+        // Git for Windows' folder (<git>/mingw64/libexec/git-core -> <git>), empty when git is elsewhere.
+        std::filesystem::path git_for_windows_root()
+        {
+            const git::cli::Output out = git::cli::run({}, {"--exec-path"});
+            std::string folder = trim(out.text);
+            if (out.exit_code != 0 || folder.empty())
+            {
+                return {};
+            }
+            return std::filesystem::path(folder).parent_path().parent_path().parent_path();
+        }
+    } // namespace
+
+    void Application::open_in_editor(const std::string& path)
+    {
+        const std::string editor = preferences().get(pref::EDITOR);
+        std::vector<std::string> command;
+        if (editor == "Visual Studio Code")
+        {
+            command = {"code", path};
+        }
+        else if (editor == "Rider")
+        {
+            command = {"rider", path};
+        }
+        else if (editor == "<Custom>")
+        {
+            command = custom_tool_command(preferences().get(pref::EDITOR_COMMAND), path);
+            if (command.empty())
+            {
+                toasts.push(ToastKind::ERROR, "No editor command",
+                            "Set the custom editor's command in Preferences > External Tools.");
+                return;
+            }
+        }
+        else
+        {
+            platform::shell::open_in_editor(path);
+            return;
+        }
+        if (!platform::shell::launch(command, {}, editor != "<Custom>"))
+        {
+            toasts.push(ToastKind::ERROR, "Could not start " + editor, command.front() + " was not found.");
+        }
+    }
+
+    void Application::open_terminal(RepoState* state, const std::string& path)
+    {
+        const std::string choice = preferences().get(pref::TERMINAL);
+        std::vector<std::string> command;
+        if (choice == "In-App Terminal")
+        {
+            show_terminal_panel = true;
+            terminal.focus_requested = true;
+            if (state == nullptr)
+            {
+                toasts.push(ToastKind::INFO, "Open a repository to use the in-app terminal");
+            }
+            return;
+        }
+        if (choice == "Command Prompt")
+        {
+            command = {"cmd.exe", "/K"};
+        }
+        else if (choice == "Git Bash")
+        {
+            const std::filesystem::path root = git_for_windows_root();
+            command = {(root / "git-bash.exe").string(), "--cd=" + path};
+        }
+        else if (choice == "<Custom>")
+        {
+            command = custom_tool_command(preferences().get(pref::TERMINAL_COMMAND), path);
+            if (command.empty())
+            {
+                toasts.push(ToastKind::ERROR, "No terminal command",
+                            "Set the custom terminal's command in Preferences > External Tools.");
+                return;
+            }
+        }
+        else
+        {
+            platform::shell::open_external_terminal(path);
+            return;
+        }
+        if (!platform::spawn_detached(command, path))
+        {
+            toasts.push(ToastKind::ERROR, "Could not start " + choice, command.front() + " was not found.");
+        }
+    }
+
     void Application::set_zoom(float zoom)
     {
         settings.zoom = std::clamp(zoom, 0.5f, 2.f);
@@ -803,9 +925,84 @@ namespace imgit::app
         style.FontScaleMain = settings.zoom;
         for (RepoState* tab : repo_states())
         {
-            tab->commit_limit = static_cast<std::size_t>(settings.initial_commits);
+            tab->commit_limit = commit_limit();
         }
         settings.save(config_path("settings.txt"));
+    }
+
+    std::size_t Application::commit_limit() const
+    {
+        // Show All Commits in Graph: no limit.
+        return preferences().flag(pref::SHOW_ALL_COMMITS) ? std::numeric_limits<std::size_t>::max()
+                                                          : static_cast<std::size_t>(settings.initial_commits);
+    }
+
+    void Application::group_worktree_tab(int index)
+    {
+        // Automatically group worktree tabs together: a repository whose .git folder another tab shares (one is a
+        // linked worktree of the other) joins that tab's group, or both go into one named after the main
+        // repository. Not while the remembered tabs are restored: they keep their own groups.
+        if (m_restoring_tabs || !preferences().flag(pref::GROUP_WORKTREES) || index < 0
+            || index >= static_cast<int>(tabs.size()))
+        {
+            return;
+        }
+        const std::string workdir = tabs[static_cast<std::size_t>(index)]->repo.workdir();
+        const std::string common = tab_root(index).repo.common_dir();
+        const auto index_of = [this](const std::string& dir)
+        {
+            for (int i = 0; i < static_cast<int>(tabs.size()); ++i)
+            {
+                if (tabs[static_cast<std::size_t>(i)]->repo.workdir() == dir)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        };
+        for (int i = 0; i < static_cast<int>(tabs.size()); ++i)
+        {
+            RepoState& other = tab_root(i);
+            if (i == index || other.repo.common_dir() != common)
+            {
+                continue;
+            }
+            std::string group = other.tab_group;
+            if (group.empty())
+            {
+                // <main>/.git -> <main>
+                group = std::filesystem::path(common).parent_path().filename().string();
+                if (group.empty())
+                {
+                    group = other.repo.name();
+                }
+                set_tab_group(i, group);
+            }
+            // set_tab_group moves tabs: this one is found again by its working directory.
+            set_tab_group(index_of(workdir), group);
+            active_tab = index_of(workdir);
+            return;
+        }
+    }
+
+    void Application::keep_submodules_updated()
+    {
+        // Keep submodules up to date: once HEAD has moved (a checkout, pull, merge, reset... from ImGit or
+        // elsewhere), the initialized submodules are checked out at the commits it records.
+        for (RepoState* tab : repo_states())
+        {
+            const git::Sha& head = tab->history.head_sha;
+            if (tab->async || head.empty() || head == tab->submodules_head)
+            {
+                continue;
+            }
+            const bool first = tab->submodules_head.empty();
+            tab->submodules_head = head;
+            if (!first && preferences().flag(pref::UPDATE_SUBMODULES) && !tab->repo.submodules().empty())
+            {
+                run_git_cli(*tab, "Update submodules", {"submodule", "update", "--recursive"}, true);
+            }
+        }
     }
 
     namespace
@@ -839,6 +1036,7 @@ namespace imgit::app
             return;
         }
         const std::string workdir = state.repo.workdir();
+        args = with_prune_preference(std::move(args), preferences().flag(pref::AUTO_PRUNE));
         std::vector<git::cli::Credential> credentials_for_run = credentials_with(credentials, attempt);
         state.async = AsyncOperation{std::move(title),
                                      std::async(std::launch::async,
@@ -1550,6 +1748,7 @@ namespace imgit::app
         apply_profile_switch();
         poll_async();
         poll_background();
+        keep_submodules_updated();
 
         // Shortcuts and the tabs bar can close the active tab: the state is looked up again after each.
         handle_shortcuts(active());
@@ -1579,7 +1778,7 @@ namespace imgit::app
             ImGui::End();
             ui::draw_dialogs(*this);
             ui::draw_fuzzy_finder(*this);
-            toasts.draw();
+            draw_toasts();
             ui::draw_menus();
             return;
         }
@@ -1613,8 +1812,25 @@ namespace imgit::app
 
         ui::draw_dialogs(*this);
         ui::draw_fuzzy_finder(*this);
-        toasts.draw();
+        draw_toasts();
         ui::draw_menus();
+    }
+
+    void Application::draw_toasts()
+    {
+        toasts.draw(toast_corner(preferences().get(pref::NOTIFICATION_LOCATION)));
+        // Desktop notifications: a toast that comes while ImGit is in the background makes the window ask for
+        // attention (the taskbar button flashes, the Dock icon bounces).
+        const int unread = toasts.unread();
+        if (unread > m_unread_toasts && preferences().flag(pref::DESKTOP_NOTIFICATIONS))
+        {
+            if (GLFWwindow* window = platform::main_window();
+                window != nullptr && glfwGetWindowAttrib(window, GLFW_FOCUSED) == 0)
+            {
+                glfwRequestWindowAttention(window);
+            }
+        }
+        m_unread_toasts = unread;
     }
 
     void Application::draw_repo_tab(RepoState& state, ImVec2 size)
@@ -1832,15 +2048,15 @@ namespace imgit::app
                           {
                               if (const RepoState* state = active(); state != nullptr)
                               {
-                                  platform::shell::open_in_editor(state->repo.workdir());
+                                  open_in_editor(state->repo.workdir());
                               }
                           })},
                     {item("Open External &Terminal", "Alt+T",
                           [this]
                           {
-                              if (const RepoState* state = active(); state != nullptr)
+                              if (RepoState* state = active(); state != nullptr)
                               {
-                                  platform::shell::open_external_terminal(state->repo.workdir());
+                                  open_terminal(state, state->repo.workdir());
                               }
                           }),
                      item("Open in File Manager", "Alt+O",
@@ -2457,6 +2673,7 @@ namespace imgit::app
         std::string line;
         int wanted = -1;
         tab_groups.clear();
+        m_restoring_tabs = true;
         while (std::getline(file, line))
         {
             if (!line.empty() && line.back() == '\r')
@@ -2506,6 +2723,7 @@ namespace imgit::app
                 }
             }
         }
+        m_restoring_tabs = false;
         drop_empty_tab_groups();
         if (wanted >= -1 && wanted < static_cast<int>(tabs.size()))
         {
