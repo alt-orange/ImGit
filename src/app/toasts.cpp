@@ -12,6 +12,11 @@
 
 namespace imgit::app
 {
+    void Toasts::keep_clear(ImVec2 min, ImVec2 max)
+    {
+        m_keep_clear.emplace_back(min, max);
+    }
+
     void Toasts::push(ToastKind kind, std::string title, std::string detail)
     {
         const double lifetime = 10.0; // TOAST_DURATION_DEFAULT
@@ -115,8 +120,24 @@ namespace imgit::app
         const float x =
                 right ? viewport->Pos.x + viewport->Size.x - ui::px(16.f) - width : viewport->Pos.x + ui::px(16.f);
         // The edge the next card stacks from: the bottom one's bottom, or the top one's top (under the tabs bar
-        // and the toolbar).
+        // and the toolbar); moved past any rectangle asked to be kept clear that the first card would cover.
         float edge = top ? viewport->WorkPos.y + ui::px(96.f) : viewport->Pos.y + viewport->Size.y - ui::px(32.f);
+        for (const auto& [clear_min, clear_max] : m_keep_clear)
+        {
+            if (clear_min.x >= x + width || clear_max.x <= x)
+            {
+                continue;
+            }
+            if (!top && clear_max.y > edge - ui::px(80.f))
+            {
+                edge = std::min(edge, clear_min.y - ui::px(8.f));
+            }
+            else if (top && clear_min.y < edge + ui::px(80.f))
+            {
+                edge = std::max(edge, clear_max.y + ui::px(8.f));
+            }
+        }
+        m_keep_clear.clear();
         const auto line_count = [&](const std::string& text, float size, float line_h)
         {
             if (text.empty())

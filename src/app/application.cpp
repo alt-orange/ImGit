@@ -38,6 +38,17 @@ namespace imgit::app
         constexpr const char* PROFILE_FILES[] = {"settings.txt", "preferences.txt", "recent.txt",
                                                  "tabs.txt",     "favorites.txt",   "aliases.txt"};
 
+        // The key of a repository in the aliases and hidden refs: its path with forward slashes and no trailing one.
+        std::string alias_key(std::string path)
+        {
+            std::replace(path.begin(), path.end(), '\\', '/');
+            while (path.size() > 1 && path.back() == '/')
+            {
+                path.pop_back();
+            }
+            return path;
+        }
+
         // The settings folder: %APPDATA%\.imgit on Windows, ~/.imgit elsewhere.
         std::filesystem::path config_directory()
         {
@@ -405,6 +416,7 @@ namespace imgit::app
                 });
         load_recent();
         load_aliases();
+        load_hidden_refs();
         load_custom_themes();
     }
 
@@ -472,6 +484,7 @@ namespace imgit::app
         preferences().load(config_path("preferences.txt"));
         load_recent();
         load_aliases();
+        load_hidden_refs();
         load_custom_themes();
         apply_settings();
         if (settings.remember_tabs)
@@ -620,6 +633,11 @@ namespace imgit::app
         auto state = std::make_unique<RepoState>(std::move(*repo));
         state->commit_limit = commit_limit();
         state->push_after_commit = settings.push_after_commit;
+        if (const auto hidden = m_hidden_refs.find(alias_key(workdir)); hidden != m_hidden_refs.end())
+        {
+            state->hidden_refs = hidden->second;
+            state->refresh(); // the constructor loaded the graph with every ref
+        }
         tabs.push_back(std::move(state));
         active_tab = static_cast<int>(tabs.size()) - 1;
         group_worktree_tab(active_tab);
@@ -681,6 +699,12 @@ namespace imgit::app
         auto submodule = std::make_unique<RepoState>(std::move(*repo));
         submodule->commit_limit = commit_limit();
         submodule->push_after_commit = settings.push_after_commit;
+        if (const auto hidden = m_hidden_refs.find(alias_key(submodule->repo.workdir()));
+            hidden != m_hidden_refs.end())
+        {
+            submodule->hidden_refs = hidden->second;
+            submodule->refresh();
+        }
         submodule->parent = std::move(*tab);
         *tab = std::move(submodule);
     }
@@ -919,6 +943,7 @@ namespace imgit::app
         ui::set_dpi_scale(scale);
         theme::set_theme(settings.theme);
         theme::apply_imgui_style();
+        platform::set_window_dark(!theme::palette().light);
         ImGuiStyle& style = ImGui::GetStyle();
         style.ScaleAllSizes(scale);
         style.FontScaleDpi = base_dpi_scale;
@@ -1749,6 +1774,7 @@ namespace imgit::app
         poll_async();
         poll_background();
         keep_submodules_updated();
+        sync_hidden_refs();
 
         // Shortcuts and the tabs bar can close the active tab: the state is looked up again after each.
         handle_shortcuts(active());
@@ -2339,7 +2365,8 @@ namespace imgit::app
             return;
         }
         // Chromium's views menu bar (Electron on Windows): Segoe UI 9pt on #1F1F1F, 26px tall, the pressed entry
-        // on #3E3E3E. Each entry is its label (rounded up) plus 6px on both sides.
+        // on #3E3E3E; under a light theme Windows' light bar (#F9F9F9, pressed #E6E6E6, #1A1A1A text, like the
+        // light menus). Each entry is its label (rounded up) plus 6px on both sides.
         static constexpr const char* LABELS[] = {"&File", "&Edit", "&View", "&Help"};
         constexpr int COUNT = 4;
         ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -2360,10 +2387,18 @@ namespace imgit::app
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetWindowPos();
         const float right = origin.x + viewport->Size.x;
-        draw->AddRectFilled(origin, ImVec2(right, origin.y + height), IM_COL32(0x1F, 0x1F, 0x1F, 255));
+        const bool light = theme::palette().light;
+        const ImU32 bar_bg = light ? IM_COL32(0xF9, 0xF9, 0xF9, 255) : IM_COL32(0x1F, 0x1F, 0x1F, 255);
+        const ImU32 plate = light ? IM_COL32(0xE6, 0xE6, 0xE6, 255) : IM_COL32(62, 62, 62, 255);
+        const ImU32 plate_bottom = light ? IM_COL32(0xE2, 0xE2, 0xE2, 255) : IM_COL32(59, 59, 59, 255);
+        const ImU32 label = light ? IM_COL32(0x1A, 0x1A, 0x1A, 255) : IM_COL32(0xE3, 0xE3, 0xE3, 255);
+        draw->AddRectFilled(origin, ImVec2(right, origin.y + height), bar_bg);
         // The bar's bottom rows are a shade darker, as Chromium paints them.
-        const ImU32 shade[] = {IM_COL32(30, 30, 30, 255), IM_COL32(30, 30, 30, 255), IM_COL32(30, 30, 30, 255),
-                               IM_COL32(29, 29, 29, 255)};
+        const ImU32 dark_shade[] = {IM_COL32(30, 30, 30, 255), IM_COL32(30, 30, 30, 255), IM_COL32(30, 30, 30, 255),
+                                    IM_COL32(29, 29, 29, 255)};
+        const ImU32 light_shade[] = {IM_COL32(247, 247, 247, 255), IM_COL32(247, 247, 247, 255),
+                                     IM_COL32(246, 246, 246, 255), IM_COL32(244, 244, 244, 255)};
+        const ImU32* shade = light ? light_shade : dark_shade;
         for (int i = 0; i < 4; ++i)
         {
             const float y = origin.y + height - ui::px(5.f) + static_cast<float>(i) * ui::px(1.f);
@@ -2402,21 +2437,20 @@ namespace imgit::app
             {
                 // A 4px-rounded #3E3E3E plate, 1px narrower than the entry, fading a little at the bottom.
                 const ImVec2 plate_max(max.x - ui::px(1.f), max.y);
-                draw->AddRectFilled(min, plate_max, IM_COL32(62, 62, 62, 255), ui::px(4.f));
+                draw->AddRectFilled(min, plate_max, plate, ui::px(4.f));
                 draw->AddRectFilledMultiColor(ImVec2(min.x + ui::px(4.f), max.y - ui::px(5.f)),
-                                              ImVec2(plate_max.x - ui::px(4.f), max.y), IM_COL32(62, 62, 62, 255),
-                                              IM_COL32(62, 62, 62, 255), IM_COL32(59, 59, 59, 255),
-                                              IM_COL32(59, 59, 59, 255));
+                                              ImVec2(plate_max.x - ui::px(4.f), max.y), plate, plate, plate_bottom,
+                                              plate_bottom);
             }
             const std::string text = ui::strip_mnemonic(LABELS[i]);
             const ImVec2 text_pos(min.x + ui::px(6.f), std::floor(min.y + (height - line) / 2.f) - ui::px(1.f));
-            ui::draw_text(draw, font, theme::FONT_SIZE_SMALL, text_pos, IM_COL32(0xE3, 0xE3, 0xE3, 255), text.c_str());
+            ui::draw_text(draw, font, theme::FONT_SIZE_SMALL, text_pos, label, text.c_str());
             if (underline)
             {
                 const float w = ui::text_size(font, theme::FONT_SIZE_SMALL, text.c_str(), text.c_str() + 1).x;
                 const float y = std::round(text_pos.y + line * 0.86f);
                 draw->AddRectFilled(ImVec2(text_pos.x, y), ImVec2(text_pos.x + std::round(w), y + ui::px(1.f)),
-                                    IM_COL32(0xE3, 0xE3, 0xE3, 255));
+                                    label);
             }
         }
         ImGui::End();
@@ -2876,20 +2910,6 @@ namespace imgit::app
         return state.tab_name.empty() ? repo_display_name(state.repo.workdir()) : state.tab_name;
     }
 
-    namespace
-    {
-        // The key of a repository in the aliases: its path with forward slashes and no trailing one.
-        std::string alias_key(std::string path)
-        {
-            std::replace(path.begin(), path.end(), '\\', '/');
-            while (path.size() > 1 && path.back() == '/')
-            {
-                path.pop_back();
-            }
-            return path;
-        }
-    } // namespace
-
     void Application::set_repo_alias(const std::string& workdir, const std::string& alias)
     {
         const std::string name = trim(alias);
@@ -2943,5 +2963,63 @@ namespace imgit::app
             text += path + '\t' + alias + '\n';
         }
         (void)write_text_file(config_path("aliases.txt"), text);
+    }
+
+    // hidden_refs.txt: "<path>\t<full ref name>" lines.
+    void Application::load_hidden_refs()
+    {
+        m_hidden_refs.clear();
+        std::ifstream file(config_path("hidden_refs.txt"));
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+            const auto tab = line.find('\t');
+            if (tab != std::string::npos && tab > 0 && tab + 1 < line.size())
+            {
+                m_hidden_refs[alias_key(line.substr(0, tab))].insert(line.substr(tab + 1));
+            }
+        }
+    }
+
+    void Application::sync_hidden_refs()
+    {
+        bool changed = false;
+        for (const RepoState* state : repo_states())
+        {
+            const std::string key = alias_key(state->repo.workdir());
+            const auto saved = m_hidden_refs.find(key);
+            if (saved == m_hidden_refs.end() ? state->hidden_refs.empty() : saved->second == state->hidden_refs)
+            {
+                continue;
+            }
+            if (state->hidden_refs.empty())
+            {
+                m_hidden_refs.erase(saved);
+            }
+            else
+            {
+                m_hidden_refs[key] = state->hidden_refs;
+            }
+            changed = true;
+        }
+        if (!changed)
+        {
+            return;
+        }
+        std::string text;
+        for (const auto& [path, refs] : m_hidden_refs)
+        {
+            std::vector<std::string> sorted(refs.begin(), refs.end());
+            std::ranges::sort(sorted);
+            for (const std::string& ref : sorted)
+            {
+                text += path + '\t' + ref + '\n';
+            }
+        }
+        (void)write_text_file(config_path("hidden_refs.txt"), text);
     }
 } // namespace imgit::app

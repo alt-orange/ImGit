@@ -118,7 +118,9 @@ namespace imgit::ui
 
     bool input_text(const char* id, std::string& value, const char* hint = nullptr, ImGuiInputTextFlags flags = 0,
                     float width = -1.f);
-    bool input_multiline(const char* id, std::string& value, const char* hint, ImVec2 size);
+    // `caret_to_end` moves the caret behind the text this frame (pass it with the frame that focuses the field).
+    bool input_multiline(const char* id, std::string& value, const char* hint, ImVec2 size,
+                         bool caret_to_end = false);
     bool checkbox(const char* label, bool* value);
 
     // Uppercase small section header in the secondary colour.

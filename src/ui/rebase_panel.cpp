@@ -488,36 +488,11 @@ namespace imgit::ui
             draw_reword_editor(state, editor_pos);
         }
 
-        // Footer: 10px 20px padding; the shortcuts on the left, the buttons on the right.
+        // Footer: 10px 20px padding; the shortcuts on the left, the buttons on the right. The buttons come first:
+        // in a narrow panel the shortcuts that would run under them are left out.
         {
             const float ftop = origin.y + size.y - px(FOOTER_HEIGHT);
             const float x0 = origin.x + px(PADDING);
-            const ImU32 secondary = theme::u32(p.text_secondary);
-            const ImU32 normal = theme::u32(p.text_normal);
-            const float line1 = ftop + px(12.f);
-            const float line2 = ftop + px(30.f);
-            const float line_h = px(17.f);
-            draw_fa_icon(draw, "far:keyboard", ImVec2(x0 + px(6.75f), line1 + px(8.5f)), px(12.f), secondary, 0.f);
-            line_text(draw, fonts().regular, 12.f, x0 + px(18.5f), line1, line_h, secondary, "shortcuts:");
-            float x = x0;
-            for (const char* word : {"Pick", "Squash", "Reword", "Drop"})
-            {
-                const char first[2] = {word[0], '\0'};
-                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, first);
-                x += text_w(fonts().semibold, 12.f, first);
-                line_text(draw, fonts().regular, 12.f, x, line2, line_h, secondary, word + 1);
-                x += text_w(fonts().regular, 12.f, word + 1) + px(10.f);
-            }
-            for (const auto& [icon, label] : {std::pair{"fas:arrow-up", "Move Up"}, {"fas:arrow-down", "Move Down"}})
-            {
-                const std::string ctrl = shortcut_label("Ctrl + ");
-                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, ctrl.c_str());
-                x += text_w(fonts().semibold, 12.f, ctrl.c_str());
-                draw_fa_icon(draw, icon, ImVec2(x + px(5.25f), line2 + px(8.5f)), px(12.f), normal, 0.f);
-                x += px(10.5f) + px(5.f);
-                line_text(draw, fonts().regular, 12.f, x, line2, line_h, secondary, label);
-                x += text_w(fonts().regular, 12.f, label) + px(10.f);
-            }
 
             const float btop = ftop + px(13.f);
             const float bh = px(31.140625f);
@@ -531,6 +506,52 @@ namespace imgit::ui
             {
                 plan.reset();
                 g_reword.step = -1;
+            }
+            const float buttons_left = right - w;
+            // Toasts stack above the buttons instead of covering them.
+            app.toasts.keep_clear(ImVec2(buttons_left, btop), ImVec2(origin.x + size.x - px(PADDING), btop + bh));
+
+            const float limit = buttons_left - px(10.f);
+            const ImU32 secondary = theme::u32(p.text_secondary);
+            const ImU32 normal = theme::u32(p.text_normal);
+            const float line1 = ftop + px(12.f);
+            const float line2 = ftop + px(30.f);
+            const float line_h = px(17.f);
+            if (x0 + px(18.5f) + text_w(fonts().regular, 12.f, "shortcuts:") <= limit)
+            {
+                draw_fa_icon(draw, "far:keyboard", ImVec2(x0 + px(6.75f), line1 + px(8.5f)), px(12.f), secondary,
+                             0.f);
+                line_text(draw, fonts().regular, 12.f, x0 + px(18.5f), line1, line_h, secondary, "shortcuts:");
+            }
+            float x = x0;
+            for (const char* word : {"Pick", "Squash", "Reword", "Drop"})
+            {
+                const char first[2] = {word[0], '\0'};
+                const float first_w = text_w(fonts().semibold, 12.f, first);
+                const float rest_w = text_w(fonts().regular, 12.f, word + 1);
+                if (x + first_w + rest_w > limit)
+                {
+                    break;
+                }
+                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, first);
+                line_text(draw, fonts().regular, 12.f, x + first_w, line2, line_h, secondary, word + 1);
+                x += first_w + rest_w + px(10.f);
+            }
+            for (const auto& [icon, label] : {std::pair{"fas:arrow-up", "Move Up"}, {"fas:arrow-down", "Move Down"}})
+            {
+                const std::string ctrl = shortcut_label("Ctrl + ");
+                const float ctrl_w = text_w(fonts().semibold, 12.f, ctrl.c_str());
+                const float label_w = text_w(fonts().regular, 12.f, label);
+                if (x + ctrl_w + px(15.5f) + label_w > limit)
+                {
+                    break;
+                }
+                line_text(draw, fonts().semibold, 12.f, x, line2, line_h, normal, ctrl.c_str());
+                x += ctrl_w;
+                draw_fa_icon(draw, icon, ImVec2(x + px(5.25f), line2 + px(8.5f)), px(12.f), normal, 0.f);
+                x += px(10.5f) + px(5.f);
+                line_text(draw, fonts().regular, 12.f, x, line2, line_h, secondary, label);
+                x += label_w + px(10.f);
             }
         }
         ImGui::EndChild();

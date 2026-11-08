@@ -224,6 +224,10 @@ namespace imgit::app
         bool commit_sign = false;
         bool commit_skip_hooks = false;
         std::string commit_template;
+        // The operation (merge, cherry-pick, revert) whose prepared message (MERGE_MSG) the form was filled from.
+        git::RepoState prepared_message_for = git::RepoState::NONE;
+        std::string prepared_summary; // what the form was filled with, cleared again if left as it was
+        std::string prepared_description;
         // The composer's Stash tab (GitKraken's): its own message, stashing every change.
         bool composer_stash = false;
         std::string stash_summary;

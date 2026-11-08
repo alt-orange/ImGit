@@ -1523,12 +1523,13 @@ namespace imgit::git
                 }
                 continue;
             }
-            // Git's history simplification: a commit that leaves the file as one of its parents had it did not
-            // change it (a merge taking one side's version).
+            // A commit that leaves the file as its first parent had it did not change it. Every parent is walked,
+            // so a merge counts only against its first parent (`git log --full-history`): one that took the other
+            // side's version changed the file on this branch and is listed, its diff against the first parent.
             bool treesame = false;
             std::optional<git_oid> first_parent_entry;
             TreeHandle first_parent_tree;
-            for (unsigned i = 0; i < parent_count && !treesame; ++i)
+            for (unsigned i = 0; i < std::min(parent_count, 1u); ++i)
             {
                 CommitHandle parent;
                 TreeHandle parent_tree;
@@ -2713,6 +2714,47 @@ namespace imgit::git
         return value != 0;
     }
 
+    namespace
+    {
+        // A commit message file without its comment lines and surrounding blank lines.
+        std::string read_message_file(const std::filesystem::path& path)
+        {
+            std::ifstream file(path, std::ios::binary);
+            if (!file)
+            {
+                return {};
+            }
+            std::string text;
+            std::string line;
+            while (std::getline(file, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                if (!line.empty() && line.front() == '#')
+                {
+                    continue;
+                }
+                text += line + "\n";
+            }
+            while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
+            {
+                text.pop_back();
+            }
+            while (!text.empty() && text.front() == '\n')
+            {
+                text.erase(text.begin());
+            }
+            return text;
+        }
+    } // namespace
+
+    std::string Repository::prepared_message() const
+    {
+        return read_message_file(std::filesystem::path(git_repository_path(m_repo.get())) / "MERGE_MSG");
+    }
+
     std::string Repository::commit_template() const
     {
         ConfigHandle config;
@@ -2732,34 +2774,7 @@ namespace imgit::git
         {
             path = std::filesystem::path(m_workdir) / path;
         }
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
-        {
-            return {};
-        }
-        std::string text;
-        std::string line;
-        while (std::getline(file, line))
-        {
-            if (!line.empty() && line.back() == '\r')
-            {
-                line.pop_back();
-            }
-            if (!line.empty() && line.front() == '#')
-            {
-                continue;
-            }
-            text += line + "\n";
-        }
-        while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
-        {
-            text.pop_back();
-        }
-        while (!text.empty() && text.front() == '\n')
-        {
-            text.erase(text.begin());
-        }
-        return text;
+        return read_message_file(path);
     }
 
     bool Repository::has_commit_hooks() const
