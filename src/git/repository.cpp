@@ -561,11 +561,16 @@ namespace imgit::git
         git_repository* repo = m_repo.get();
         History history;
         const std::size_t max_commits = options.max_commits;
+        std::unordered_set<std::string> smart; // the refs Smart Branch Visibility keeps, filled once HEAD is read
         const auto walkable = [&](const std::string& full_name)
         {
             if (!options.solo_ref.empty())
             {
                 return full_name == options.solo_ref;
+            }
+            if (options.smart_visibility)
+            {
+                return smart.contains(full_name);
             }
             return !options.hidden_refs.contains(full_name);
         };
@@ -601,6 +606,58 @@ namespace imgit::git
                         history.head_branch = name;
                     }
                 }
+            }
+        }
+
+        if (options.smart_visibility)
+        {
+            const auto exists = [repo](const std::string& full_name)
+            {
+                ReferenceHandle found;
+                return git_reference_lookup(found.out(), repo, full_name.c_str()) == 0;
+            };
+            std::string remote = "origin";
+            if (!history.head_branch.empty())
+            {
+                const std::string local = "refs/heads/" + history.head_branch;
+                smart.insert(local);
+                git_buf upstream = GIT_BUF_INIT;
+                if (git_branch_upstream_name(&upstream, repo, local.c_str()) == 0)
+                {
+                    smart.insert(upstream.ptr);
+                }
+                git_buf_dispose(&upstream);
+                git_buf upstream_remote = GIT_BUF_INIT;
+                if (git_branch_upstream_remote(&upstream_remote, repo, local.c_str()) == 0)
+                {
+                    remote = upstream_remote.ptr;
+                }
+                git_buf_dispose(&upstream_remote);
+            }
+            // The default branch: what the remote's HEAD points at, else a local main or master.
+            std::string target;
+            ReferenceHandle remote_head;
+            if (git_reference_lookup(remote_head.out(), repo, ("refs/remotes/" + remote + "/HEAD").c_str()) == 0
+                && git_reference_type(remote_head) == GIT_REFERENCE_SYMBOLIC)
+            {
+                const std::string prefix = "refs/remotes/" + remote + "/";
+                const std::string symbolic = git_reference_symbolic_target(remote_head);
+                if (symbolic.starts_with(prefix))
+                {
+                    target = symbolic.substr(prefix.size());
+                }
+            }
+            for (const char* fallback : {"main", "master"})
+            {
+                if (target.empty() && exists(std::string("refs/heads/") + fallback))
+                {
+                    target = fallback;
+                }
+            }
+            if (!target.empty())
+            {
+                smart.insert("refs/heads/" + target);
+                smart.insert("refs/remotes/" + remote + "/" + target);
             }
         }
 
@@ -1318,6 +1375,66 @@ namespace imgit::git
         {
             IMGIT_TRY(git_diff_index_to_workdir(diff.out(), repo, index, &opts), "could not diff working directory");
         }
+        return diff_to_file_diff(diff, 0, path);
+    }
+
+    Result<std::vector<FileChange>> Repository::compare_changes(const Sha& sha) const
+    {
+        auto commit = lookup_commit(m_repo.get(), sha);
+        if (!commit)
+        {
+            return std::unexpected(commit.error());
+        }
+        auto tree = commit_tree(*commit);
+        if (!tree)
+        {
+            return std::unexpected(tree.error());
+        }
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+        opts.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS;
+        DiffHandle diff;
+        IMGIT_TRY(git_diff_tree_to_workdir_with_index(diff.out(), m_repo.get(), *tree, &opts),
+                  "could not diff against the working directory");
+        git_diff_find_similar(diff, nullptr);
+        std::vector<FileChange> changes;
+        const std::size_t count = git_diff_num_deltas(diff);
+        changes.reserve(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            changes.push_back(change_from_delta(git_diff_get_delta(diff, i)));
+        }
+        return changes;
+    }
+
+    Result<FileDiff> Repository::compare_file_diff(const Sha& sha, const std::string& path, int context_lines,
+                                                   bool ignore_whitespace) const
+    {
+        auto commit = lookup_commit(m_repo.get(), sha);
+        if (!commit)
+        {
+            return std::unexpected(commit.error());
+        }
+        auto tree = commit_tree(*commit);
+        if (!tree)
+        {
+            return std::unexpected(tree.error());
+        }
+        std::vector<std::string> paths{path};
+        auto c_paths = c_strings(paths);
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+        opts.pathspec.strings = c_paths.data();
+        opts.pathspec.count = c_paths.size();
+        opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH | GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_SHOW_UNTRACKED_CONTENT;
+        if (ignore_whitespace)
+        {
+            opts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
+        }
+        opts.context_lines = static_cast<std::uint32_t>(context_lines);
+        DiffHandle diff;
+        IMGIT_TRY(git_diff_tree_to_workdir_with_index(diff.out(), m_repo.get(), *tree, &opts),
+                  "could not diff against the working directory");
         return diff_to_file_diff(diff, 0, path);
     }
 

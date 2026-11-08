@@ -754,18 +754,19 @@ namespace imgit::ui
             return items;
         }
 
-        MenuItems compare_items(Application& app, RepoState& state, const git::Sha& sha)
+        MenuItems compare_items(RepoState& state, const git::Sha& sha)
         {
             if (state.status.empty())
             {
                 return {};
             }
             return {item("Compare commit against working directory",
-                         [&app, &state, sha]
+                         [&state, sha]
                          {
-                             state.selected = {app::WIP_SHA, sha};
-                             app.toasts.push(app::ToastKind::INFO, "Compare against working directory",
-                                             "Comparing two revisions is not available in ImGit yet.");
+                             // The detail panel shows the comparison while exactly these two rows are selected.
+                             state.select_only(app::WIP_SHA);
+                             state.select(sha, true, false);
+                             state.compare_sha.clear();
                          })};
         }
 
@@ -1297,7 +1298,7 @@ namespace imgit::ui
             return separated_menu({std::move(remote_ops), std::move(merge_items), std::move(checkout),
                                    std::move(worktree), std::move(commit_ops), std::move(rebase_ops),
                                    std::move(branch_ops), std::move(copy_ops),
-                                   std::move(view_ops), compare_items(app, state, sha)});
+                                   std::move(view_ops), compare_items(state, sha)});
         }
 
         // The menu for a commit row or a branch pill.
@@ -1332,7 +1333,7 @@ namespace imgit::ui
             {
                 checkout.push_back(checkout_commit_item(app, state, sha, false));
                 worktree.push_back(worktree_commit_item(app, sha, false));
-                compare = compare_items(app, state, sha);
+                compare = compare_items(state, sha);
             }
             MenuItems commit_ops;
             commit_ops.push_back(create_branch_item(app, sha));
@@ -1964,7 +1965,16 @@ namespace imgit::ui
         if (conflicted)
         {
             ops.push_back(
-                    item("Open in merge tool", placeholder(app, "Merge tool", "No external merge tool is set up.")));
+                    item("Open in merge tool",
+                         [&app, &state, copy]
+                         {
+                             std::string error;
+                             if (!state.open_merge_tool(copy.path, error))
+                             {
+                                 app.toasts.push(app::ToastKind::ERROR, "Could not open the merge tool", error);
+                                 state.open_diff({app::DiffTarget::Source::UNSTAGED, {}, copy.path, copy.status});
+                             }
+                         }));
             ops.push_back(item("Mark resolved",
                                [&app, &state, path]
                                {
@@ -2443,8 +2453,8 @@ namespace imgit::ui
                  fixed_column("Commit message", "message"), column("Author", &s.show_author),
                  column("Date / Time", &s.show_date), column("Sha", &s.show_sha), column("Changes", &s.show_changes)},
                 {menu_checkbox("Compact Graph Column", s.compact_graph, toggle(&s.compact_graph)),
-                 menu_checkbox("Smart Branch Visibility", false,
-                               placeholder(app, "Smart Branch Visibility", "Not available in ImGit yet."))},
+                 menu_checkbox("Smart Branch Visibility", s.smart_branch_visibility,
+                               toggle(&s.smart_branch_visibility))},
                 {item("Reset columns to default layout",
                       [&app]
                       {

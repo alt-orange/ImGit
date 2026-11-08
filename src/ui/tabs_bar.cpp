@@ -597,8 +597,10 @@ namespace imgit::ui
             app.preferences_open = true;
         }
         if (bar_icon("##notifications", Icon::BELL, ImVec2(right - px(57.f), mid), 16.f, bright, "Notifications",
-                     ImGui::IsPopupOpen("##notifications")))
+                     ImGui::IsPopupOpen("##notifications"))
+            || app.notifications_requested)
         {
+            app.notifications_requested = false;
             open_popover("##notifications");
         }
         if (const int unread = app.toasts.unread(); unread > 0)
@@ -614,8 +616,9 @@ namespace imgit::ui
         draw_notifications_popover(app, ImVec2(right - px(57.f) + px(14.f), origin.y + px(31.f)));
         if (bar_icon("##tabs_list", Icon::CHEVRON_DOWN, ImVec2(right - px(90.5f), mid), 16.f, bright,
                      "Tabs list (Ctrl + Shift + A)", ImGui::IsPopupOpen("##tabs_list"))
-            || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_A))
+            || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_A) || app.tabs_list_requested)
         {
+            app.tabs_list_requested = false;
             open_popover("##tabs_list");
         }
         draw_tabs_list_popover(app, ImVec2(right - px(90.5f) + px(14.f), origin.y + px(31.f)));

@@ -495,6 +495,9 @@ namespace imgit::ui
 
         void draw_file_tree(FileListContext& ctx, const FileNode& node, int depth, const std::string& prefix)
         {
+            // A commit's files and a commit compared against the working directory: no staging actions.
+            const bool commit_side = ctx.source == app::DiffTarget::Source::COMMIT
+                                     || ctx.source == app::DiffTarget::Source::COMPARE;
             for (const FileNode* sorted : sorted_children(node, ctx.app->settings.file_sort))
             {
                 const FileNode& child = *sorted;
@@ -505,8 +508,7 @@ namespace imgit::ui
                                         && ctx.state->diff_target->path == change.path;
                     const FileRowResult row =
                             file_row(change.path.c_str(), change, child.name, ctx.width, depth, ctx.action_tip,
-                                     ctx.action_icon, ctx.secondary_tip, ctx.secondary_icon, active,
-                                     ctx.source != app::DiffTarget::Source::COMMIT);
+                                     ctx.action_icon, ctx.secondary_tip, ctx.secondary_icon, active, !commit_side);
                     if (row.clicked)
                     {
                         // A conflicted file opens in the merge tool (its plain diff when its sides cannot be read).
@@ -533,7 +535,7 @@ namespace imgit::ui
                     }
                     if (row.right_clicked)
                     {
-                        if (ctx.source == app::DiffTarget::Source::COMMIT)
+                        if (commit_side)
                         {
                             popup_menu(commit_file_menu(*ctx.app, *ctx.state, ctx.sha, change));
                         }
@@ -552,8 +554,7 @@ namespace imgit::ui
                     std::vector<std::string> files;
                     collect_paths(child, files);
                     popup_menu(folder_menu(*ctx.app, *ctx.state, child.path, std::move(files),
-                                           ctx.source == app::DiffTarget::Source::STAGED,
-                                           ctx.source != app::DiffTarget::Source::COMMIT));
+                                           ctx.source == app::DiffTarget::Source::STAGED, !commit_side));
                 }
                 if (open)
                 {
@@ -1772,6 +1773,54 @@ namespace imgit::ui
             finish();
         }
 
+        // The WIP row and one commit selected (Compare commit against working directory): the files that differ
+        // between that commit and the working directory; clicking one opens its diff.
+        void draw_compare_panel(app::Application& app, app::RepoState& state, const git::Commit& commit, ImVec2 size)
+        {
+            const theme::Palette& p = theme::palette();
+            if (state.compare_sha != commit.sha)
+            {
+                state.load_compare_files(commit.sha);
+            }
+            ImGui::BeginChild("##compare_detail", size);
+            ImGui::Dummy(ImVec2(0.f, px(8.f)));
+            ImGui::Indent(px(12.f));
+            push_font(fonts().semibold, theme::FONT_SIZE_NORMAL + 1.f);
+            ImGui::TextUnformatted("Comparing against the working directory");
+            ImGui::PopFont();
+            push_font(fonts().regular, theme::FONT_SIZE_ROW);
+            ImGui::PushStyleColor(ImGuiCol_Text, p.text_secondary);
+            push_font(fonts().mono, theme::FONT_SIZE_ROW);
+            ImGui::TextUnformatted(git::short_sha(commit.sha).c_str());
+            ImGui::PopFont();
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextUnformatted(commit.summary.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, p.text_secondary);
+            if (!state.compare_error.empty())
+            {
+                ImGui::TextWrapped("%s", state.compare_error.c_str());
+            }
+            else
+            {
+                ImGui::Text("%zu %s differ", state.compare_files.size(),
+                            state.compare_files.size() == 1 ? "file" : "files");
+            }
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::Unindent(px(12.f));
+            ImGui::Dummy(ImVec2(0.f, px(6.f)));
+            const float width = ImGui::GetContentRegionAvail().x;
+            FileNode root = build_tree(state.compare_files, state.tree_view);
+            FileListContext ctx{&app,         &state,  width,   app::DiffTarget::Source::COMPARE,
+                                commit.sha,   nullptr, Icon::PLUS, nullptr,
+                                Icon::PLUS,   {},      {}};
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+            draw_file_tree(ctx, root, 1, "compare:");
+            ImGui::PopStyleVar();
+            ImGui::EndChild();
+        }
+
         void draw_multi_panel(app::RepoState& state, ImVec2 size)
         {
             const theme::Palette& p = theme::palette();
@@ -1863,7 +1912,17 @@ namespace imgit::ui
         ImGui::SetCursorScreenPos(ImVec2(origin.x + 1.f, origin.y));
         const ImVec2 inner(size.x - 1.f, size.y);
 
-        if (state.selected.size() > 1)
+        const git::Commit* compared = nullptr;
+        if (state.selected.size() == 2 && std::ranges::find(state.selected, app::WIP_SHA) != state.selected.end())
+        {
+            compared = state.commit_for(state.selected[0] == app::WIP_SHA ? state.selected[1] : state.selected[0]);
+        }
+        if (compared != nullptr
+            && (compared->type == git::NodeType::COMMIT || compared->type == git::NodeType::MERGE))
+        {
+            draw_compare_panel(app, state, *compared, inner);
+        }
+        else if (state.selected.size() > 1)
         {
             draw_multi_panel(state, inner);
         }

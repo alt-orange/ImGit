@@ -116,6 +116,9 @@ namespace imgit::git
         std::size_t max_commits = 2000;
         std::unordered_set<std::string> hidden_refs; // full names
         std::string solo_ref; // full name, "" for none
+        // Walk only HEAD's branch, its upstream and the default branch (origin/HEAD's target, else main / master,
+        // locally and on the remote); a solo ref wins.
+        bool smart_visibility = false;
     };
 
     enum class FileStatus

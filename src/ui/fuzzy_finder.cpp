@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -18,7 +19,8 @@
 // The command palette (.fuzzy-finder): a modal 82px below the top, 600px wide, with a 38px react-select
 // control (2px #4D88FF border + 1px ring) over a 200px list of 40px rows. Its commands are in
 // alphabetical order; choosing Checkout / Open Repo / a stash command / Switch to Profile lists the branches /
-// repositories / stashes / profiles next. Commands ImGit does not implement say so.
+// repositories / stashes / profiles next; the file commands (Blame, History, View / Edit / Open / Delete File, the
+// external diff tool) list the repository's files.
 namespace imgit::ui
 {
     namespace
@@ -39,8 +41,146 @@ namespace imgit::ui
             STASH_POP,
             SWITCH_PROFILE,
             SWITCH_THEME,
+            FILE,
         };
         Stage g_stage = Stage::COMMANDS;
+        // What the FILE stage does with the file picked.
+        enum class FileAction
+        {
+            BLAME,
+            HISTORY,
+            VIEW,
+            EDIT,
+            OPEN,
+            DELETE,
+            EXTERNAL_DIFF,
+        };
+        FileAction g_file_action = FileAction::VIEW;
+        // The FILE stage lists at most this many matches (the rows are drawn every frame).
+        constexpr std::size_t MAX_FILE_MATCHES = 200;
+
+        // The repository's files: HEAD's tree plus the working directory's new files, sorted; read again when HEAD
+        // or the status changes.
+        const std::vector<std::string>& repository_files(app::RepoState& state)
+        {
+            static std::string key;
+            static std::vector<std::string> files;
+            std::string now = state.repo.workdir() + "|" + state.history.head_sha + "|"
+                              + std::to_string(state.status.count());
+            if (now == key)
+            {
+                return files;
+            }
+            key = std::move(now);
+            files.clear();
+            if (!state.history.head_sha.empty())
+            {
+                if (auto tree = state.repo.commit_tree_paths(state.history.head_sha))
+                {
+                    files = std::move(*tree);
+                }
+            }
+            for (const auto* list : {&state.status.unstaged, &state.status.staged, &state.status.conflicted})
+            {
+                for (const git::FileChange& change : *list)
+                {
+                    files.push_back(change.path);
+                }
+            }
+            std::sort(files.begin(), files.end());
+            files.erase(std::unique(files.begin(), files.end()), files.end());
+            return files;
+        }
+
+        // The working directory's change of `path` (`staged` set when it is in the index), nullptr when it has none.
+        const git::FileChange* workdir_change(const app::RepoState& state, const std::string& path, bool& staged)
+        {
+            for (const auto* list : {&state.status.conflicted, &state.status.unstaged, &state.status.staged})
+            {
+                for (const git::FileChange& change : *list)
+                {
+                    if (change.path == path)
+                    {
+                        staged = list == &state.status.staged;
+                        return &change;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        void run_file_action(app::Application& app, app::RepoState& state, const std::string& path)
+        {
+            bool staged = false;
+            const git::FileChange* change = workdir_change(state, path, staged);
+            switch (g_file_action)
+            {
+            case FileAction::BLAME:
+            case FileAction::HISTORY:
+                state.open_file_history(path, {}, {}, g_file_action == FileAction::BLAME);
+                break;
+            case FileAction::VIEW:
+                if (change != nullptr)
+                {
+                    state.open_diff({staged ? app::DiffTarget::Source::STAGED : app::DiffTarget::Source::UNSTAGED, {},
+                                     path, change->status});
+                    state.file_view = true;
+                }
+                else
+                {
+                    state.open_file_history(path, {}, {}, false);
+                }
+                break;
+            case FileAction::EDIT:
+                open_file_editor(app, state, path);
+                break;
+            case FileAction::OPEN:
+                platform::shell::open_path((std::filesystem::path(state.repo.workdir()) / path).string());
+                break;
+            case FileAction::DELETE:
+                app.dialog.open(app::Dialog::Kind::CONFIRM);
+                app.dialog.workdir = state.repo.workdir();
+                app.dialog.title = "Delete file";
+                app.dialog.message = "Delete '" + path + "' from the working directory? A committed file can be "
+                                     "brought back by discarding the deletion.";
+                app.dialog.confirm_label = "Delete";
+                app.dialog.danger = true;
+                app.dialog.on_confirm = [&app, &state, path]
+                {
+                    std::error_code error;
+                    std::filesystem::remove(std::filesystem::path(state.repo.workdir()) / path, error);
+                    if (error)
+                    {
+                        app.toasts.push(app::ToastKind::ERROR, "Could not delete " + path, error.message());
+                        return;
+                    }
+                    state.refresh_status();
+                };
+                break;
+            case FileAction::EXTERNAL_DIFF:
+                if (change != nullptr && change->status == git::FileStatus::CONFLICTED)
+                {
+                    app.run_git_cli(state, "External merge tool", {"mergetool", "--no-prompt", "--", path});
+                }
+                else if (change != nullptr)
+                {
+                    std::vector<std::string> args{"difftool", "-y"};
+                    if (staged)
+                    {
+                        args.push_back("--cached");
+                    }
+                    args.push_back("--");
+                    args.push_back(path);
+                    app.run_git_cli(state, "Open in diff tool", args, true);
+                }
+                else
+                {
+                    app.toasts.push(app::ToastKind::INFO, "No changes in " + path,
+                                    "The external diff tool opens files with uncommitted changes.");
+                }
+                break;
+            }
+        }
         bool g_was_open = false; // open on the previous frame
 
         std::vector<Entry> build_entries(app::Application& app, app::RepoState* state)
@@ -50,18 +190,27 @@ namespace imgit::ui
             {
                 entries.push_back({std::move(label), std::move(action)});
             };
-            const auto later = [&app](std::string what)
-            {
-                return [&app, what]
-                {
-                    app.toasts.push(app::ToastKind::INFO, what, "Not available in ImGit yet.");
-                };
-            };
             const auto next = [&app](Stage stage)
             {
                 return [&app, stage]
                 {
                     g_stage = stage;
+                    app.fuzzy.text.clear();
+                    app.fuzzy.selected = 0;
+                    app.fuzzy.open = true;
+                    app.fuzzy.focus_requested = true;
+                };
+            };
+            const auto pick_file = [&app, state](FileAction action) -> std::function<void()>
+            {
+                return [&app, state, action]
+                {
+                    if (state == nullptr)
+                    {
+                        return;
+                    }
+                    g_file_action = action;
+                    g_stage = Stage::FILE;
                     app.fuzzy.text.clear();
                     app.fuzzy.selected = 0;
                     app.fuzzy.open = true;
@@ -93,6 +242,18 @@ namespace imgit::ui
                                 checkout_ref(app, *s, copy);
                             });
                     }
+                }
+                return entries;
+            }
+            if (g_stage == Stage::FILE && s != nullptr)
+            {
+                for (const std::string& path : repository_files(*s))
+                {
+                    add(path,
+                        [&app, s, path]
+                        {
+                            run_file_action(app, *s, path);
+                        });
                 }
                 return entries;
             }
@@ -164,7 +325,11 @@ namespace imgit::ui
                 return entries;
             }
 
-            add("Activity Logs", later("Activity Logs"));
+            add("Activity Logs",
+                [&app]
+                {
+                    app.notifications_requested = true;
+                });
             add("Add Remote", with_repo(
                                       [&app](app::RepoState&)
                                       {
@@ -178,7 +343,7 @@ namespace imgit::ui
                                                app.run_git_cli(r, "Apply patch", {"apply", *file});
                                            }
                                        }));
-            add("Blame", later("File Blame"));
+            add("Blame", pick_file(FileAction::BLAME));
             add("Checkout", next(Stage::CHECKOUT));
             add("Clone",
                 [&app]
@@ -222,7 +387,11 @@ namespace imgit::ui
                                              app.dialog.flag = true;
                                              app.dialog.sha = r.history.head_sha;
                                          }));
-            add("Create File", later("Create File"));
+            add("Create File", with_repo(
+                                       [&app](app::RepoState&)
+                                       {
+                                           app.dialog.open(app::Dialog::Kind::CREATE_FILE);
+                                       }));
             add("Create Tag", with_repo(
                                       [&app](app::RepoState& r)
                                       {
@@ -249,19 +418,19 @@ namespace imgit::ui
                 {
                     app.set_zoom(app.settings.zoom - 0.1f);
                 });
-            add("Delete File", later("Delete File"));
+            add("Delete File", pick_file(FileAction::DELETE));
             add("Discard all changes",
                 [&app]
                 {
                     app.dialog.open(app::Dialog::Kind::DISCARD_ALL);
                 });
-            add("Edit File", later("Edit File"));
+            add("Edit File", pick_file(FileAction::EDIT));
             add("Fetch All", with_repo(
                                      [&app](app::RepoState& r)
                                      {
                                          app.run_git_cli(r, "Fetch", {"fetch", "--all", "--prune"});
                                      }));
-            add("History", later("File History"));
+            add("History", pick_file(FileAction::HISTORY));
             add("Increase Zoom",
                 [&app]
                 {
@@ -282,14 +451,14 @@ namespace imgit::ui
                 {
                     app.dialog.open(app::Dialog::Kind::KEYBOARD_SHORTCUTS);
                 });
-            add("Open File", later("Open File"));
+            add("Open File", pick_file(FileAction::OPEN));
             add("Open Repo", next(Stage::OPEN_REPO));
             add("Open Repository Management Tab",
                 [&app]
                 {
                     app.repo_management_open = true;
                 });
-            add("Open in External Diff/Merge Tool", later("External diff / merge tool"));
+            add("Open in External Diff/Merge Tool", pick_file(FileAction::EXTERNAL_DIFF));
             add("Open in VS Code", with_repo(
                                            [](app::RepoState& r)
                                            {
@@ -417,9 +586,7 @@ namespace imgit::ui
                                                                return r.repo.unstage_all();
                                                            });
                                                }));
-            add("View Error Logs", later("Error logs"));
-            add("View File", later("View File"));
-            add("View Performance Logs", later("Performance logs"));
+            add("View File", pick_file(FileAction::VIEW));
             add("View Working Directory Changes", with_repo(
                                                           [](app::RepoState& r)
                                                           {
@@ -444,6 +611,8 @@ namespace imgit::ui
                 return "Search for a profile to switch to";
             case Stage::SWITCH_THEME:
                 return "Search for a theme to switch to";
+            case Stage::FILE:
+                return "Select a file";
             default:
                 return "Search for commands and actions (e.g., Open Repo)";
             }
@@ -496,6 +665,10 @@ namespace imgit::ui
                              {
                                  return a->score > b->score;
                              });
+        }
+        if (g_stage == Stage::FILE && matches.size() > MAX_FILE_MATCHES)
+        {
+            matches.resize(MAX_FILE_MATCHES); // type to narrow the list
         }
         finder.selected = matches.empty() ? 0 : std::clamp(finder.selected, 0, static_cast<int>(matches.size()) - 1);
 

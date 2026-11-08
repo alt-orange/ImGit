@@ -102,6 +102,16 @@ namespace imgit::ui
             }
         }
 
+    } // namespace
+
+    std::vector<std::string> favorite_repositories(app::Application& app)
+    {
+        const std::set<std::string> favorites = load_favorites(app);
+        return {favorites.begin(), favorites.end()};
+    }
+
+    namespace
+    {
         float css_y(float size, float box_top)
         {
             const float ascent = size * 2189.f / 2048.f * dpi_scale();

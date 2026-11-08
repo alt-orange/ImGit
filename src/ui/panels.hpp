@@ -31,6 +31,8 @@ namespace imgit::ui
     void draw_tabs_bar(app::Application& app);
     void draw_new_tab_view(app::Application& app, ImVec2 size);
     void draw_repo_management(app::Application& app, ImVec2 size);
+    // The favourite repositories (starred in Repository Management), in the order it lists them.
+    [[nodiscard]] std::vector<std::string> favorite_repositories(app::Application& app);
     // A repository's branch / ahead-behind / WIP summary, read once in the background; nullptr until ready.
     [[nodiscard]] const git::RepoSummary* repo_summary(const std::string& path);
     void draw_toolbar(app::Application& app, app::RepoState& state);

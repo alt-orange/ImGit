@@ -188,6 +188,10 @@ namespace imgit::app
             {
                 compact_graph = truthy;
             }
+            else if (key == "smart_branch_visibility")
+            {
+                smart_branch_visibility = truthy;
+            }
             else if (key == "zoom")
             {
                 zoom = std::clamp(finite_or(value, zoom), 0.5f, 2.f);
@@ -348,6 +352,7 @@ namespace imgit::app
              << "remember_tabs=" << remember_tabs << '\n'
              << "push_after_commit=" << push_after_commit << '\n'
              << "compact_graph=" << compact_graph << '\n'
+             << "smart_branch_visibility=" << smart_branch_visibility << '\n'
              << "syntax_highlighting=" << syntax_highlighting << '\n'
              << "word_wrap=" << word_wrap << '\n'
              << "diff_whitespace=" << diff_whitespace << '\n'
@@ -1398,6 +1403,13 @@ namespace imgit::app
             {
                 repo_management_open = true;
             }
+            for (int i = 0; i < 9; ++i)
+            {
+                if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | (ImGuiKey_1 + i)))
+                {
+                    open_favorite_repository(i);
+                }
+            }
             if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_T))
             {
                 active_tab = -1;
@@ -1607,6 +1619,12 @@ namespace imgit::app
             state.diff_whitespace = settings.diff_whitespace;
             state.reload_diff();
         }
+        // So is Smart Branch Visibility; the graph reloads when it changes.
+        if (state.smart_branch_visibility != settings.smart_branch_visibility)
+        {
+            state.smart_branch_visibility = settings.smart_branch_visibility;
+            state.refresh();
+        }
         // The merge tool and the File History view take the whole tab.
         if (state.merge_tool)
         {
@@ -1753,14 +1771,6 @@ namespace imgit::app
             result.type = ui::MenuItem::Type::CHECKBOX;
             return result;
         };
-        const auto placeholder = [this](const char* what) -> std::function<void()>
-        {
-            return [this, what]
-            {
-                toasts.push(ToastKind::INFO, what,
-                            "Not available in ImGit yet.");
-            };
-        };
         const auto send_chord = [](ImGuiKey key) -> std::function<void()>
         {
             return [key]
@@ -1845,7 +1855,6 @@ namespace imgit::app
                           {
                               toasts.push(ToastKind::INFO, "ImGit is up to date");
                           }),
-                     item("Sign Out", "", placeholder("Sign Out")),
                      item("E&xit", "Alt+F4",
                           [this]
                           {
@@ -1905,7 +1914,11 @@ namespace imgit::app
                           {
                               select_adjacent_tab(-1);
                           }),
-                     item("Open Tabs List", "Ctrl+Shift+A", placeholder("Open Tabs List"))},
+                     item("Open Tabs List", "Ctrl+Shift+A",
+                          [this]
+                          {
+                              tabs_list_requested = true;
+                          })},
                     std::move(numbered),
             });
 
@@ -1961,7 +1974,11 @@ namespace imgit::app
             ui::MenuItems favorites;
             for (int i = 1; i <= 9; ++i)
             {
-                ui::MenuItem open = item("", "", placeholder("Favorite repositories"));
+                ui::MenuItem open = item("", "",
+                                         [this, i]
+                                         {
+                                             open_favorite_repository(i - 1);
+                                         });
                 open.label = "Open Favorite Repo " + std::to_string(i);
                 open.accelerator = "Alt+Ctrl+" + std::to_string(i);
                 favorites.push_back(std::move(open));
@@ -2324,6 +2341,18 @@ namespace imgit::app
             terminal.focus_requested = true;
         }
         ImGui::EndChild();
+    }
+
+    void Application::open_favorite_repository(int index)
+    {
+        const std::vector<std::string> favorites = ui::favorite_repositories(*this);
+        if (index < 0 || index >= static_cast<int>(favorites.size()))
+        {
+            toasts.push(ToastKind::INFO, "No favorite repository " + std::to_string(index + 1),
+                        "Star repositories in Repository Management (Alt+Ctrl+O) to open them with Alt+Ctrl+1 to 9.");
+            return;
+        }
+        open_repository(favorites[static_cast<std::size_t>(index)]);
     }
 
     void Application::load_recent()

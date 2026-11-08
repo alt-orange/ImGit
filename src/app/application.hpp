@@ -36,6 +36,8 @@ namespace imgit::app
         bool remember_tabs = true;
         bool push_after_commit = false;
         bool compact_graph = false;
+        // The graph shows only the checked-out branch, its upstream and the default branch (unless a ref is soloed).
+        bool smart_branch_visibility = false;
         bool syntax_highlighting = true; // the diff and merge editors colour code by its language
         bool word_wrap = false; // the diff / file view wraps long lines (Preferences → Editor, the toolbar toggle)
         // The diff view's whitespace toggle: on, changes in whitespace only are shown and the whitespace of changed
@@ -225,6 +227,11 @@ namespace imgit::app
         int active_tab = -1; // -1: the "New Tab" page
         bool new_tab_open = false; // the "+" button's "New Tab" entry in the tabs bar
         bool repo_management_open = false; // the tabs bar folder's Repository Management view
+        // Popovers of the tabs bar asked for from elsewhere (a menu, the command palette); opened on its next draw.
+        bool tabs_list_requested = false;
+        bool notifications_requested = false;
+        // Opens the `index`th (0-based) favourite repository, in Repository Management's order.
+        void open_favorite_repository(int index);
         Toasts toasts;
         Dialog dialog;
         ProfileDialog profile_dialog;

@@ -27,9 +27,10 @@ namespace imgit::app
             COMMIT,
             STAGED,
             UNSTAGED,
+            COMPARE, // commit `sha` against the working directory
         };
         Source source = Source::COMMIT;
-        git::Sha sha; // COMMIT
+        git::Sha sha; // COMMIT, COMPARE
         std::string path;
         git::FileStatus status = git::FileStatus::UNKNOWN;
     };
@@ -148,6 +149,7 @@ namespace imgit::app
         std::size_t commit_limit = 2000;
         std::unordered_set<std::string> hidden_refs; // full names
         std::string solo_ref;
+        bool smart_branch_visibility = false; // Settings::smart_branch_visibility, as the history was loaded
 
         // Graph selection (ordered by click) and keyboard focus.
         std::vector<git::Sha> selected;
@@ -168,6 +170,12 @@ namespace imgit::app
         git::Sha files_for_sha;
         std::vector<git::FileChange> commit_files;
         std::string commit_files_error;
+        // A commit compared against the working directory (the WIP row and that commit selected); reloaded with
+        // the status.
+        git::Sha compare_sha;
+        std::vector<git::FileChange> compare_files;
+        std::string compare_error;
+        void load_compare_files(const git::Sha& sha);
         std::optional<DiffTarget> diff_target;
         std::optional<MergeTool> merge_tool; // a conflicted file being resolved
         std::optional<FileHistoryView> file_history; // open over the tab

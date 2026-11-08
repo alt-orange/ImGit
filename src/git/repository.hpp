@@ -93,6 +93,11 @@ namespace imgit::git
                                                         int context_lines = 3, bool ignore_whitespace = false) const;
         [[nodiscard]] Result<FileDiff> workdir_file_diff(const std::string& path, bool staged,
                                                          int context_lines = 3, bool ignore_whitespace = false) const;
+        // Commit `sha` against the working directory (staged and unstaged changes, untracked files included): the
+        // files that differ, and one file's diff.
+        [[nodiscard]] Result<std::vector<FileChange>> compare_changes(const Sha& sha) const;
+        [[nodiscard]] Result<FileDiff> compare_file_diff(const Sha& sha, const std::string& path,
+                                                         int context_lines = 3, bool ignore_whitespace = false) const;
         // The commits from `from` (HEAD when empty) that changed `path`, newest first, following the file across
         // renames; `max_commits` caps the walk (has_more when it stopped there).
         [[nodiscard]] Result<FileHistory> file_history(const std::string& path, const Sha& from = {},

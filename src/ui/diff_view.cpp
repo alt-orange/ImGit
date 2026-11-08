@@ -701,7 +701,9 @@ namespace imgit::ui
         ImGui::BeginChild("##diff_view", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const app::DiffTarget target = *state.diff_target;
-        const bool commit_diff = target.source == app::DiffTarget::Source::COMMIT;
+        // A commit's diff or one compared against the working directory: nothing to stage.
+        const bool commit_diff = target.source == app::DiffTarget::Source::COMMIT
+                                 || target.source == app::DiffTarget::Source::COMPARE;
         draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), theme::u32(p.app_bg0));
         // Line staging: the picked lines belong to the diff they were picked in.
         const std::uint64_t diff_revision = state.diff ? state.diff->revision : 0;

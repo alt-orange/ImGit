@@ -17,7 +17,7 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Menu bar File / Edit / View / Help | ✅ | Open / Clone / Init, external editor / terminal / file manager, Undo / Redo, panels, zoom, shortcuts, about |
+| Menu bar File / Edit / View / Help | ✅ | Open / Clone / Init, external editor / terminal / file manager, Undo / Redo, panels, zoom, shortcuts, about; View → Open Tabs List, and Favorites → Open Favorite Repo 1 to 9 (Alt+Ctrl+1 to 9, the starred repositories in Repository Management's order). ImGit has no accounts, so there is no Sign Out |
 | Tabs bar: folder, repo tabs, + / New Tab, tabs list, bell, gear, profile | ✅ | Tabs list, notifications (toast history with the All / Read / Unread filter, read on close or by the eye) and profile popovers |
 | New Tab page | ✅ | Open / Clone / Create, search, Recent |
 | Repository Management view | ✅ | Open / Favorites / Recent sections with branch, ahead / behind and WIP summaries |
@@ -71,6 +71,7 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Lazy loading / "Show more commits" | ✅ | |
 | Timeline markers | 🟡 | A line and an age label ("1 hour ago", "yesterday", "3 weeks ago"...) on the first row past each age step |
 | Scroll markers for HEAD / branches | ✅ | On the rows' scrollbar: HEAD a full-width accent bar, local branches a tick in their lane colour (remote ones fainter), the selected commits a thin bar |
+| Smart Branch Visibility | ✅ | Graph header menu: the graph walks only the checked-out branch, its upstream and the default branch (the remote's HEAD, else main / master, local and remote); a soloed ref still wins. Saved in the settings |
 | Compact graph mode | ✅ | 20px rows, 14px lanes, plain 10px dots without avatars and 16px ref pills (header menu → Compact Graph Column) |
 | Pin branch to left | ✅ | Context menu |
 
@@ -86,6 +87,7 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Commit details: working-directory banner, commit sha, message view, author, parent, co-authors, change summary, Path / Tree, View all files | ✅ | View all files lists every file of the commit's tree (libgit2 tree walk): the changes with their status, the rest with a plain file icon; clicking an unchanged file shows it as the commit left it (File History view) |
 | Commit message height resize (row-resize handle, saved) and click-to-amend HEAD's message (Update Message / Cancel Amend) | ✅ | Rewording older commits from the detail panel is not done |
 | Multi-select summary | ✅ | |
+| Compare a commit against the working directory | ✅ | The commit menu's Compare commit against working directory, or the WIP row and one commit selected together: the files that differ (staged, unstaged and new files included), each opening its diff (commit → working directory) |
 | File view: whole-file inline diff, split view, hunk view, file view, change navigation, overview rulers, stage / unstage from the header | ✅ | |
 | File history | ✅ | Blame / History in the file view's toolbar, File History / File Blame in the file menus: the commits that changed the file (libgit2 walk, renames followed) down the left, the file as the selected commit left it or its diff on the right, Esc or the cross closes it |
 | Blame | ✅ | The file view in the File History view: each line's commit in the gutter (the author's avatar at each run's first line, a bar in the commit's colour); the Blame toggle adds the commit's summary and date; clicking the gutter selects that commit; hovering it shows the commit |
@@ -116,14 +118,14 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Undo / Redo | ✅ | checkout, commit, branch / tag create / delete / rename, reset, stash, merge, cherry pick, revert, squash, drop, rebase; uncommitted changes are auto-stashed around undo |
 | Abort in-progress merge / rebase / cherry-pick | 🟡 | Toolbar banner |
 | Worktree create / remove | ✅ | Create worktree from a branch (a remote one through a local branch tracking it) or a commit (detached): a dialog asks for the folder, `git worktree add` runs; Remove / Remove and discard its changes (`git worktree remove [--force]`) from the worktree's row |
-| Submodule add / update | ⬜ | |
+| Submodule add / update | ✅ | Add Submodule panel from the SUBMODULES section; Update / Initialize in the Edit Submodule panel |
 | Patch files | ✅ | Create patch from commits, apply patch |
 
 ## Other
 
 | Feature | Status | Notes |
 |---|---|---|
-| Command palette (Ctrl+P) | ✅ | Unsupported commands are placeholders |
+| Command palette (Ctrl+P) | ✅ | Every command works. Blame, History, View / Edit / Open / Delete File and Open in External Diff/Merge Tool list the repository's files (HEAD's tree plus new files) to pick from; Activity Logs opens the notification history; Create File asks for a name |
 | Toasts | ✅ | Bottom-left cards |
 | Confirmations | ✅ | The prompt bar over the toolbar |
 | Preferences | ✅ | General, UI Customization and Commit options drive ImGit's settings, LFS and sparse checkout run git, the rest are stored |

@@ -101,6 +101,7 @@ namespace imgit::app
         options.max_commits = commit_limit;
         options.hidden_refs = hidden_refs;
         options.solo_ref = solo_ref;
+        options.smart_visibility = smart_branch_visibility;
         auto loaded = repo.load_history(options);
         if (!loaded)
         {
@@ -216,6 +217,10 @@ namespace imgit::app
         if (changed && diff_target && diff_target->source != DiffTarget::Source::COMMIT)
         {
             reload_diff();
+        }
+        if (changed)
+        {
+            compare_sha.clear(); // the comparison against the working directory is read again
         }
     }
 
@@ -343,6 +348,25 @@ namespace imgit::app
         }
     }
 
+    void RepoState::load_compare_files(const git::Sha& sha)
+    {
+        compare_sha = sha;
+        compare_files.clear();
+        compare_error.clear();
+        auto files = repo.compare_changes(sha);
+        if (!files)
+        {
+            compare_error = files.error().message;
+            return;
+        }
+        compare_files = std::move(*files);
+        std::sort(compare_files.begin(), compare_files.end(),
+                  [](const git::FileChange& a, const git::FileChange& b)
+                  {
+                      return a.path < b.path;
+                  });
+    }
+
     bool RepoState::open_merge_tool(const std::string& path, std::string& error)
     {
         auto sides = repo.conflict_sides(path);
@@ -410,6 +434,9 @@ namespace imgit::app
             break;
         case DiffTarget::Source::UNSTAGED:
             loaded = repo.workdir_file_diff(diff_target->path, false, context, ignore_whitespace);
+            break;
+        case DiffTarget::Source::COMPARE:
+            loaded = repo.compare_file_diff(diff_target->sha, diff_target->path, context, ignore_whitespace);
             break;
         }
         if (!loaded)
