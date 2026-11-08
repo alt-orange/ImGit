@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 #include "app/theme.hpp"
+#include "platform/process.hpp"
 #include "platform/shell.hpp"
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
@@ -112,6 +113,70 @@ namespace imgit::ui
 
     namespace
     {
+        // Runs `git <args>` in each of `paths` one after another in the background, then says how it went; the
+        // repositories' summaries (ahead / behind) are read again.
+        void run_in_repositories(app::Application& app, const std::string& title, std::vector<std::string> paths,
+                                 std::vector<std::string> args)
+        {
+            if (paths.empty())
+            {
+                return;
+            }
+            const std::string tag = "repositories:" + title;
+            if (app.background_running(tag))
+            {
+                app.toasts.push(app::ToastKind::INFO, title + " is already running");
+                return;
+            }
+            app.run_in_background(
+                    tag,
+                    [&app, title, paths = std::move(paths), args = std::move(args)]() -> std::function<void()>
+                    {
+                        std::vector<std::string> failed;
+                        for (const std::string& path : paths)
+                        {
+                            if (git::cli::run(path, args).exit_code != 0)
+                            {
+                                failed.push_back(repo_name(path));
+                            }
+                        }
+                        return [&app, title, count = paths.size(), failed = std::move(failed)]
+                        {
+                            // Summaries still being read stay; the rest are read again when next drawn.
+                            std::erase_if(g_summaries,
+                                          [](const auto& entry)
+                                          {
+                                              return entry.second.future.wait_for(std::chrono::seconds(0))
+                                                     == std::future_status::ready;
+                                          });
+                            if (failed.empty())
+                            {
+                                app.toasts.push(app::ToastKind::SUCCESS,
+                                                title + ": " + std::to_string(count)
+                                                        + (count == 1 ? " repository" : " repositories"));
+                                return;
+                            }
+                            std::string names;
+                            for (const std::string& name : failed)
+                            {
+                                names += (names.empty() ? "" : ", ") + name;
+                            }
+                            app.toasts.push(app::ToastKind::ERROR, title + " failed in " + std::to_string(failed.size())
+                                                                           + " of " + std::to_string(count),
+                                            names);
+                        };
+                    });
+        }
+
+        // Opens `path` in another ImGit window (a second instance started on it).
+        void open_in_new_window(app::Application& app, const std::string& path)
+        {
+            if (!platform::spawn_detached({platform::executable_path(), path}))
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not open a new window", path);
+            }
+        }
+
         float css_y(float size, float box_top)
         {
             const float ascent = size * 2189.f / 2048.f * dpi_scale();
@@ -395,30 +460,109 @@ namespace imgit::ui
                 draw_text(draw, fonts().regular, 12.f, ImVec2(bx + px(6.f), css_y(12.f, y + px(13.4f))),
                           theme::u32(p.text_secondary), count.c_str());
             }
-            // Section tools: "Close all tabs" / "Remove all", then the 24px icon buttons.
+            // Section tools: "Close all tabs" / "Remove all", then the 24px icon buttons: Fetch all, Pull all ▾,
+            // Open all in tabs and the section's menu.
             {
-                float tx = hmax.x - px(13.f) - px(24.f);
-                ImGui::SetCursorScreenPos(ImVec2(tx, y + px(10.f)));
-                if (ImGui::InvisibleButton("##menu", ImVec2(px(24.f), px(24.f))))
+                const std::vector<std::string> paths = section.paths;
+                const bool any = !paths.empty();
+                const auto tool = [&](const char* id, float x, float w, const char* tip, bool enabled) -> bool
                 {
-                    app.toasts.push(app::ToastKind::INFO, section.name,
-                                    "Section options are not available in ImGit yet.");
+                    ImGui::SetCursorScreenPos(ImVec2(x, y + px(10.f)));
+                    const bool clicked = ImGui::InvisibleButton(id, ImVec2(w, px(24.f))) && enabled;
+                    if (ImGui::IsItemHovered())
+                    {
+                        styled_tooltip(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), tip);
+                    }
+                    return clicked;
+                };
+                const auto tool_color = [&](bool enabled)
+                {
+                    return theme::u32(!enabled               ? p.text_disabled
+                                      : ImGui::IsItemHovered() ? p.text_selected
+                                                               : p.text_normal);
+                };
+                const auto open_all = [&app, paths]
+                {
+                    for (const std::string& path : paths)
+                    {
+                        app.open_repository(path);
+                    }
+                    app.repo_management_open = false;
+                };
+                const auto fetch_all = [&app, paths]
+                {
+                    run_in_repositories(app, "Fetch all", paths, {"fetch", "--all", "--prune"});
+                };
+                const auto pull_menu = [&app, paths]
+                {
+                    return MenuItems{menu_item("Pull all (fast-forward only)",
+                                               [&app, paths]
+                                               {
+                                                   run_in_repositories(app, "Pull all", paths, {"pull", "--ff-only"});
+                                               }),
+                                     menu_item("Pull all (rebase)",
+                                               [&app, paths]
+                                               {
+                                                   run_in_repositories(app, "Pull all (rebase)", paths,
+                                                                       {"pull", "--rebase"});
+                                               })};
+                };
+                float tx = hmax.x - px(13.f) - px(24.f);
+                if (tool("##menu", tx, px(24.f), "Section options", true))
+                {
+                    MenuItems items{menu_item("Open all in tabs", open_all, any),
+                                    menu_item("Fetch all", fetch_all, any)};
+                    for (MenuItem& pull : pull_menu())
+                    {
+                        pull.enabled = any;
+                        items.push_back(std::move(pull));
+                    }
+                    const std::string name = section.name;
+                    MenuItems view{menu_item(is_collapsed ? "Expand section" : "Collapse section",
+                                             [name]
+                                             {
+                                                 if (!collapsed.erase(name))
+                                                 {
+                                                     collapsed.insert(name);
+                                                 }
+                                             })};
+                    if (section.name == section_names[1])
+                    {
+                        view.push_back(menu_item(
+                                "Remove all favorites",
+                                [&app]
+                                {
+                                    favorites.clear();
+                                    save_favorites(app, favorites);
+                                },
+                                !favorites.empty()));
+                    }
+                    popup_menu(separated_menu({std::move(items), std::move(view)}));
                 }
-                draw_fa_icon(draw, "far:ellipsis-v", ImVec2(tx + px(12.f), y + px(22.f)), px(16.f),
-                             theme::u32(ImGui::IsItemHovered() ? p.text_selected : p.text_normal));
+                draw_fa_icon(draw, "far:ellipsis-v", ImVec2(tx + px(12.f), y + px(22.f)), px(16.f), tool_color(true));
                 if (section.name != "All repositories")
                 {
                     tx -= px(34.f);
+                    if (tool("##open_all", tx, px(24.f), "Open all in tabs", any))
+                    {
+                        open_all();
+                    }
                     draw_fa_icon(draw, "far:external-link-alt", ImVec2(tx + px(12.f), y + px(22.f)), px(16.f),
-                                 theme::u32(section.paths.empty() ? p.text_disabled : p.text_normal));
+                                 tool_color(any));
                     tx -= px(45.f);
-                    draw_fa_icon(draw, "fas:reply", ImVec2(tx + px(8.f), y + px(22.f)), px(16.f),
-                                 theme::u32(p.text_secondary), 315.f);
-                    draw_fa_icon(draw, "fas:caret-down", ImVec2(tx + px(24.f), y + px(22.f)), px(14.f),
-                                 theme::u32(p.text_secondary));
+                    if (tool("##pull_all", tx, px(34.f), "Pull all", any))
+                    {
+                        popup_menu(pull_menu());
+                    }
+                    const ImU32 pull_color = tool_color(any);
+                    draw_fa_icon(draw, "fas:reply", ImVec2(tx + px(8.f), y + px(22.f)), px(16.f), pull_color, 315.f);
+                    draw_fa_icon(draw, "fas:caret-down", ImVec2(tx + px(24.f), y + px(22.f)), px(14.f), pull_color);
                     tx -= px(39.f);
-                    draw_fa_icon(draw, "far:reply", ImVec2(tx + px(12.f), y + px(22.f)), px(16.f),
-                                 theme::u32(section.paths.empty() ? p.text_disabled : p.text_normal));
+                    if (tool("##fetch_all", tx, px(24.f), "Fetch all", any))
+                    {
+                        fetch_all();
+                    }
+                    draw_fa_icon(draw, "far:reply", ImVec2(tx + px(12.f), y + px(22.f)), px(16.f), tool_color(any));
                     const char* bulk = section.open_section
                                                ? "Close all tabs"
                                                : (section.name == "Recent repositories" ? "Remove all" : nullptr);
@@ -610,7 +754,50 @@ namespace imgit::ui
                     };
                     if (section.name == "All repositories")
                     {
-                        action("##more", "far:ellipsis-v", "More");
+                        if (action("##more", "far:ellipsis-v", "More"))
+                        {
+                            const bool favorite_now = favorites.contains(path);
+                            const bool recent_now = std::ranges::find(app.recent_repos, path) != app.recent_repos.end();
+                            popup_menu(separated_menu({
+                                    {menu_item("Open repository",
+                                               [&app, path]
+                                               {
+                                                   app.repo_management_open = false;
+                                                   app.open_repository(path);
+                                               }),
+                                     menu_item("Open in a new window",
+                                               [&app, path]
+                                               {
+                                                   open_in_new_window(app, path);
+                                               }),
+                                     menu_item("Open in file manager",
+                                               [path]
+                                               {
+                                                   platform::shell::open_in_file_manager(path);
+                                               })},
+                                    {menu_item(favorite_now ? "Remove from favorites" : "Add to favorites",
+                                               [&app, path, favorite_now]
+                                               {
+                                                   if (favorite_now)
+                                                   {
+                                                       favorites.erase(path);
+                                                   }
+                                                   else
+                                                   {
+                                                       favorites.insert(path);
+                                                   }
+                                                   save_favorites(app, favorites);
+                                               }),
+                                     menu_item(
+                                             "Remove from recent",
+                                             [&app, path]
+                                             {
+                                                 std::erase(app.recent_repos, path);
+                                                 app.save_recent();
+                                             },
+                                             recent_now)},
+                            }));
+                        }
                     }
                     else if (action("##close", "far:times", section.open_section ? "Close tab" : "Remove from list"))
                     {
@@ -634,7 +821,7 @@ namespace imgit::ui
                     }
                     if (action("##window", "far:external-link-alt", "Open in a new window"))
                     {
-                        open_request = path;
+                        open_in_new_window(app, path);
                     }
                 }
                 // Clicking the row opens the repository.

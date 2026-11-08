@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 #include "app/theme.hpp"
+#include "platform/process.hpp"
 #include "platform/shell.hpp"
 #include "platform/system.hpp"
 #include "ui/avatars.hpp"
@@ -21,6 +22,7 @@
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1037,12 +1039,6 @@ namespace imgit::ui
             app.settings.save(app.config_path("settings.txt"));
         }
 
-        void not_available(app::Application& app, std::string_view what)
-        {
-            app.toasts.push(app::ToastKind::INFO, std::string(what),
-                            "Not available in ImGit yet.");
-        }
-
         // The user and repository the pages describe.
         struct Context
         {
@@ -1078,6 +1074,280 @@ namespace imgit::ui
             }
             cached.home = platform::home_directory().string();
             return cached;
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+        // SSH and GPG keys: generated in the background (gpg can take a while), the results applied on the UI thread.
+
+        // A secret key gpg holds: "<key id> <user id>" as the Signing Key options show it, and when it was created.
+        struct SecretKey
+        {
+            std::string label;
+            long long created = 0;
+        };
+
+        // `gpg --with-colons --list-secret-keys`: each "sec" record's key id (field 5) and creation time (field 6)
+        // with its first "uid" record's user id (field 10).
+        std::vector<SecretKey> parse_secret_keys(const std::string& text)
+        {
+            std::vector<SecretKey> keys;
+            bool want_uid = false;
+            std::istringstream in(text);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                std::vector<std::string> fields;
+                std::size_t start = 0;
+                for (std::size_t colon = line.find(':'); ; colon = line.find(':', start))
+                {
+                    fields.push_back(line.substr(start, colon == std::string::npos ? std::string::npos : colon - start));
+                    if (colon == std::string::npos)
+                    {
+                        break;
+                    }
+                    start = colon + 1;
+                }
+                if (fields[0] == "sec" && fields.size() > 5)
+                {
+                    keys.push_back({fields[4], std::atoll(fields[5].c_str())});
+                    want_uid = true;
+                }
+                else if (fields[0] == "uid" && want_uid && fields.size() > 9 && !keys.empty())
+                {
+                    keys.back().label += " " + fields[9];
+                    want_uid = false;
+                }
+            }
+            return keys;
+        }
+
+        // The Signing Key options: "<None>" then gpg's secret keys; read by refresh_signing_keys().
+        std::vector<std::string> g_signing_keys{"<None>"};
+        bool g_signing_keys_read = false;
+
+        std::string gpg_program(app::Application& app)
+        {
+            const std::string program = value_of(app, "Commit Signing/GPG Program", "gpg");
+            return program.empty() ? std::string("gpg") : program;
+        }
+
+        // `program` when it starts, else, for the default "gpg", the gpg Git for Windows ships (usr/bin beside its
+        // libexec), which `git commit -S` finds even when it is not on PATH. Runs a process: call off the UI thread.
+        std::string resolve_gpg(const std::string& program)
+        {
+            if (platform::run_process({}, {program, "--version"}).started || program != "gpg")
+            {
+                return program;
+            }
+            const git::cli::Output exec_path = git::cli::run({}, {"--exec-path"});
+            std::string folder = exec_path.text;
+            while (!folder.empty() && (folder.back() == '\n' || folder.back() == '\r'))
+            {
+                folder.pop_back();
+            }
+            // <git>/mingw64/libexec/git-core -> <git>/usr/bin/gpg.exe
+            const std::filesystem::path bundled =
+                    std::filesystem::path(folder).parent_path().parent_path().parent_path() / "usr" / "bin" / "gpg.exe";
+            std::error_code ec;
+            return exec_path.exit_code == 0 && std::filesystem::exists(bundled, ec) ? bundled.string() : program;
+        }
+
+        void refresh_signing_keys(app::Application& app)
+        {
+            g_signing_keys_read = true;
+            if (app.background_running("gpg-keys"))
+            {
+                return;
+            }
+            app.run_in_background("gpg-keys",
+                                  [configured = gpg_program(app)]() -> std::function<void()>
+                                  {
+                                      const std::string program = resolve_gpg(configured);
+                                      const platform::ProcessOutput out = platform::run_process(
+                                              {}, {program, "--batch", "--with-colons", "--list-secret-keys"});
+                                      std::vector<std::string> options{"<None>"};
+                                      if (out.started && out.exit_code == 0)
+                                      {
+                                          for (const SecretKey& key : parse_secret_keys(out.text))
+                                          {
+                                              options.push_back(key.label);
+                                          }
+                                      }
+                                      return [options = std::move(options)]
+                                      {
+                                          g_signing_keys = options;
+                                      };
+                                  });
+        }
+
+        // Makes `option` ("<key id> <user id>", or "<None>") the signing key: kept in the preferences and set as
+        // user.signingkey in the global .gitconfig, which `git commit -S` reads.
+        void set_signing_key(app::Application& app, const std::string& option)
+        {
+            set_value(app, "Commit Signing/Signing Key", option);
+            if (option == "<None>")
+            {
+                (void)git::cli::run({}, {"config", "--global", "--unset", "user.signingkey"});
+                return;
+            }
+            const git::cli::Output out =
+                    git::cli::run({}, {"config", "--global", "user.signingkey", option.substr(0, option.find(' '))});
+            if (out.exit_code != 0)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not set the signing key", out.text);
+            }
+        }
+
+        // ssh-keygen makes an ed25519 key pair in ~/.ssh under a name no key there has yet (id_ed25519_imgit,
+        // id_ed25519_imgit_2, ...); the SSH page then uses it.
+        void generate_ssh_key(app::Application& app)
+        {
+            if (app.background_running("ssh-generate"))
+            {
+                app.toasts.push(app::ToastKind::INFO, "An SSH key is already being generated");
+                return;
+            }
+            const Context& c = context(app);
+            app.run_in_background(
+                    "ssh-generate",
+                    [&app, home = c.home, email = c.author.email]() -> std::function<void()>
+                    {
+                        const std::filesystem::path folder = std::filesystem::path(home) / ".ssh";
+                        std::error_code ec;
+                        std::filesystem::create_directories(folder, ec);
+                        std::filesystem::path key = folder / "id_ed25519_imgit";
+                        for (int n = 2; std::filesystem::exists(key, ec)
+                                        || std::filesystem::exists(key.string() + ".pub", ec);
+                             ++n)
+                        {
+                            key = folder / ("id_ed25519_imgit_" + std::to_string(n));
+                        }
+                        const platform::ProcessOutput out = platform::run_process(
+                                folder.string(),
+                                {"ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", email, "-f", key.string()});
+                        if (!out.started || out.exit_code != 0)
+                        {
+                            return [&app, detail = out.started ? out.text : std::string("ssh-keygen was not found.")]
+                            {
+                                app.toasts.push(app::ToastKind::ERROR, "Could not generate an SSH key", detail);
+                            };
+                        }
+                        return [&app, private_key = key.string()]
+                        {
+                            set_value(app, "SSH/Private key", private_key);
+                            set_value(app, "SSH/Public key", private_key + ".pub");
+                            app.toasts.push(app::ToastKind::SUCCESS, "SSH key generated", private_key + ".pub");
+                        };
+                    });
+        }
+
+        // gpg makes a 4096-bit RSA signing key for the profile's name and email, expiring in 2 years, protected by
+        // `passphrase` (none when empty), and it becomes the signing key.
+        void generate_gpg_key(app::Application& app, const std::string& passphrase)
+        {
+            if (app.background_running("gpg-generate"))
+            {
+                app.toasts.push(app::ToastKind::INFO, "A GPG key is already being generated");
+                return;
+            }
+            const git::Author& author = context(app).author;
+            if (author.email.empty())
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not generate a GPG key",
+                                "Set your email in your profile first.");
+                return;
+            }
+            const std::string user_id = (author.name.empty() ? author.email : author.name) + " <" + author.email + ">";
+            app.toasts.push(app::ToastKind::INFO, "Generating a GPG key", "This can take a minute.");
+            app.run_in_background(
+                    "gpg-generate",
+                    [&app, configured = gpg_program(app), user_id, passphrase]() -> std::function<void()>
+                    {
+                        const std::string program = resolve_gpg(configured);
+                        const platform::ProcessOutput made = platform::run_process(
+                                {},
+                                {program, "--batch", "--pinentry-mode", "loopback", "--passphrase-fd", "0",
+                                 "--quick-gen-key", user_id, "rsa4096", "sign", "2y"},
+                                passphrase + "\n");
+                        if (!made.started || made.exit_code != 0)
+                        {
+                            return [&app, detail = made.started ? made.text : program + " was not found."]
+                            {
+                                app.toasts.push(app::ToastKind::ERROR, "Could not generate a GPG key", detail);
+                            };
+                        }
+                        const platform::ProcessOutput listed = platform::run_process(
+                                {}, {program, "--batch", "--with-colons", "--list-secret-keys", user_id});
+                        const std::vector<SecretKey> keys = parse_secret_keys(listed.text);
+                        const auto newest = std::max_element(keys.begin(), keys.end(),
+                                                             [](const SecretKey& a, const SecretKey& b)
+                                                             {
+                                                                 return a.created < b.created;
+                                                             });
+                        if (newest == keys.end())
+                        {
+                            return [&app]
+                            {
+                                app.toasts.push(app::ToastKind::ERROR, "Could not find the new GPG key");
+                            };
+                        }
+                        return [&app, label = newest->label]
+                        {
+                            set_signing_key(app, label);
+                            refresh_signing_keys(app);
+                            app.toasts.push(app::ToastKind::SUCCESS, "GPG key generated",
+                                            label + " is your signing key now.");
+                        };
+                    });
+        }
+
+        // What `git flow init` sets up: the branch names and prefixes from the Gitflow page in the repository's
+        // configuration, and the develop branch (from main) when it is missing.
+        void initialize_gitflow(app::Application& app)
+        {
+            app::RepoState* state = app.active();
+            if (state == nullptr)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not initialize Gitflow", "Open a repository first.");
+                return;
+            }
+            const auto setting = [&app](const char* label, const char* fallback)
+            {
+                const std::string value = value_of(app, std::string("Gitflow/") + label, fallback);
+                return value.empty() ? std::string(fallback) : value;
+            };
+            const std::string main_branch = setting("Main/Master", "main");
+            const std::string develop = setting("Develop", "develop");
+            if (main_branch == develop)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not initialize Gitflow",
+                                "The main and develop branches must differ.");
+                return;
+            }
+            if (state->find_ref("refs/heads/" + main_branch) == nullptr)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not initialize Gitflow",
+                                "There is no local branch '" + main_branch + "'.");
+                return;
+            }
+            std::vector<std::vector<std::string>> runs{
+                    {"config", "gitflow.branch.master", main_branch},
+                    {"config", "gitflow.branch.develop", develop},
+                    {"config", "gitflow.prefix.feature", setting("Feature", "feature/")},
+                    {"config", "gitflow.prefix.release", setting("Release", "release/")},
+                    {"config", "gitflow.prefix.hotfix", setting("Hotfix", "hotfix/")},
+                    {"config", "gitflow.prefix.support", "support/"},
+                    {"config", "gitflow.prefix.versiontag", value_of(app, "Gitflow/Version Tag", "")},
+            };
+            if (state->find_ref("refs/heads/" + develop) == nullptr)
+            {
+                runs.push_back({"branch", develop, main_branch});
+            }
+            app.run_git_cli_sequence(*state, "Initialize Gitflow", std::move(runs));
         }
 
         // ---------------------------------------------------------------------------------------------------------
@@ -1930,7 +2200,7 @@ namespace imgit::ui
                 {
                     if (button(page, "##generate_ssh", r.x(), r.top, "Generate", Tone::SUCCESS))
                     {
-                        not_available(app, "Generate SSH key");
+                        generate_ssh_key(app);
                     }
                     r.column = 31.140625f;
                     help(r, "This will create new keys and configure ImGit Desktop to use them");
@@ -2286,20 +2556,46 @@ namespace imgit::ui
             return out;
         }
 
-        // A react-select colour picker (200px) with a reset button 10px after it.
-        void color_row(Row& r, const char* id, const ImVec4& swatch, const char* value, const char* reset)
+        // The tab group colour a choice names: "Next color" (-1) or one of the graph's lane colours.
+        std::string group_color_name(int color)
+        {
+            return color < 0 ? std::string("Next color") : "Lane color " + std::to_string(color + 1);
+        }
+
+        // The default tab group colour: a react-select-like box (200px) whose menu lists "Next color" (each new group
+        // takes the colour after the others') and the lane colours, and a reset button 10px after it that gives every
+        // group that colour.
+        void color_row(Row& r, const char* id, const char* reset)
         {
             Page& page = r.page();
+            app::Application& app = page.app;
+            const int current = app.settings.tab_group_color;
             box(page, r.x(), r.top, 200.f, 34.f, {FIELD_BG, white(0.08f), 4.f});
-            box(page, r.x() + 11.f, r.top + 7.f, 20.f, 20.f, {swatch});
-            text(page, r.x() + 36.f, r.top + 7.f, LABEL, value);
+            if (current >= 0)
+            {
+                box(page, r.x() + 11.f, r.top + 7.f, 20.f, 20.f, {theme::graph_color(current)});
+            }
+            text(page, r.x() + (current >= 0 ? 36.f : 11.f), r.top + 7.f, LABEL, group_color_name(current));
             box(page, r.x() + 170.f, r.top + 7.f, 1.f, 20.f, {white(0.08f)});
             svg(page, "chevron-down", svg_path("chevron-down"), 20.f, 20.f, r.x() + 175.f, r.top + 7.f, 20.f, 20.f,
                 white(0.75f));
             ImGui::PushID(id);
             if (hit(page, "##color", r.x(), r.top, 200.f, 34.f))
             {
-                not_available(page.app, "Workspace colors");
+                MenuItems items;
+                for (int color = -1; color < theme::GRAPH_COLOR_COUNT; ++color)
+                {
+                    MenuItem item = menu_item(group_color_name(color),
+                                              [&app, color]
+                                              {
+                                                  app.settings.tab_group_color = color;
+                                                  save_settings(app);
+                                              });
+                    item.type = MenuItem::Type::CHECKBOX;
+                    item.checked = color == current;
+                    items.push_back(std::move(item));
+                }
+                popup_menu(std::move(items));
             }
             // btn-default.btn-custom with a far:sync icon (fa-fw, 12px) and a 5px caption margin.
             const Style style{12.f, white(0.75f)};
@@ -2310,7 +2606,15 @@ namespace imgit::ui
             text(page, bx + 33.f, r.top + 7.f, style, reset);
             if (hit(page, "##reset", bx, r.top, w, 31.140625f))
             {
-                not_available(page.app, reset);
+                int next = 0;
+                for (app::Application::TabGroup& group : app.tab_groups)
+                {
+                    group.color = current >= 0 ? current : next++ % theme::GRAPH_COLOR_COUNT;
+                }
+                if (app.settings.remember_tabs)
+                {
+                    app.save_state();
+                }
             }
             ImGui::PopID();
             r.column = 34.f;
@@ -2418,10 +2722,10 @@ namespace imgit::ui
             box(page, 55.f, form.y, 1140.f, 1.f, {white(0.6f)});
             form.advance(form.y, 1.f, 15.f);
 
-            row(form, "Default color for default groups",
+            row(form, "Default color for new tab groups",
                 [&](Row& r)
                 {
-                    color_row(r, "groups", white(0.1f), "Gray", "Reset all default groups to default color");
+                    color_row(r, "groups", "Reset all groups to this color");
                 });
             row(form, "Automatically group worktree tabs together",
                 [&](Row& r)
@@ -2537,12 +2841,25 @@ namespace imgit::ui
             row(form, "Signing Key",
                 [&](Row& r)
                 {
-                    stored_select(r, "##signing_key", "Commit Signing/Signing Key", "<None>", {"<None>"}, 257.f);
+                    if (!g_signing_keys_read)
+                    {
+                        refresh_signing_keys(app);
+                    }
+                    native_select(r.page(), "##signing_key", r.x(), r.top, 257.f,
+                                  value_of(app, "Commit Signing/Signing Key", "<None>"), g_signing_keys,
+                                  [&app](const std::string& option)
+                                  {
+                                      set_signing_key(app, option);
+                                  });
+                    r.column = 34.f;
                     // The refresh button: btn-primary with a 12px refresh icon.
                     box(page, r.x() + 262.f, r.top, 38.f, 34.f, {ImVec4(BLUE.x, BLUE.y, BLUE.z, 0.2f), BLUE, 2.f});
                     svg(page, "arrows-rotate", svg_path("arrows-rotate"), 512.f, 512.f, r.x() + 275.f,
                         r.top + 11.f, 12.f, 12.f, white(0.75f));
-                    (void)hit(page, "##refresh_keys", r.x() + 262.f, r.top, 38.f, 34.f);
+                    if (hit(page, "##refresh_keys", r.x() + 262.f, r.top, 38.f, 34.f))
+                    {
+                        refresh_signing_keys(app);
+                    }
                 });
             row(form, "Generate new GPG Key",
                 [&](Row& r)
@@ -2556,7 +2873,8 @@ namespace imgit::ui
                     r.column = 34.f;
                     if (button(page, "##generate_gpg", r.x() + 221.89f, r.top, "Generate", Tone::SUCCESS, BTN_34))
                     {
-                        not_available(app, "Generate GPG key");
+                        generate_gpg_key(app, passphrase);
+                        passphrase.clear();
                     }
                     help(r, "This will create a 4096 bit key with the name and email\nin your current profile that "
                             "expires in 2 years.\nThis will also be set as your active signing key.");
@@ -2765,7 +3083,7 @@ namespace imgit::ui
             const float top = form.place(0.f);
             if (button(page, "##init_gitflow", form.control_x(), top, "Initialize Gitflow", Tone::SUCCESS))
             {
-                not_available(app, "Initialize Gitflow");
+                initialize_gitflow(app);
             }
             form.advance(top, 31.140625f, 0.f);
         }

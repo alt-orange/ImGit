@@ -13,8 +13,8 @@
 #include <string>
 
 // The context menus: groups joined by separators, each item offered under its own conditions. Items copy what
-// they need: actions reload the history and invalidate references into it. Features ImGit does not implement yet
-// are placeholders that say so.
+// they need: actions reload the history and invalidate references into it. An item that cannot apply (a tag has
+// nothing to fast-forward) says why.
 namespace imgit::ui
 {
     namespace

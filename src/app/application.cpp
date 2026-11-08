@@ -192,6 +192,10 @@ namespace imgit::app
             {
                 smart_branch_visibility = truthy;
             }
+            else if (key == "tab_group_color")
+            {
+                tab_group_color = std::clamp(std::atoi(value.c_str()), -1, theme::GRAPH_COLOR_COUNT - 1);
+            }
             else if (key == "zoom")
             {
                 zoom = std::clamp(finite_or(value, zoom), 0.5f, 2.f);
@@ -353,6 +357,7 @@ namespace imgit::app
              << "push_after_commit=" << push_after_commit << '\n'
              << "compact_graph=" << compact_graph << '\n'
              << "smart_branch_visibility=" << smart_branch_visibility << '\n'
+             << "tab_group_color=" << tab_group_color << '\n'
              << "syntax_highlighting=" << syntax_highlighting << '\n'
              << "word_wrap=" << word_wrap << '\n'
              << "diff_whitespace=" << diff_whitespace << '\n'
@@ -1544,6 +1549,7 @@ namespace imgit::app
         m_closed_submodules.clear();
         apply_profile_switch();
         poll_async();
+        poll_background();
 
         // Shortcuts and the tabs bar can close the active tab: the state is looked up again after each.
         handle_shortcuts(active());
@@ -2343,6 +2349,43 @@ namespace imgit::app
         ImGui::EndChild();
     }
 
+    void Application::run_in_background(std::string tag, std::function<std::function<void()>()> work)
+    {
+        m_background.push_back({std::move(tag), std::async(std::launch::async, std::move(work))});
+    }
+
+    bool Application::background_running(const std::string& tag) const
+    {
+        return std::ranges::any_of(m_background,
+                                   [&tag](const BackgroundJob& job)
+                                   {
+                                       return job.tag == tag;
+                                   });
+    }
+
+    void Application::poll_background()
+    {
+        // Finished jobs leave the list before their continuation runs: it may start another job.
+        std::vector<std::function<void()>> finished;
+        std::erase_if(m_background,
+                      [&finished](BackgroundJob& job)
+                      {
+                          if (job.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                          {
+                              return false;
+                          }
+                          finished.push_back(job.future.get());
+                          return true;
+                      });
+        for (const std::function<void()>& then : finished)
+        {
+            if (then)
+            {
+                then();
+            }
+        }
+    }
+
     void Application::open_favorite_repository(int index)
     {
         const std::vector<std::string> favorites = ui::favorite_repositories(*this);
@@ -2507,11 +2550,16 @@ namespace imgit::app
         }
         if (!group.empty() && find_tab_group(group) == nullptr)
         {
-            // The next colour round the lanes' wheel after the groups already there.
-            int color = 0;
-            for (const TabGroup& existing : tab_groups)
+            // The default group colour (Preferences → UI Customization), else the next colour round the lanes' wheel
+            // after the groups already there.
+            int color = settings.tab_group_color;
+            if (color < 0)
             {
-                color = std::max(color, existing.color + 1);
+                color = 0;
+                for (const TabGroup& existing : tab_groups)
+                {
+                    color = std::max(color, existing.color + 1);
+                }
             }
             tab_groups.push_back({group, color % theme::GRAPH_COLOR_COUNT, false});
         }

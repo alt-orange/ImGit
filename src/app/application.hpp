@@ -8,6 +8,7 @@
 #include "platform/pseudo_console.hpp"
 #include "ui/native_menu.hpp"
 #include <functional>
+#include <future>
 #include <imgui.h>
 #include <map>
 #include <memory>
@@ -38,6 +39,8 @@ namespace imgit::app
         bool compact_graph = false;
         // The graph shows only the checked-out branch, its upstream and the default branch (unless a ref is soloed).
         bool smart_branch_visibility = false;
+        // The colour (a graph lane colour index) a new tab group takes; -1: the next one after the groups already there.
+        int tab_group_color = -1;
         bool syntax_highlighting = true; // the diff and merge editors colour code by its language
         bool word_wrap = false; // the diff / file view wraps long lines (Preferences → Editor, the toolbar toggle)
         // The diff view's whitespace toggle: on, changes in whitespace only are shown and the whitespace of changed
@@ -232,6 +235,10 @@ namespace imgit::app
         bool notifications_requested = false;
         // Opens the `index`th (0-based) favourite repository, in Repository Management's order.
         void open_favorite_repository(int index);
+        // Runs `work` on a worker thread; the function it returns then runs on the UI thread (a later frame), where it
+        // may push toasts or change settings. `tag` names the job for background_running().
+        void run_in_background(std::string tag, std::function<std::function<void()>()> work);
+        [[nodiscard]] bool background_running(const std::string& tag) const;
         Toasts toasts;
         Dialog dialog;
         ProfileDialog profile_dialog;
@@ -430,6 +437,13 @@ namespace imgit::app
         // .gitconfig.
         void apply_profile_identity(bool write_git_config);
         void poll_async();
+        void poll_background();
+        struct BackgroundJob
+        {
+            std::string tag;
+            std::future<std::function<void()>> future;
+        };
+        std::vector<BackgroundJob> m_background;
         void auto_fetch(RepoState& state);
         void handle_shortcuts(RepoState* state);
         void load_recent();
