@@ -2470,7 +2470,7 @@ namespace imgit::ui
             row(form, "Word Wrap",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##word_wrap", "Editor/Word Wrap", false);
+                    setting_checkbox(r, "##word_wrap", app.settings.word_wrap);
                 });
         }
 

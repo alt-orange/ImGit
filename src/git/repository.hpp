@@ -82,6 +82,8 @@ namespace imgit::git
         // disappears (a commit, checkout, fetch, tag or stash made outside ImGit) without walking the history.
         [[nodiscard]] Result<std::uint64_t> refs_signature() const;
         [[nodiscard]] Result<std::vector<FileChange>> commit_changes(const Sha& sha) const;
+        // Every file in the commit's tree (blobs and submodule links), sorted by path.
+        [[nodiscard]] Result<std::vector<std::string>> commit_tree_paths(const Sha& sha) const;
         // Fills additions / deletions of `changes` (matched by path) from the given diff source.
         [[nodiscard]] Result<void> fill_stats(std::vector<FileChange>& changes, StatsSource source,
                                               const Sha& sha) const;

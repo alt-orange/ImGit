@@ -4,6 +4,7 @@
 #include "ui/vector_icons.hpp"
 #include "ui/widgets.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -11,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace imgit::ui
@@ -197,6 +199,9 @@ namespace imgit::ui
             case git::FileStatus::CONFLICTED:
                 color = p.red;
                 return "fas:exclamation-triangle";
+            case git::FileStatus::UNKNOWN: // an unchanged file of View all files
+                color = p.text_secondary;
+                return "far:file";
             default:
                 color = p.orange;
                 return "fas:pencil";
@@ -317,6 +322,162 @@ namespace imgit::ui
             std::vector<const git::FileChange*> secondary_requests;
         };
 
+        // The commit view's "View all files": every file of the commit's tree instead of its changes only.
+        bool view_all_files = false;
+
+        // The commit's changes plus the files of its tree it left as they were (status UNKNOWN), sorted by path; read
+        // once per commit.
+        const std::vector<git::FileChange>& all_commit_files(app::RepoState& state, const git::Sha& sha)
+        {
+            static std::string cached_for; // the repository and commit `files` lists
+            static std::vector<git::FileChange> files;
+            const std::string key =
+                    state.repo.workdir() + "\n" + sha + "\n" + std::to_string(state.commit_files.size());
+            if (key == cached_for)
+            {
+                return files;
+            }
+            cached_for = key;
+            files = state.commit_files;
+            std::unordered_set<std::string> changed;
+            for (const git::FileChange& change : state.commit_files)
+            {
+                changed.insert(change.path);
+            }
+            if (auto paths = state.repo.commit_tree_paths(sha); paths)
+            {
+                for (std::string& path : *paths)
+                {
+                    if (!changed.contains(path))
+                    {
+                        git::FileChange unchanged;
+                        unchanged.path = std::move(path);
+                        files.push_back(std::move(unchanged));
+                    }
+                }
+            }
+            std::sort(files.begin(), files.end(),
+                      [](const git::FileChange& a, const git::FileChange& b)
+                      {
+                          return a.path < b.path;
+                      });
+            return files;
+        }
+
+        // The order of a file's status under Sort by status: conflicts first, then added, modified, renamed and
+        // deleted files; files of an unchanged tree (View all files) last.
+        int status_rank(git::FileStatus status)
+        {
+            switch (status)
+            {
+            case git::FileStatus::CONFLICTED:
+                return 0;
+            case git::FileStatus::ADDED:
+            case git::FileStatus::UNTRACKED:
+                return 1;
+            case git::FileStatus::MODIFIED:
+            case git::FileStatus::TYPECHANGE:
+                return 2;
+            case git::FileStatus::RENAMED:
+                return 3;
+            case git::FileStatus::DELETED:
+                return 4;
+            default:
+                return 5;
+            }
+        }
+
+        bool less_ignoring_case(const std::string& a, const std::string& b)
+        {
+            return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+                                                [](unsigned char x, unsigned char y)
+                                                {
+                                                    return std::tolower(x) < std::tolower(y);
+                                                });
+        }
+
+        // A node's children in the Sort button's order. By path they keep the tree's own order (folders and
+        // files by name, as git sorts paths); by name or status the folders come first, by name, then the files.
+        std::vector<const FileNode*> sorted_children(const FileNode& node, app::Settings::FileSort sort)
+        {
+            std::vector<const FileNode*> children;
+            children.reserve(node.children.size());
+            for (const auto& [key, child] : node.children)
+            {
+                children.push_back(&child);
+            }
+            switch (sort)
+            {
+            case app::Settings::FileSort::PATH:
+                break;
+            case app::Settings::FileSort::PATH_DESCENDING:
+                std::reverse(children.begin(), children.end());
+                break;
+            case app::Settings::FileSort::NAME:
+            case app::Settings::FileSort::STATUS:
+                std::stable_sort(children.begin(), children.end(),
+                                 [sort](const FileNode* a, const FileNode* b)
+                                 {
+                                     const bool a_folder = a->file == nullptr;
+                                     const bool b_folder = b->file == nullptr;
+                                     if (a_folder != b_folder)
+                                     {
+                                         return a_folder;
+                                     }
+                                     if (sort == app::Settings::FileSort::STATUS && !a_folder)
+                                     {
+                                         const int ra = status_rank(a->file->status);
+                                         const int rb = status_rank(b->file->status);
+                                         if (ra != rb)
+                                         {
+                                             return ra < rb;
+                                         }
+                                     }
+                                     const std::string an = a_folder ? a->name : file_name(a->path);
+                                     const std::string bn = b_folder ? b->name : file_name(b->path);
+                                     if (less_ignoring_case(an, bn) != less_ignoring_case(bn, an))
+                                     {
+                                         return less_ignoring_case(an, bn);
+                                     }
+                                     return a->path < b->path;
+                                 });
+                break;
+            }
+            return children;
+        }
+
+        // The Sort button (sort-alpha-up, 20px) at `pos`: a menu of the file lists' orders.
+        void sort_button(app::Application& app, ImVec2 pos, float row_h)
+        {
+            const theme::Palette& p = theme::palette();
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            ImGui::SetCursorScreenPos(pos);
+            const bool clicked = ImGui::InvisibleButton("##sort", ImVec2(px(20.f), row_h));
+            draw_fa_icon(draw, "far:sort-alpha-up", ImVec2(pos.x + px(10.f), pos.y + px(12.1f)), px(16.f),
+                         theme::u32(ImGui::IsItemHovered() ? p.text_selected : p.text_normal));
+            if (ImGui::IsItemHovered())
+            {
+                tooltip("Sort");
+            }
+            if (!clicked)
+            {
+                return;
+            }
+            using Sort = app::Settings::FileSort;
+            const auto choice = [&app](const char* label, Sort sort)
+            {
+                return menu_checkbox(label, app.settings.file_sort == sort,
+                                     [&app, sort]
+                                     {
+                                         app.settings.file_sort = sort;
+                                         app.settings.save(app.config_path("settings.txt"));
+                                     });
+            };
+            popup_menu({choice("Path (A to Z)", Sort::PATH), choice("Path (Z to A)", Sort::PATH_DESCENDING),
+                        choice("File name", Sort::NAME), choice("Status", Sort::STATUS)},
+                       ImVec2(pos.x, pos.y + row_h));
+        }
+
         void collect_paths(const FileNode& node, std::vector<std::string>& out)
         {
             for (const auto& [key, child] : node.children)
@@ -334,8 +495,9 @@ namespace imgit::ui
 
         void draw_file_tree(FileListContext& ctx, const FileNode& node, int depth, const std::string& prefix)
         {
-            for (const auto& [key, child] : node.children)
+            for (const FileNode* sorted : sorted_children(node, ctx.app->settings.file_sort))
             {
+                const FileNode& child = *sorted;
                 if (child.file != nullptr)
                 {
                     const git::FileChange& change = *child.file;
@@ -349,6 +511,12 @@ namespace imgit::ui
                     {
                         // A conflicted file opens in the merge tool (its plain diff when its sides cannot be read).
                         std::string error;
+                        if (ctx.source == app::DiffTarget::Source::COMMIT && change.status == git::FileStatus::UNKNOWN)
+                        {
+                            // A file the commit did not change (View all files): the file as the commit left it.
+                            ctx.state->open_file_history(change.path, ctx.sha, ctx.sha, false);
+                            continue;
+                        }
                         if (change.status != git::FileStatus::CONFLICTED
                             || !ctx.state->open_merge_tool(change.path, error))
                         {
@@ -436,19 +604,13 @@ namespace imgit::ui
         }
 
         // The sort icon and the centred Path | Tree toggle (12px semibold here).
-        void view_toggle_row(app::RepoState& state, ImVec2 origin, float width, float top, bool semibold)
+        void view_toggle_row(app::Application& app, app::RepoState& state, ImVec2 origin, float width, float top,
+                             bool semibold)
         {
             const theme::Palette& p = theme::palette();
             ImDrawList* draw = ImGui::GetWindowDrawList();
             const float row_h = px(24.1f);
-            ImGui::SetCursorScreenPos(ImVec2(origin.x + px(10.f), top));
-            ImGui::InvisibleButton("##sort", ImVec2(px(20.f), row_h));
-            draw_fa_icon(draw, "far:sort-alpha-up", ImVec2(origin.x + px(20.f), top + px(12.1f)), px(16.f),
-                         theme::u32(ImGui::IsItemHovered() ? p.text_selected : p.text_normal));
-            if (ImGui::IsItemHovered())
-            {
-                tooltip("Sort");
-            }
+            sort_button(app, ImVec2(origin.x + px(10.f), top), row_h);
             ImFont* font = semibold ? fonts().semibold : fonts().regular;
             const char* icons[] = {"far:bars", "fas:folder-tree"};
             const char* labels[] = {"Path", "Tree"};
@@ -756,7 +918,7 @@ namespace imgit::ui
                                     ImVec2(origin.x + width, origin.y + px(36.f)), theme::u32(p.section_border));
             }
 
-            view_toggle_row(state, origin, width, origin.y + px(46.9f), true);
+            view_toggle_row(app, state, origin, width, origin.y + px(46.9f), true);
 
             // The file sections share the room between the toolbar and the composer (310px from the bottom, more
             // while the commit options are open: their three rows sit above the commit button).
@@ -1514,14 +1676,7 @@ namespace imgit::ui
             {
                 const float row_top = y;
                 const float row_h = px(24.1f);
-                ImGui::SetCursorScreenPos(ImVec2(left + px(10.f), row_top));
-                ImGui::InvisibleButton("##sort", ImVec2(px(20.f), row_h));
-                draw_fa_icon(draw, "far:sort-alpha-up", ImVec2(left + px(20.f), row_top + px(12.1f)), px(16.f),
-                             theme::u32(ImGui::IsItemHovered() ? p.text_selected : p.text_normal));
-                if (ImGui::IsItemHovered())
-                {
-                    tooltip("Sort");
-                }
+                sort_button(app, ImVec2(left + px(10.f), row_top), row_h);
                 // The toggle button pair: 1px 20% white borders, the checked one rgba(77,136,255,.2) with white text.
                 const char* icons[] = {"far:bars", "fas:folder-tree"};
                 const char* labels[] = {"Path", "Tree"};
@@ -1563,7 +1718,6 @@ namespace imgit::ui
                              labels[i]);
                     bx += widths[i];
                 }
-                static bool view_all = false;
                 const char* all = "View all files";
                 const float all_w = text_size(fonts().regular, theme::FONT_SIZE_ROW, all).x;
                 const float label_x = origin.x + width - px(15.f) - all_w;
@@ -1571,16 +1725,21 @@ namespace imgit::ui
                 ImGui::SetCursorScreenPos(ImVec2(box_x, row_top));
                 if (ImGui::InvisibleButton("##view_all", ImVec2(label_x + all_w - box_x, row_h)))
                 {
-                    view_all = !view_all;
-                    app.toasts.push(app::ToastKind::INFO, "View all files",
-                                    "Browsing the whole tree of a commit is not available yet.");
-                    view_all = false;
+                    view_all_files = !view_all_files;
                 }
                 const ImVec2 cmin(box_x, row_top + px(6.1f));
-                draw->AddRectFilled(cmin, ImVec2(cmin.x + px(12.f), cmin.y + px(12.f)), theme::u32(p.input_bg),
-                                    px(1.f));
-                draw->AddRect(cmin, ImVec2(cmin.x + px(12.f), cmin.y + px(12.f)), theme::u32(p.text_disabled), px(1.f),
-                              0, 1.f);
+                const ImVec2 cmax(cmin.x + px(12.f), cmin.y + px(12.f));
+                if (view_all_files)
+                {
+                    draw->AddRectFilled(cmin, cmax, theme::u32(p.accent), px(1.f));
+                    draw_fa_icon(draw, "fas:check", ImVec2(cmin.x + px(6.f), cmin.y + px(6.f)), px(9.f),
+                                 theme::u32(p.white));
+                }
+                else
+                {
+                    draw->AddRectFilled(cmin, cmax, theme::u32(p.input_bg), px(1.f));
+                    draw->AddRect(cmin, cmax, theme::u32(p.text_disabled), px(1.f), 0, 1.f);
+                }
                 css_text(draw, theme::FONT_SIZE_ROW, ImVec2(label_x, row_top + px(3.5f)), theme::u32(p.text_normal),
                          all);
                 y = author_top + px(129.f);
@@ -1591,7 +1750,9 @@ namespace imgit::ui
             // Files
             ImGui::SetCursorScreenPos(ImVec2(left, y));
             ImGui::BeginChild("##commit_files", ImVec2(right - left, std::max(1.f, origin.y + size.y - px(10.f) - y)));
-            FileNode root = build_tree(state.commit_files, state.tree_view);
+            const std::vector<git::FileChange>& files =
+                    view_all_files ? all_commit_files(state, commit.sha) : state.commit_files;
+            FileNode root = build_tree(files, state.tree_view);
             FileListContext ctx{&app,
                                 &state,
                                 right - left,

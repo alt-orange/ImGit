@@ -39,6 +39,11 @@ namespace imgit::ui
     void draw_graph_view(app::Application& app, app::RepoState& state, ImVec2 size);
     void draw_detail_panel(app::Application& app, app::RepoState& state, ImVec2 size);
     void draw_diff_view(app::Application& app, app::RepoState& state, ImVec2 size);
+    // The file view's editor (ui/file_editor.cpp). Opens `path` of the working directory in it (and in the file
+    // view); false, with a toast, when it is missing, binary or too large.
+    bool open_file_editor(app::Application& app, app::RepoState& state, const std::string& path);
+    // state.file_edit: Save / Cancel at `toolbar_pos`, the text over [min, max).
+    void draw_file_editor(app::Application& app, app::RepoState& state, ImVec2 toolbar_pos, ImVec2 min, ImVec2 max);
     // The diff / file editor of the file view (ui/diff_view.cpp), shared with the File History view.
     struct DiffEditorOptions
     {
@@ -60,6 +65,8 @@ namespace imgit::ui
         std::vector<git::LineSelection>* selected_lines = nullptr;
         const char* hunk_action = nullptr;
         int* hunk_clicked = nullptr;
+        bool word_wrap = false; // long lines continue on the rows under them instead of scrolling sideways
+        bool show_whitespace = false; // dots for the spaces and arrows for the tabs of the changed lines
         const char* id = "##diff_lines";
     };
     // Draws the editor over [min, max): `diff`'s lines, or `error` / "Loading..." (a null diff) / "Binary file" /

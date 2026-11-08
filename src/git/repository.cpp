@@ -1189,6 +1189,34 @@ namespace imgit::git
         return changes;
     }
 
+    Result<std::vector<std::string>> Repository::commit_tree_paths(const Sha& sha) const
+    {
+        auto commit = lookup_commit(m_repo.get(), sha);
+        if (!commit)
+        {
+            return std::unexpected(commit.error());
+        }
+        auto tree = commit_tree(*commit);
+        if (!tree)
+        {
+            return std::unexpected(tree.error());
+        }
+        std::vector<std::string> paths;
+        const auto collect = [](const char* root, const git_tree_entry* entry, void* payload) -> int
+        {
+            const git_object_t type = git_tree_entry_type(entry);
+            if (type == GIT_OBJECT_BLOB || type == GIT_OBJECT_COMMIT)
+            {
+                static_cast<std::vector<std::string>*>(payload)->push_back(std::string(root)
+                                                                           + git_tree_entry_name(entry));
+            }
+            return 0;
+        };
+        IMGIT_TRY(git_tree_walk(*tree, GIT_TREEWALK_PRE, collect, &paths), "could not read commit tree");
+        std::sort(paths.begin(), paths.end());
+        return paths;
+    }
+
     Result<FileDiff> Repository::commit_file_diff(const Sha& sha, const std::string& path, int context_lines,
                                                   bool ignore_whitespace) const
     {

@@ -95,6 +95,7 @@ namespace imgit::app
         std::ifstream file(path);
         std::string line;
         bool syntax_saved = false;
+        bool wrap_saved = false;
         while (std::getline(file, line))
         {
             const auto eq = line.find('=');
@@ -121,6 +122,27 @@ namespace imgit::app
             {
                 syntax_highlighting = truthy;
                 syntax_saved = true;
+            }
+            else if (key == "word_wrap")
+            {
+                word_wrap = truthy;
+                wrap_saved = true;
+            }
+            else if (key == "diff_whitespace")
+            {
+                diff_whitespace = truthy;
+            }
+            else if (key == "file_sort")
+            {
+                file_sort = static_cast<FileSort>(std::clamp(std::atoi(value.c_str()), 0, 3));
+            }
+            else if (key == "merge_a_fraction")
+            {
+                merge_a_fraction = std::clamp(finite_or(value, merge_a_fraction), 0.1f, 0.9f);
+            }
+            else if (key == "merge_top_fraction")
+            {
+                merge_top_fraction = std::clamp(finite_or(value, merge_top_fraction), 0.1f, 0.9f);
             }
             else if (key == "author_initials")
             {
@@ -251,15 +273,20 @@ namespace imgit::app
                 }
             }
         }
-        if (!syntax_saved)
+        if (!syntax_saved || !wrap_saved)
         {
-            // Before it was a setting, Preferences kept the Syntax Highlighting checkbox in preferences.txt.
+            // Before they were settings, Preferences kept the Syntax Highlighting and Word Wrap checkboxes in
+            // preferences.txt.
             std::ifstream preferences(std::filesystem::path(path).parent_path() / "preferences.txt");
             while (std::getline(preferences, line))
             {
-                if (line == "Editor/Syntax Highlighting\t0")
+                if (!syntax_saved && line == "Editor/Syntax Highlighting\t0")
                 {
                     syntax_highlighting = false;
+                }
+                if (!wrap_saved && line == "Editor/Word Wrap\t1")
+                {
+                    word_wrap = true;
                 }
             }
         }
@@ -279,6 +306,8 @@ namespace imgit::app
              << "detail_panel_width=" << detail_panel_width << '\n'
              << "terminal_height=" << terminal_height << '\n'
              << "commit_message_height=" << commit_message_height << '\n'
+             << "merge_a_fraction=" << merge_a_fraction << '\n'
+             << "merge_top_fraction=" << merge_top_fraction << '\n'
              << "graph_column_widths=";
         // Through the stream, not std::to_string: the latter follows the C locale, and a decimal comma would split
         // the list.
@@ -320,6 +349,9 @@ namespace imgit::app
              << "push_after_commit=" << push_after_commit << '\n'
              << "compact_graph=" << compact_graph << '\n'
              << "syntax_highlighting=" << syntax_highlighting << '\n'
+             << "word_wrap=" << word_wrap << '\n'
+             << "diff_whitespace=" << diff_whitespace << '\n'
+             << "file_sort=" << static_cast<int>(file_sort) << '\n'
              << "zoom=" << zoom << '\n'
              << "theme=" << theme << '\n'
              << "default_branch=" << default_branch << '\n';
@@ -1478,7 +1510,11 @@ namespace imgit::app
             }
             else if (state->diff_target)
             {
-                state->close_diff();
+                // Unsaved edits close with the editor's Cancel only.
+                if (!state->file_edit || state->file_edit->text == state->file_edit->saved)
+                {
+                    state->close_diff();
+                }
             }
             else if (state->rebase.active && state->rebase.editing >= 0)
             {
@@ -1565,6 +1601,12 @@ namespace imgit::app
 
     void Application::draw_repo_tab(RepoState& state, ImVec2 size)
     {
+        // The diff view's whitespace toggle is one setting for every tab.
+        if (state.diff_whitespace != settings.diff_whitespace)
+        {
+            state.diff_whitespace = settings.diff_whitespace;
+            state.reload_diff();
+        }
         // The merge tool and the File History view take the whole tab.
         if (state.merge_tool)
         {

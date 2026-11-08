@@ -71,6 +71,7 @@ add_executable(imgit
     src/ui/graph_view.cpp
     src/ui/detail_panel.cpp
     src/ui/diff_view.cpp
+    src/ui/file_editor.cpp
     src/ui/file_history.cpp
     src/ui/dialogs.cpp
     src/ui/menus.cpp
