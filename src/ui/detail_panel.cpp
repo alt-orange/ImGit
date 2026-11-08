@@ -492,6 +492,30 @@ namespace imgit::ui
             }
         }
 
+        // The commit options' rows under "Commit options", 22px apart.
+        constexpr float COMMIT_OPTION_ROW = 22.f;
+
+        // An empty commit form starts from commit.template: its first line the summary, the rest the description.
+        void apply_commit_template(app::RepoState& state)
+        {
+            if (state.commit_template.empty() || !state.commit_summary.empty() || !state.commit_description.empty())
+            {
+                return;
+            }
+            const std::string& text = state.commit_template;
+            const std::size_t newline = text.find('\n');
+            state.commit_summary = text.substr(0, newline);
+            if (newline != std::string::npos)
+            {
+                std::string body = text.substr(newline + 1);
+                while (!body.empty() && body.front() == '\n')
+                {
+                    body.erase(body.begin());
+                }
+                state.commit_description = body;
+            }
+        }
+
         // A 12px checkbox (rgba(0,0,0,.2), 1px 40% white border, radius 1) with its label; true when toggled.
         bool small_checkbox(const char* id, const char* label, bool* value, ImVec2 box_pos, ImVec2 label_pos, float size)
         {
@@ -684,6 +708,13 @@ namespace imgit::ui
             const git::WorkDirStatus& status = state.status;
             const ImVec2 origin = ImGui::GetCursorScreenPos();
             const float width = size.x;
+            if (!state.commit_form_ready)
+            {
+                state.commit_form_ready = true;
+                state.commit_sign = state.repo.config_bool("commit.gpgsign", false);
+                state.commit_template = state.repo.commit_template();
+                apply_commit_template(state);
+            }
 
             // Header (36px, border-bottom): the danger trash button and "N file changes on [branch]" centred in
             // the rest.
@@ -727,8 +758,11 @@ namespace imgit::ui
 
             view_toggle_row(state, origin, width, origin.y + px(46.9f), true);
 
-            // The file sections share the room between the toolbar and the composer (310px from the bottom).
-            const float composer_top = origin.y + size.y - px(310.f);
+            // The file sections share the room between the toolbar and the composer (310px from the bottom, more
+            // while the commit options are open: their three rows sit above the commit button).
+            const float options_extra = !state.composer_stash && state.commit_options_open ? px(COMMIT_OPTION_ROW * 3.f)
+                                                                                            : 0.f;
+            const float composer_top = origin.y + size.y - px(310.f) - options_extra;
             const float sections_top = origin.y + px(71.f);
             const float sections_bottom = composer_top - px(5.f);
             struct SectionSpec
@@ -977,10 +1011,15 @@ namespace imgit::ui
             }
             if (state.commit_options_open)
             {
-                // The one commit option ImGit supports, inline.
-                small_checkbox("##push_after", "Push after commit", &state.push_after_commit,
-                            ImVec2(origin.x + px(31.f), c + px(250.f)), ImVec2(origin.x + px(51.f), c + px(246.f)),
-                            12.f);
+                const auto option = [&](const char* id, const char* label, bool* value, float row)
+                {
+                    const float y = COMMIT_OPTION_ROW * row;
+                    small_checkbox(id, label, value, ImVec2(origin.x + px(31.f), c + px(250.f + y)),
+                                   ImVec2(origin.x + px(51.f), c + px(246.f + y)), 12.f);
+                };
+                option("##push_after", "Push after commit", &state.push_after_commit, 0.f);
+                option("##gpg_sign", "Sign commit with GPG (-S)", &state.commit_sign, 1.f);
+                option("##skip_hooks", "Skip commit hooks (--no-verify)", &state.commit_skip_hooks, 2.f);
             }
 
             // The commit button (.btn-success .normal-button, 40px, 50% opacity while disabled).
@@ -1009,7 +1048,7 @@ namespace imgit::ui
             }
             bool pressed = false;
             {
-                const ImVec2 bmin(origin.x + px(11.f), c + px(260.f));
+                const ImVec2 bmin(origin.x + px(11.f), c + px(260.f) + options_extra);
                 const ImVec2 bmax(origin.x + width - px(11.f), bmin.y + px(40.f));
                 ImGui::SetCursorScreenPos(bmin);
                 pressed = ImGui::InvisibleButton("##commit", ImVec2(bmax.x - bmin.x, bmax.y - bmin.y)) && enabled;
@@ -1039,11 +1078,18 @@ namespace imgit::ui
                 const bool amend = state.amend;
                 git::Repository* repo = &state.repo;
                 const git::Sha previous_head = state.history.head_sha;
+                // libgit2 neither runs hooks nor signs: `git commit` does whenever that matters.
+                git::CommitOptions commit_options;
+                commit_options.amend = amend;
+                commit_options.sign = state.commit_sign;
+                commit_options.skip_hooks = state.commit_skip_hooks;
+                const bool with_git = commit_options.sign || (!commit_options.skip_hooks && repo->has_commit_hooks());
                 if (app.run(
                             state, amend ? "Amend" : "Commit",
                             [&]
                             {
-                                return state.repo.commit(message, amend);
+                                return with_git ? state.repo.commit_with_git(message, commit_options)
+                                                : state.repo.commit(message, amend);
                             },
                             amend ? "Commit amended" : "Changes committed"))
                 {
@@ -1059,6 +1105,7 @@ namespace imgit::ui
                     }
                     state.commit_summary.clear();
                     state.commit_description.clear();
+                    apply_commit_template(state);
                     state.amend = false;
                     if (state.push_after_commit)
                     {

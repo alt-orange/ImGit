@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <git2.h>
 #include <map>
 #include <mutex>
@@ -2373,6 +2375,412 @@ namespace imgit::git
     Result<void> Repository::stash_drop(int index) const
     {
         IMGIT_TRY(git_stash_drop(m_repo.get(), static_cast<std::size_t>(index)), "could not drop stash");
+        return {};
+    }
+
+    Result<void> Repository::stash_set_message(const Sha& sha, const std::string& message) const
+    {
+        git_repository* repo = m_repo.get();
+        git_reflog* raw = nullptr;
+        IMGIT_TRY(git_reflog_read(&raw, repo, "refs/stash"), "could not read the stash list");
+        const std::unique_ptr<git_reflog, decltype(&git_reflog_free)> reflog(raw, git_reflog_free);
+        // The entries newest first, as they are listed; the reflog is rebuilt oldest first with the one message
+        // changed (git_reflog_append adds at the top), keeping each entry's place.
+        struct Entry
+        {
+            git_oid id;
+            SignatureHandle committer;
+            std::string message;
+        };
+        std::vector<Entry> entries;
+        bool found = false;
+        const std::size_t count = git_reflog_entrycount(reflog.get());
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const git_reflog_entry* entry = git_reflog_entry_byindex(reflog.get(), i);
+            Entry copy;
+            git_oid_cpy(&copy.id, git_reflog_entry_id_new(entry));
+            IMGIT_TRY(git_signature_dup(copy.committer.out(), git_reflog_entry_committer(entry)),
+                      "could not read the stash list");
+            const char* old_message = git_reflog_entry_message(entry);
+            copy.message = old_message != nullptr ? old_message : "";
+            if (oid_str(&copy.id) == sha)
+            {
+                // Keep git's "On <branch>: " (a "WIP on <branch>: " stash becomes "On <branch>: ").
+                std::string branch;
+                for (const char* prefix : {"WIP on ", "On "})
+                {
+                    const std::size_t length = std::char_traits<char>::length(prefix);
+                    if (copy.message.compare(0, length, prefix) == 0)
+                    {
+                        if (const std::size_t colon = copy.message.find(": ", length); colon != std::string::npos)
+                        {
+                            branch = copy.message.substr(length, colon - length);
+                        }
+                        break;
+                    }
+                }
+                copy.message = branch.empty() ? message : "On " + branch + ": " + message;
+                found = true;
+            }
+            entries.push_back(std::move(copy));
+        }
+        if (!found)
+        {
+            return std::unexpected(Error{"the stash is gone"});
+        }
+        while (git_reflog_entrycount(reflog.get()) > 0)
+        {
+            IMGIT_TRY(git_reflog_drop(reflog.get(), 0, 0), "could not edit the stash list");
+        }
+        for (auto it = entries.rbegin(); it != entries.rend(); ++it)
+        {
+            IMGIT_TRY(git_reflog_append(reflog.get(), &it->id, it->committer, it->message.c_str()),
+                      "could not edit the stash list");
+        }
+        IMGIT_TRY(git_reflog_write(reflog.get()), "could not write the stash list");
+        return {};
+    }
+
+    std::string Repository::config_string(const std::string& key) const
+    {
+        ConfigHandle config;
+        if (git_repository_config_snapshot(config.out(), m_repo.get()) != 0)
+        {
+            return {};
+        }
+        std::string result;
+        git_buf buffer = GIT_BUF_INIT;
+        if (git_config_get_string_buf(&buffer, config, key.c_str()) == 0)
+        {
+            result.assign(buffer.ptr, buffer.size);
+            git_buf_dispose(&buffer);
+        }
+        return result;
+    }
+
+    bool Repository::config_bool(const std::string& key, bool fallback) const
+    {
+        ConfigHandle config;
+        if (git_repository_config_snapshot(config.out(), m_repo.get()) != 0)
+        {
+            return fallback;
+        }
+        int value = 0;
+        if (git_config_get_bool(&value, config, key.c_str()) != 0)
+        {
+            return fallback;
+        }
+        return value != 0;
+    }
+
+    std::string Repository::commit_template() const
+    {
+        ConfigHandle config;
+        if (git_repository_config_snapshot(config.out(), m_repo.get()) != 0)
+        {
+            return {};
+        }
+        // git_config_get_path expands a leading ~/.
+        git_buf buffer = GIT_BUF_INIT;
+        if (git_config_get_path(&buffer, config, "commit.template") != 0)
+        {
+            return {};
+        }
+        std::filesystem::path path = std::filesystem::path(std::string(buffer.ptr, buffer.size));
+        git_buf_dispose(&buffer);
+        if (path.is_relative())
+        {
+            path = std::filesystem::path(m_workdir) / path;
+        }
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return {};
+        }
+        std::string text;
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+            if (!line.empty() && line.front() == '#')
+            {
+                continue;
+            }
+            text += line + "\n";
+        }
+        while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
+        {
+            text.pop_back();
+        }
+        while (!text.empty() && text.front() == '\n')
+        {
+            text.erase(text.begin());
+        }
+        return text;
+    }
+
+    bool Repository::has_commit_hooks() const
+    {
+        std::filesystem::path hooks;
+        if (const std::string configured = config_string("core.hooksPath"); !configured.empty())
+        {
+            hooks = std::filesystem::path(configured);
+            if (hooks.is_relative())
+            {
+                hooks = std::filesystem::path(m_workdir) / hooks;
+            }
+        }
+        else
+        {
+            hooks = std::filesystem::path(git_repository_commondir(m_repo.get())) / "hooks";
+        }
+        std::error_code ec;
+        for (const char* name : {"pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"})
+        {
+            if (std::filesystem::is_regular_file(hooks / name, ec))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Result<Sha> Repository::commit_with_git(const std::string& message, const CommitOptions& options) const
+    {
+        if (!cli::available())
+        {
+            return std::unexpected(Error{"git was not found on PATH"});
+        }
+        git_repository* repo = m_repo.get();
+        auto sig = default_signature(repo);
+        if (!sig)
+        {
+            return std::unexpected(sig.error());
+        }
+        const git_signature* identity = sig->get();
+        std::vector<std::string> args{"-c",     std::string("user.name=") + identity->name,
+                                      "-c",     std::string("user.email=") + identity->email,
+                                      "commit", "-F",
+                                      "-"};
+        if (options.amend)
+        {
+            args.emplace_back("--amend");
+        }
+        args.emplace_back(options.sign ? "-S" : "--no-gpg-sign");
+        if (options.skip_hooks)
+        {
+            args.emplace_back("--no-verify");
+        }
+        const cli::Output output = cli::run(m_workdir, args, message);
+        if (output.exit_code != 0)
+        {
+            std::string text = output.text;
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+            {
+                text.pop_back();
+            }
+            return std::unexpected(Error{text.empty() ? "git commit failed" : text});
+        }
+        git_oid oid;
+        IMGIT_TRY(git_reference_name_to_id(&oid, repo, "HEAD"), "could not read HEAD");
+        return oid_str(&oid);
+    }
+
+    Result<void> Repository::apply_lines(const std::string& path, const std::vector<LineSelection>& lines,
+                                         bool unstage) const
+    {
+        if (lines.empty())
+        {
+            return {};
+        }
+        if (!cli::available())
+        {
+            return std::unexpected(Error{"git was not found on PATH"});
+        }
+        git_repository* repo = m_repo.get();
+        // The diff the lines were picked from, with git's 3 lines of context: HEAD -> index to unstage, index ->
+        // working directory to stage.
+        IndexHandle index;
+        IMGIT_TRY(git_repository_index(index.out(), repo), "could not read index");
+        std::vector<std::string> paths{path};
+        auto c_paths = c_strings(paths);
+        git_diff_options opts;
+        git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+        opts.pathspec.strings = c_paths.data();
+        opts.pathspec.count = c_paths.size();
+        opts.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH | GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_SHOW_UNTRACKED_CONTENT;
+        opts.context_lines = 3;
+        DiffHandle diff;
+        if (unstage)
+        {
+            auto head = head_commit(repo);
+            if (!head)
+            {
+                return std::unexpected(head.error());
+            }
+            TreeHandle head_tree;
+            if (head->get() != nullptr)
+            {
+                IMGIT_TRY(git_commit_tree(head_tree.out(), *head), "could not read HEAD tree");
+            }
+            IMGIT_TRY(git_diff_tree_to_index(diff.out(), repo, head_tree, index, &opts), "could not diff index");
+        }
+        else
+        {
+            IMGIT_TRY(git_diff_index_to_workdir(diff.out(), repo, index, &opts), "could not diff working directory");
+        }
+        if (git_diff_num_deltas(diff) == 0)
+        {
+            return std::unexpected(Error{"the file has no changes left"});
+        }
+        PatchHandle patch;
+        IMGIT_TRY(git_patch_from_diff(patch.out(), diff, 0), "could not build patch");
+        const git_diff_delta* delta = git_patch_get_delta(patch);
+        if ((delta->flags & GIT_DIFF_FLAG_BINARY) != 0)
+        {
+            return std::unexpected(Error{"lines of a binary file cannot be staged"});
+        }
+        const auto selected = [&](char origin, int lineno)
+        {
+            return std::ranges::find(lines, LineSelection{origin, lineno}) != lines.end();
+        };
+        // Every change picked: the whole file (new, deleted and mode changes included) the usual way.
+        bool all = true;
+        const std::size_t hunk_count = git_patch_num_hunks(patch);
+        for (std::size_t h = 0; h < hunk_count && all; ++h)
+        {
+            const auto line_count = static_cast<std::size_t>(git_patch_num_lines_in_hunk(patch, h));
+            for (std::size_t l = 0; l < line_count; ++l)
+            {
+                const git_diff_line* line = nullptr;
+                IMGIT_TRY(git_patch_get_line_in_hunk(&line, patch, h, l), "could not read line");
+                if ((line->origin == GIT_DIFF_LINE_ADDITION && !selected('+', line->new_lineno))
+                    || (line->origin == GIT_DIFF_LINE_DELETION && !selected('-', line->old_lineno)))
+                {
+                    all = false;
+                    break;
+                }
+            }
+        }
+        if (all)
+        {
+            return unstage ? this->unstage(paths) : stage(paths);
+        }
+
+        // Staging applies the patch to the index as is (its old side is the index); unstaging applies it in
+        // reverse (its new side is the index). Each hunk keeps that side's start and derives the other one.
+        std::string body;
+        int offset = 0; // the new side's start minus the old side's, from the hunks before
+        for (std::size_t h = 0; h < hunk_count; ++h)
+        {
+            const git_diff_hunk* hunk = nullptr;
+            std::size_t line_count = 0;
+            IMGIT_TRY(git_patch_get_hunk(&hunk, &line_count, patch, h), "could not read hunk");
+            std::string text;
+            int old_count = 0, new_count = 0;
+            bool changes = false;
+            const auto emit = [&](char origin, const git_diff_line* line)
+            {
+                text += origin;
+                text.append(line->content, line->content_len);
+                if (line->content_len == 0 || line->content[line->content_len - 1] != '\n')
+                {
+                    text += "\n\\ No newline at end of file\n";
+                }
+                old_count += origin != '+' ? 1 : 0;
+                new_count += origin != '-' ? 1 : 0;
+            };
+            for (std::size_t l = 0; l < line_count; ++l)
+            {
+                const git_diff_line* line = nullptr;
+                IMGIT_TRY(git_patch_get_line_in_hunk(&line, patch, h, l), "could not read line");
+                switch (line->origin)
+                {
+                case GIT_DIFF_LINE_CONTEXT:
+                    emit(' ', line);
+                    break;
+                case GIT_DIFF_LINE_ADDITION:
+                    if (selected('+', line->new_lineno))
+                    {
+                        emit('+', line);
+                        changes = true;
+                    }
+                    else if (unstage)
+                    {
+                        emit(' ', line); // stays in the index
+                    }
+                    break;
+                case GIT_DIFF_LINE_DELETION:
+                    if (selected('-', line->old_lineno))
+                    {
+                        emit('-', line);
+                        changes = true;
+                    }
+                    else if (!unstage)
+                    {
+                        emit(' ', line); // stays in the index
+                    }
+                    break;
+                default: // the end-of-file newline markers: emit() writes them
+                    break;
+                }
+            }
+            if (!changes)
+            {
+                continue;
+            }
+            // A side with no lines starts at the line before (git's convention), one with lines at its first.
+            const int anchor_start = unstage ? hunk->new_start : hunk->old_start;
+            const int anchor_count = unstage ? new_count : old_count;
+            const int other_count = unstage ? old_count : new_count;
+            int other_start = unstage ? anchor_start - offset : anchor_start + offset;
+            if (anchor_count == 0 && other_count > 0)
+            {
+                ++other_start;
+            }
+            else if (anchor_count > 0 && other_count == 0)
+            {
+                --other_start;
+            }
+            const int old_start = unstage ? other_start : anchor_start;
+            const int new_start = unstage ? anchor_start : other_start;
+            body += "@@ -" + std::to_string(old_start) + "," + std::to_string(old_count) + " +"
+                    + std::to_string(new_start) + "," + std::to_string(new_count) + " @@\n" + text;
+            offset += new_count - old_count;
+        }
+        if (body.empty())
+        {
+            return {};
+        }
+        // A new file keeps its "new file" header when staged in part; a partly staged deletion is a plain change.
+        std::string patch_text = "diff --git a/" + path + " b/" + path + "\n";
+        const bool created = !unstage && (delta->status == GIT_DELTA_UNTRACKED || delta->status == GIT_DELTA_ADDED);
+        if (created)
+        {
+            char mode[16];
+            std::snprintf(mode, sizeof(mode), "%o", static_cast<unsigned>(delta->new_file.mode));
+            patch_text += std::string("new file mode ") + mode + "\n--- /dev/null\n";
+        }
+        else
+        {
+            patch_text += "--- a/" + path + "\n";
+        }
+        patch_text += "+++ b/" + path + "\n" + body;
+        std::vector<std::string> args{"apply", "--cached", "--whitespace=nowarn"};
+        if (unstage)
+        {
+            args.emplace_back("--reverse");
+        }
+        args.emplace_back("-");
+        const cli::Output output = cli::run(m_workdir, args, patch_text);
+        if (output.exit_code != 0)
+        {
+            return std::unexpected(Error{output.text.empty() ? "git apply failed" : output.text});
+        }
         return {};
     }
 
