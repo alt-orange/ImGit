@@ -137,7 +137,7 @@ namespace imgit::ui
             report_sequencer(app, state, "Merge", result, "Merged " + name + " into " + head);
         }
 
-        void rewrite(Application& app, RepoState& state, const git::Sha& base,
+        bool rewrite(Application& app, RepoState& state, const git::Sha& base,
                      const std::vector<git::RebaseStep>& steps, const std::string& label, const std::string& success)
         {
             app::UndoEntry undo = tip_restore_entry(state, label, git::ResetMode::HARD);
@@ -152,6 +152,7 @@ namespace imgit::ui
                 app.toasts.push(app::ToastKind::SUCCESS, success);
             }
             state.refresh();
+            return result.has_value();
         }
 
         void confirm(Application& app, std::string title, std::string message, std::string confirm_label, bool danger,
@@ -1295,8 +1296,11 @@ namespace imgit::ui
                 view_ops.push_back(menu_submenu("Solo", std::move(solos)));
             }
 
-            return separated_menu({std::move(remote_ops), std::move(merge_items), std::move(checkout),
-                                   std::move(worktree), std::move(commit_ops), std::move(rebase_ops),
+            // Gitflow: Finish feature / release / hotfix <name> on a gitflow branch.
+            MenuItems gitflow_ops = local != nullptr ? gitflow_finish_items(app, state, local->name) : MenuItems{};
+            return separated_menu({std::move(remote_ops), std::move(merge_items), std::move(gitflow_ops),
+                                   std::move(checkout), std::move(worktree), std::move(commit_ops),
+                                   std::move(rebase_ops),
                                    std::move(branch_ops), std::move(copy_ops),
                                    std::move(view_ops), compare_items(state, sha)});
         }
@@ -1654,6 +1658,73 @@ namespace imgit::ui
                          })};
         }
     } // namespace
+
+    // -------------------------------------------------------------------------------------------------------
+    // Rewording from the detail panel
+
+    bool can_reword(const app::RepoState& state, const git::Sha& sha)
+    {
+        if (sha.empty() || state.history.head_sha.empty() || state.rebase.active
+            || state.repo.state() == git::RepoState::REBASE)
+        {
+            return false;
+        }
+        if (sha == state.history.head_sha)
+        {
+            return true;
+        }
+        // An older commit: on HEAD's first-parent chain above the first merge, with a parent to rebuild onto
+        // (as the commit menu's Edit commit message).
+        const std::vector<const git::Commit*> chain = head_chain(state);
+        const int index = chain_index(chain, sha);
+        return index > 0 && chain[static_cast<std::size_t>(index)]->parents.size() == 1;
+    }
+
+    bool reword_commit(app::Application& app, app::RepoState& state, const git::Sha& sha, const std::string& message)
+    {
+        if (!can_reword(state, sha))
+        {
+            app.toasts.push(app::ToastKind::ERROR, "Edit commit message failed",
+                            "Only commits of the current branch above its last merge commit can be reworded.");
+            return false;
+        }
+        if (sha == state.history.head_sha)
+        {
+            app::UndoEntry undo = tip_restore_entry(state, "edit commit message", git::ResetMode::HARD);
+            if (!app.run(state, "Update message",
+                         [&]
+                         {
+                             return state.repo.reword_head(message);
+                         }))
+            {
+                return false;
+            }
+            state.push_undo(std::move(undo));
+            state.select_only(state.history.head_sha);
+            return true;
+        }
+        const std::vector<const git::Commit*> chain = head_chain(state);
+        const int index = chain_index(chain, sha);
+        const git::Sha base = chain[static_cast<std::size_t>(index)]->parents.front();
+        std::vector<git::RebaseStep> steps;
+        for (const git::Commit* c : state.commits_above(base))
+        {
+            const bool target = c->sha == sha;
+            steps.push_back({c->sha, target ? git::RebaseAction::REWORD : git::RebaseAction::PICK,
+                             target ? message : std::string()});
+        }
+        if (!rewrite(app, state, base, steps, "Edit commit message", "Commit message updated"))
+        {
+            return false;
+        }
+        // The reworded commit has a new sha at the same place under HEAD: keep it selected.
+        const std::vector<const git::Commit*> rewritten = head_chain(state);
+        if (static_cast<std::size_t>(index) < rewritten.size())
+        {
+            state.select_only(rewritten[static_cast<std::size_t>(index)]->sha);
+        }
+        return true;
+    }
 
     // -------------------------------------------------------------------------------------------------------
     // Public menus
@@ -2690,7 +2761,24 @@ namespace imgit::ui
                     },
                     name != "Local"));
         }
-        return separated_menu({std::move(visibility), std::move(maximize), std::move(switches)});
+        // The section's workflows: Clean Up Branches under LOCAL, Start Feature / Release / Hotfix under GITFLOW.
+        MenuItems workflows;
+        if (section == "Local")
+        {
+            workflows.push_back(item("Clean Up Branches...",
+                                     [&app, &state]
+                                     {
+                                         open_branch_cleanup(app, state);
+                                     }));
+        }
+        if (section == "Local" || section == "Gitflow")
+        {
+            for (MenuItem& start : gitflow_start_items(app, state))
+            {
+                workflows.push_back(std::move(start));
+            }
+        }
+        return separated_menu({std::move(workflows), std::move(visibility), std::move(maximize), std::move(switches)});
     }
 
     MenuItems terminal_menu(app::Application& app)

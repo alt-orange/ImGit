@@ -1431,16 +1431,18 @@ namespace imgit::ui
             // The message: the re-resizable box, layout.CommitMessage.rightPanelHeight tall (150 by default)
             // within [120, panelHeight - 213] (52 more while editing), panelHeight being what the header leaves. The
             // view fills it but its 17px bottom margin; the editor fills it but 50px. Its 100 x 4 handle, 9px above
-            // its bottom edge, drags it with the row-resize cursor. HEAD's message is editable: hovering the view
-            // turns its border blue, clicking it opens the editor with Update Message / Cancel Amend under it.
+            // its bottom edge, drags it with the row-resize cursor. The message of HEAD, or of an older commit of
+            // its first-parent chain above the last merge, is editable: hovering the view turns its border blue,
+            // clicking it opens the editor with Update Message / Cancel Amend under it.
             const float box_top = header_top + px(46.f);
-            const bool amendable = commit.sha == state.history.head_sha && !is_stash && !state.rebase.active;
-            if (!amendable)
+            const bool amendable = !is_stash && can_reword(state, commit.sha);
+            if (!amendable || state.amend_sha != commit.sha)
             {
                 state.amending_message = false;
             }
             const bool editing = state.amending_message;
-            // Update Message rewrites HEAD and reloads the history `commit` points into: done once the panel is drawn.
+            // Update Message rewrites the history `commit` points into (HEAD alone, or the commits above the
+            // reworded one) and reloads it: done once the panel is drawn.
             bool update_message = false;
             const auto finish = [&]
             {
@@ -1453,15 +1455,10 @@ namespace imgit::ui
                 {
                     message += "\n\n" + state.amend_description;
                 }
-                if (app.run(state, "Update message",
-                            [&]
-                            {
-                                return state.repo.reword_head(message);
-                            }))
+                // The reworded commit stays selected.
+                if (reword_commit(app, state, git::Sha(commit.sha), message))
                 {
                     state.amending_message = false;
-                    // The amended commit replaces HEAD: keep it selected.
-                    state.select_only(state.history.head_sha);
                 }
             };
             const float panel_h = origin.y + size.y - header_top - px(36.f);
@@ -1516,6 +1513,7 @@ namespace imgit::ui
                     if (ImGui::InvisibleButton("##editable_message", ImVec2(bmax.x - bmin.x, bmax.y - bmin.y)))
                     {
                         state.amending_message = true;
+                        state.amend_sha = commit.sha;
                         state.amend_focus_requested = true;
                         state.amend_summary = commit.summary;
                         state.amend_description = commit.body;
@@ -1529,7 +1527,9 @@ namespace imgit::ui
                     if (hovered)
                     {
                         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                        styled_tooltip_left(bmin, bmax, "Click to amend your commit message");
+                        styled_tooltip_left(bmin, bmax, commit.sha == state.history.head_sha
+                                                                ? "Click to amend your commit message"
+                                                                : "Click to edit this commit's message");
                     }
                 }
                 draw->AddRectFilled(bmin, bmax, theme::u32(p.input_bg), px(4.f));

@@ -114,6 +114,7 @@ namespace imgit::app
             ABOUT,
             CONFIRM, // generic: title / message / confirm_label / on_confirm
             CREATE_FILE, // the prompt bar: text_a the new file's name, text_b the folder it goes in ("" the root)
+            BRANCH_CLEANUP, // checks: the local branches to delete, each with why it is offered
         };
         Kind kind = Kind::NONE;
         bool just_opened = false;
@@ -130,6 +131,14 @@ namespace imgit::app
         int page = 0;
         git::ResetMode reset_mode = git::ResetMode::MIXED;
         std::vector<git::Sha> shas; // SQUASH_COMMITS
+        // A list of ticked / unticked entries (BRANCH_CLEANUP): `label` and the `note` after it.
+        struct Check
+        {
+            std::string label;
+            std::string note;
+            bool checked = true;
+        };
+        std::vector<Check> checks;
         std::string error;
         // CONFIRM
         std::string title;

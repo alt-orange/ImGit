@@ -141,6 +141,13 @@ namespace imgit::git
         [[nodiscard]] Result<void> checkout_remote_branch(const std::string& remote, const std::string& name) const;
         [[nodiscard]] Result<void> checkout_commit(const Sha& sha) const;
         [[nodiscard]] Result<void> delete_branch(const std::string& name) const;
+        // The repository's default branch: what `remote`'s HEAD points at, else gitflow's main branch, else a local
+        // main or master; empty when there is none.
+        [[nodiscard]] std::string default_branch(const std::string& remote = "origin") const;
+        // Whether the local branch tracks an upstream that no longer exists (git's "[gone]" after a pruning fetch).
+        [[nodiscard]] bool upstream_gone(const std::string& name) const;
+        // Whether the local branch is checked out here or in a linked worktree.
+        [[nodiscard]] bool branch_checked_out(const std::string& name) const;
         [[nodiscard]] Result<void> rename_branch(const std::string& name, const std::string& new_name) const;
         [[nodiscard]] Result<void> set_upstream(const std::string& name, const std::string& upstream) const;
         [[nodiscard]] Result<void> create_tag(const std::string& name, const Sha& sha,

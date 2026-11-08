@@ -61,6 +61,8 @@ namespace imgit::ui
                 return "Keyboard Shortcuts";
             case app::Dialog::Kind::ABOUT:
                 return "About ImGit Desktop";
+            case app::Dialog::Kind::BRANCH_CLEANUP:
+                return "Clean Up Branches";
             default:
                 return "";
             }
@@ -76,6 +78,7 @@ namespace imgit::ui
                 return 560.f;
             case app::Dialog::Kind::SQUASH_COMMITS:
             case app::Dialog::Kind::REWORD_COMMIT:
+            case app::Dialog::Kind::BRANCH_CLEANUP:
                 return 540.f;
             default:
                 return 480.f;
@@ -2551,6 +2554,9 @@ namespace imgit::ui
             }
             break;
         }
+        case app::Dialog::Kind::BRANCH_CLEANUP: // ui/workflows.cpp
+            draw_branch_cleanup(app, *state, d);
+            break;
         case app::Dialog::Kind::NONE:
         case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
         case app::Dialog::Kind::TEXT_PROMPT:

@@ -61,6 +61,7 @@ add_executable(imgit
     src/app/theme_file.cpp
     src/app/toasts.cpp
     src/app/vt_screen.cpp
+    src/app/workflows.cpp
     src/git/git_cli.cpp
     src/git/repository.cpp
     src/gfx/image.cpp
@@ -89,7 +90,8 @@ add_executable(imgit
     src/ui/merge_view.cpp
     src/ui/avatars.cpp
     src/ui/vector_icons.cpp
-    src/ui/widgets.cpp)
+    src/ui/widgets.cpp
+    src/ui/workflows.cpp)
 
 # Platform code lives in src/platform (one header per service, a _win32 / _posix source each, plus the .mm
 # sources for the Cocoa calls) and in the native font loader; everything else is portable.

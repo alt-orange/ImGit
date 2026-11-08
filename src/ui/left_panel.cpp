@@ -853,6 +853,10 @@ namespace imgit::ui
             {
                 items.push_back({"Submodules", "far:layer-group", state.history.submodules.size()});
             }
+            if (gitflow_initialized(state))
+            {
+                items.push_back({"Gitflow", "fas:exchange", gitflow_branches(state).size()});
+            }
             float y = origin.y + px(30.f);
             for (const StripItem& item : items)
             {
@@ -1117,6 +1121,44 @@ namespace imgit::ui
                                 }});
         }
 
+        // GITFLOW, once Initialize Gitflow has set the repository up: its feature / release / hotfix branches
+        // (right-click: Finish); the "+" starts a new one.
+        if (gitflow_initialized(state))
+        {
+            std::vector<const git::Ref*> flows = gitflow_branches(state);
+            const std::size_t flow_count = flows.size();
+            sections.push_back({"Gitflow", "fas:exchange", flow_count, [&, flows = std::move(flows)](Context& ctx)
+                                {
+                                    for (const git::Ref* ref : flows)
+                                    {
+                                        const std::string key = "gitflow:" + ref->full_name;
+                                        RowOptions options;
+                                        options.icon = ref_icon(*ref);
+                                        options.checked_out = ref->is_head;
+                                        options.can_hide = false;
+                                        options.selected = state.left_selected == key && state.is_selected(ref->target);
+                                        options.ahead = ref->ahead;
+                                        options.behind = ref->behind;
+                                        options.tooltip = ref->name;
+                                        const RowResult row =
+                                                panel_row(ctx, key.c_str(), RowLabel{ref->name, {}}, options);
+                                        if (row.double_clicked)
+                                        {
+                                            ctx.checkout_request = *ref;
+                                        }
+                                        else if (row.clicked)
+                                        {
+                                            state.left_selected = key;
+                                            jump_to_commit(state, ref->target.c_str());
+                                        }
+                                        if (row.context)
+                                        {
+                                            popup_menu(ref_menu(app, state, *ref, true));
+                                        }
+                                    }
+                                }});
+        }
+
         // Sections fill the panel under the filter box.
         const float top = origin.y + px(63.f);
         const float panel_h = origin.y + size.y - top;
@@ -1161,20 +1203,25 @@ namespace imgit::ui
                 }
                 ImGui::PopID();
             }
-            // REMOTE and SUBMODULES have a "+": it adds a remote / a submodule.
+            // REMOTE, SUBMODULES and GITFLOW have a "+": it adds a remote / a submodule, starts a gitflow branch.
             const bool remotes = section.name == "Remote";
             const bool submodules = section.name == "Submodules";
+            const bool gitflow = section.name == "Gitflow";
             bool add = false;
             if (section_header(ctx, ImVec2(origin.x, y0), inner_w, section.name.c_str(), section.icon, section.count,
-                               expanded[i], remotes || submodules ? &add : nullptr,
-                               remotes ? "Add Remote" : "Add Submodule"))
+                               expanded[i], remotes || submodules || gitflow ? &add : nullptr,
+                               remotes ? "Add Remote" : gitflow ? "Start Feature / Release / Hotfix" : "Add Submodule"))
             {
                 if (!state.expanded_left_sections.erase(section.name))
                 {
                     state.expanded_left_sections.insert(section.name);
                 }
             }
-            if (add)
+            if (add && gitflow)
+            {
+                popup_menu(gitflow_start_items(app, state));
+            }
+            else if (add)
             {
                 app.dialog.open(remotes ? app::Dialog::Kind::ADD_REMOTE : app::Dialog::Kind::ADD_SUBMODULE);
             }
