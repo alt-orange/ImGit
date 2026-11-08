@@ -35,6 +35,7 @@ namespace imgit::git
         bool amend = false;
         bool sign = false; // -S; off passes --no-gpg-sign, so commit.gpgsign is the form's default, not an override
         bool skip_hooks = false; // --no-verify
+        bool strip_comments = false; // --cleanup=strip: lines starting with the comment character are left out
     };
 
     template<class T>
@@ -72,6 +73,10 @@ namespace imgit::git
         {
             return m_repo.get();
         }
+        // The .git folder shared by the repository and its linked worktrees (forward slashes, no trailing one).
+        [[nodiscard]] std::string common_dir() const;
+        // This worktree's own .git folder (its info/sparse-checkout, HEAD...).
+        [[nodiscard]] std::string git_dir() const;
 
         // Reading
         [[nodiscard]] Result<History> load_history(const HistoryOptions& options) const;
@@ -192,6 +197,8 @@ namespace imgit::git
         // Configuration (repository, global and system levels): empty / `fallback` when unset.
         [[nodiscard]] std::string config_string(const std::string& key) const;
         [[nodiscard]] bool config_bool(const std::string& key, bool fallback) const;
+        // Writes `key` to the repository's own .git/config; an empty value removes it.
+        [[nodiscard]] Result<void> set_local_config(const std::string& key, const std::string& value) const;
         // The text of the file commit.template names (~ expanded, relative to the working directory), its comment
         // lines left out; empty when there is none.
         [[nodiscard]] std::string commit_template() const;
@@ -220,6 +227,11 @@ namespace imgit::git
     [[nodiscard]] std::string global_user_email();
     // user.name from the global / system git configuration, empty when unset.
     [[nodiscard]] std::string global_user_name();
+    // A key of the global / system git configuration, empty when unset.
+    [[nodiscard]] std::string global_config(const std::string& key);
+    [[nodiscard]] bool global_config_bool(const std::string& key, bool fallback);
+    // Writes `key` to the global .gitconfig; an empty value removes it.
+    [[nodiscard]] Result<void> set_global_config(const std::string& key, const std::string& value);
     // Writes user.name / user.email to the global .gitconfig (the profile's "Keep my .gitconfig updated").
     [[nodiscard]] Result<void> set_global_identity(const std::string& name, const std::string& email);
     // The author / committer of commits in repositories without their own user.name / user.email: the current

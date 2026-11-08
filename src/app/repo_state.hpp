@@ -147,6 +147,7 @@ namespace imgit::app
 
         // Graph walk options
         std::size_t commit_limit = 2000;
+        git::Sha submodules_head; // the HEAD the submodules were last updated for (Keep submodules up to date)
         std::unordered_set<std::string> hidden_refs; // full names
         std::string solo_ref;
         bool smart_branch_visibility = false; // Settings::smart_branch_visibility, as the history was loaded

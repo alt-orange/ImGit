@@ -46,12 +46,30 @@ namespace imgit::app
         }
     }
 
-    // The toast cards: bottom-left, 16px in and 32px above the window bottom,
-    // 352px wide, at least 80px tall, newest at the bottom, 8px apart. A 36px status column with the white
-    // icon, the 16px title and 14px secondary text with 16px padding, and the × in a 31px column. Clicking a
-    // card dismisses it. A card slides in from the left edge over SLIDE_SECONDS and back out when it expires or is
-    // dismissed; its slot in the stack grows and shrinks with it, so the cards above settle instead of jumping.
-    void Toasts::draw()
+    ToastCorner toast_corner(std::string_view name)
+    {
+        if (name == "Top Left")
+        {
+            return ToastCorner::TOP_LEFT;
+        }
+        if (name == "Top Right")
+        {
+            return ToastCorner::TOP_RIGHT;
+        }
+        if (name == "Bottom Right")
+        {
+            return ToastCorner::BOTTOM_RIGHT;
+        }
+        return ToastCorner::BOTTOM_LEFT;
+    }
+
+    // The toast cards: in `corner`, 16px in from the side and 32px above the window bottom (below the tabs bar
+    // and toolbar at the top), 352px wide, at least 80px tall, newest nearest the edge, 8px apart. A 36px status column
+    // with the white icon, the 16px title and 14px secondary text with 16px padding, and the × in a 31px column.
+    // Clicking a card dismisses it. A card slides in from its side's edge over SLIDE_SECONDS and back out when it
+    // expires or is dismissed; its slot in the stack grows and shrinks with it, so the cards above settle instead of
+    // jumping.
+    void Toasts::draw(ToastCorner corner)
     {
         constexpr double SLIDE_SECONDS = 0.3;
         const double now = ImGui::GetTime();
@@ -71,7 +89,7 @@ namespace imgit::app
         {
             return;
         }
-        // How far in a card is: 0 fully off the left edge, 1 in place.
+        // How far in a card is: 0 fully off its edge, 1 in place.
         const auto slide = [&](const Toast& toast)
         {
             const double in = (now - toast.shown_at) / SLIDE_SECONDS;
@@ -92,8 +110,13 @@ namespace imgit::app
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         const float width = ui::px(352.f);
         const float text_w = ui::px(252.7f);
-        const float x = viewport->Pos.x + ui::px(16.f);
-        float bottom = viewport->Pos.y + viewport->Size.y - ui::px(32.f);
+        const bool right = corner == ToastCorner::TOP_RIGHT || corner == ToastCorner::BOTTOM_RIGHT;
+        const bool top = corner == ToastCorner::TOP_LEFT || corner == ToastCorner::TOP_RIGHT;
+        const float x =
+                right ? viewport->Pos.x + viewport->Size.x - ui::px(16.f) - width : viewport->Pos.x + ui::px(16.f);
+        // The edge the next card stacks from: the bottom one's bottom, or the top one's top (under the tabs bar
+        // and the toolbar).
+        float edge = top ? viewport->WorkPos.y + ui::px(96.f) : viewport->Pos.y + viewport->Size.y - ui::px(32.f);
         const auto line_count = [&](const std::string& text, float size, float line_h)
         {
             if (text.empty())
@@ -161,10 +184,12 @@ namespace imgit::app
             const float height =
                     std::max(ui::px(80.f), ui::px(16.f) + title_h + ui::px(10.f) + body_h + ui::px(5.f) + ui::px(16.f));
             const float visible = slide(toast);
-            const float card_x = x - (1.f - visible) * (width + ui::px(16.f));
-            const ImVec2 min(std::round(card_x), bottom - height);
-            const ImVec2 max(min.x + width, bottom);
-            bottom = min.y - ui::px(8.f) + (1.f - visible) * (height + ui::px(8.f));
+            const float card_x = x + (right ? 1.f : -1.f) * (1.f - visible) * (width + ui::px(16.f));
+            const ImVec2 min(std::round(card_x), top ? edge : edge - height);
+            const ImVec2 max(min.x + width, min.y + height);
+            // The slot grows and shrinks with the slide.
+            const float slot = visible * (height + ui::px(8.f));
+            edge += top ? slot : -slot;
 
             ImGui::SetNextWindowPos(min);
             ImGui::SetNextWindowSize(ImVec2(width, height));

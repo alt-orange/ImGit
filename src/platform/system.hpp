@@ -3,6 +3,7 @@
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Facts about the user's system that differ per platform.
@@ -20,6 +21,9 @@ namespace imgit::platform
     // `t` as local time.
     [[nodiscard]] std::tm local_time(std::time_t t);
 
+    // The user's locale for dates, as "en-us" / "de-de" (empty when unknown).
+    [[nodiscard]] std::string system_locale();
+
     // Seconds a hovered submenu waits before it opens (the system's menu show delay).
     [[nodiscard]] float menu_show_delay();
 
@@ -32,6 +36,12 @@ namespace imgit::platform
     // The font file for `font`, empty when the system has none.
     [[nodiscard]] std::filesystem::path system_font_file(SystemFont font);
 
+    // The monospace faces installed on this system that Preferences → Editor / In-App Terminal offer, by name
+    // ("Consolas", "Menlo", "DejaVu Sans Mono"...). Looked up once.
+    [[nodiscard]] std::vector<std::string> monospace_font_names();
+    // The file of one of those faces, empty when it is unknown or not installed.
+    [[nodiscard]] std::filesystem::path monospace_font_file(std::string_view name);
+
     struct Shell
     {
         std::vector<std::string> args;
@@ -39,6 +49,10 @@ namespace imgit::platform
     };
     // The interactive shell the terminal panel runs.
     [[nodiscard]] Shell default_shell();
+    // The shells the terminal panel can run, by name ("PowerShell", "Git Bash", "zsh"...). Looked up once.
+    [[nodiscard]] std::vector<std::string> terminal_shell_names();
+    // The shell for one of those names; default_shell() for an empty or unknown one.
+    [[nodiscard]] Shell terminal_shell(std::string_view name);
 
     // The proxy the system routes HTTPS through ("host:port"), empty for a direct connection. Environment proxies
     // (HTTPS_PROXY, ...) are honoured by the HTTP client itself.

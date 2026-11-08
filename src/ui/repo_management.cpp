@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "platform/process.hpp"
 #include "platform/shell.hpp"
@@ -128,6 +129,7 @@ namespace imgit::ui
                 app.toasts.push(app::ToastKind::INFO, title + " is already running");
                 return;
             }
+            args = app::with_prune_preference(std::move(args), app::preferences().flag(app::pref::AUTO_PRUNE));
             app.run_in_background(
                     tag,
                     [&app, title, paths = std::move(paths), args = std::move(args)]() -> std::function<void()>

@@ -32,6 +32,7 @@ namespace imgit::app
         bool show_sha = false;
         bool show_changes = false;
         bool show_description = true;
+        bool description_on_hover = false; // with show_description: only the row under the mouse shows it
         bool show_ghost_refs = true;
         bool highlight_rows_on_ref_hover = true;
         bool remember_tabs = true;
@@ -366,8 +367,15 @@ namespace imgit::app
         void reopen_closed_tab();
         void select_adjacent_tab(int direction);
         void copy_to_clipboard(const std::string& text);
+        // Preferences → External Tools: opens `path` in the chosen editor / a terminal at `path` (the in-app one for
+        // the repository of `state`, when that is the choice).
+        void open_in_editor(const std::string& path);
+        void open_terminal(RepoState* state, const std::string& path);
         void set_zoom(float zoom);
         void apply_settings();
+        // How many commits a tab's graph loads at first: Initial Commits in Graph, or all of them (Show All
+        // Commits in Graph).
+        [[nodiscard]] std::size_t commit_limit() const;
         // Reads the profile's custom themes (its "themes" folder) again, reports files that could not be used
         // (and, with `report`, that it worked) and applies the theme.
         void reload_custom_themes(bool report);
@@ -445,6 +453,9 @@ namespace imgit::app
         };
         std::vector<BackgroundJob> m_background;
         void auto_fetch(RepoState& state);
+        void group_worktree_tab(int index);
+        void keep_submodules_updated();
+        bool m_restoring_tabs = false; // restore_tabs() is opening the remembered tabs
         void handle_shortcuts(RepoState* state);
         void load_recent();
         void load_aliases();
@@ -458,6 +469,8 @@ namespace imgit::app
         [[nodiscard]] ui::MenuItems bar_menu(int index);
         bool native_menu_installed = false; // the menus sit in the system menu bar (macOS)
         void draw_status_bar();
+        void draw_toasts();
+        int m_unread_toasts = 0; // the toasts not yet read at the last frame
         void draw_repo_tab(RepoState& state, ImVec2 size);
 
         std::string m_pending_profile;

@@ -2604,6 +2604,41 @@ namespace imgit::git
         return result;
     }
 
+    std::string Repository::common_dir() const
+    {
+        std::string dir = git_repository_commondir(m_repo.get());
+        std::replace(dir.begin(), dir.end(), '\\', '/');
+        while (dir.size() > 1 && dir.back() == '/')
+        {
+            dir.pop_back();
+        }
+        return dir;
+    }
+
+    std::string Repository::git_dir() const
+    {
+        return git_repository_path(m_repo.get());
+    }
+
+    Result<void> Repository::set_local_config(const std::string& key, const std::string& value) const
+    {
+        git_config* config = nullptr;
+        IMGIT_TRY(git_repository_config(&config, m_repo.get()), "could not open the repository configuration");
+        git_config* local = nullptr;
+        const int opened = git_config_open_level(&local, config, GIT_CONFIG_LEVEL_LOCAL);
+        git_config_free(config);
+        IMGIT_TRY(opened, "could not open the repository configuration");
+        int rc = value.empty() ? git_config_delete_entry(local, key.c_str())
+                               : git_config_set_string(local, key.c_str(), value.c_str());
+        if (value.empty() && rc == GIT_ENOTFOUND)
+        {
+            rc = 0;
+        }
+        git_config_free(local);
+        IMGIT_TRY(rc, "could not update the repository configuration");
+        return {};
+    }
+
     bool Repository::config_bool(const std::string& key, bool fallback) const
     {
         ConfigHandle config;
@@ -2719,6 +2754,10 @@ namespace imgit::git
         if (options.skip_hooks)
         {
             args.emplace_back("--no-verify");
+        }
+        if (options.strip_comments)
+        {
+            args.emplace_back("--cleanup=strip");
         }
         const cli::Output output = cli::run(m_workdir, args, message);
         if (output.exit_code != 0)
@@ -3235,6 +3274,43 @@ namespace imgit::git
             return result;
         }
     } // namespace
+
+    std::string global_config(const std::string& key)
+    {
+        return global_config_string(key.c_str());
+    }
+
+    bool global_config_bool(const std::string& key, bool fallback)
+    {
+        git_config* config = nullptr;
+        if (git_config_open_default(&config) != 0)
+        {
+            return fallback;
+        }
+        int value = 0;
+        const bool found = git_config_get_bool(&value, config, key.c_str()) == 0;
+        git_config_free(config);
+        return found ? value != 0 : fallback;
+    }
+
+    Result<void> set_global_config(const std::string& key, const std::string& value)
+    {
+        git_config* config = nullptr;
+        IMGIT_TRY(git_config_open_default(&config), "could not open the git configuration");
+        git_config* global = nullptr;
+        const int opened = git_config_open_level(&global, config, GIT_CONFIG_LEVEL_GLOBAL);
+        git_config_free(config);
+        IMGIT_TRY(opened, "could not open the global git configuration");
+        int rc = value.empty() ? git_config_delete_entry(global, key.c_str())
+                               : git_config_set_string(global, key.c_str(), value.c_str());
+        if (value.empty() && rc == GIT_ENOTFOUND)
+        {
+            rc = 0;
+        }
+        git_config_free(global);
+        IMGIT_TRY(rc, "could not update the global git configuration");
+        return {};
+    }
 
     std::string global_user_email()
     {

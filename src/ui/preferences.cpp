@@ -1,4 +1,6 @@
 #include "app/application.hpp"
+#include "app/date_format.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "platform/process.hpp"
 #include "platform/shell.hpp"
@@ -983,55 +985,102 @@ namespace imgit::ui
         }
 
         // ---------------------------------------------------------------------------------------------------------
-        // Stored values: controls ImGit has no setting for keep what the user chose in preferences.txt.
+        // Stored values: the preferences ImGit keeps itself (app/preferences.hpp, where the app reads them too),
+        // and the git configuration for the settings git has a key of its own for.
 
-        std::map<std::string, std::string>& stored(app::Application& app)
+        std::string value_of(const app::Preference& preference)
         {
-            static std::map<std::string, std::string> values;
-            static std::string loaded_for; // the profile whose preferences.txt `values` holds
-            if (loaded_for != app.profiles.current().guid)
+            return app::preferences().get(preference);
+        }
+
+        bool flag_of(const app::Preference& preference)
+        {
+            return app::preferences().flag(preference);
+        }
+
+        void set_value(const app::Preference& preference, std::string value)
+        {
+            app::preferences().set(preference, std::move(value));
+        }
+
+        // Where a setting lives in the git configuration: the global .gitconfig, or the open repository's
+        // .git/config (Repo-Specific Preferences).
+        enum class Scope
+        {
+            GLOBAL,
+            REPO,
+        };
+
+        // The git configuration the pages show, read again every two seconds (another program may change it), when
+        // the repository changes and after ImGit writes it.
+        struct GitValues
+        {
+            std::map<std::string, std::string> values;
+            double read_at = -1.0;
+            std::string repo;
+        };
+        GitValues g_git;
+
+        std::string git_value(app::Application& app, Scope scope, const std::string& key)
+        {
+            app::RepoState* state = app.active();
+            const std::string repo = state != nullptr ? state->repo.workdir() : std::string();
+            const double now = ImGui::GetTime();
+            if (now - g_git.read_at > 2.0 || g_git.repo != repo)
             {
-                loaded_for = app.profiles.current().guid;
-                values.clear();
-                std::ifstream file(app.config_path("preferences.txt"));
-                std::string line;
-                while (std::getline(file, line))
-                {
-                    const auto tab = line.find('\t');
-                    if (tab != std::string::npos)
-                    {
-                        values[line.substr(0, tab)] = line.substr(tab + 1);
-                    }
-                }
+                g_git = {{}, now, repo};
             }
-            return values;
-        }
-
-        void save_stored(app::Application& app)
-        {
-            std::ofstream file(app.config_path("preferences.txt"));
-            for (const auto& [key, value] : stored(app))
+            const std::string id = (scope == Scope::GLOBAL ? "global:" : "repo:") + key;
+            if (const auto found = g_git.values.find(id); found != g_git.values.end())
             {
-                file << key << '\t' << value << '\n';
+                return found->second;
             }
+            std::string value;
+            if (scope == Scope::GLOBAL)
+            {
+                value = git::global_config(key);
+            }
+            else if (state != nullptr)
+            {
+                value = state->repo.config_string(key);
+            }
+            g_git.values[id] = value;
+            return value;
         }
 
-        std::string& value_of(app::Application& app, const std::string& key, const char* fallback)
+        bool git_flag(app::Application& app, Scope scope, const std::string& key, bool fallback)
         {
-            auto& values = stored(app);
-            const auto found = values.find(key);
-            return found != values.end() ? found->second : values.emplace(key, fallback).first->second;
+            std::string value = git_value(app, scope, key);
+            if (value.empty())
+            {
+                return fallback;
+            }
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char c)
+                           {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            return value == "true" || value == "yes" || value == "on" || value == "1";
         }
 
-        bool flag_of(app::Application& app, const std::string& key, bool fallback)
+        // Writes `key` (an empty value removes it); a failure is reported as a toast.
+        void set_git_value(app::Application& app, Scope scope, const std::string& key, const std::string& value)
         {
-            return value_of(app, key, fallback ? "1" : "0") == "1";
-        }
-
-        void set_value(app::Application& app, const std::string& key, std::string value)
-        {
-            stored(app)[key] = std::move(value);
-            save_stored(app);
+            app::RepoState* state = app.active();
+            git::Result<void> written = std::unexpected(git::Error{"Open a repository first."});
+            if (scope == Scope::GLOBAL)
+            {
+                written = git::set_global_config(key, value);
+            }
+            else if (state != nullptr)
+            {
+                written = state->repo.set_local_config(key, value);
+            }
+            if (!written)
+            {
+                app.toasts.push(app::ToastKind::ERROR, "Could not set " + key, written.error().message);
+            }
+            g_git.read_at = -1.0;
         }
 
         void save_settings(app::Application& app)
@@ -1129,10 +1178,22 @@ namespace imgit::ui
         std::vector<std::string> g_signing_keys{"<None>"};
         bool g_signing_keys_read = false;
 
+        // gpg.program, the program `git commit -S` signs with ("gpg" when unset).
         std::string gpg_program(app::Application& app)
         {
-            const std::string program = value_of(app, "Commit Signing/GPG Program", "gpg");
+            const std::string program = git_value(app, Scope::GLOBAL, "gpg.program");
             return program.empty() ? std::string("gpg") : program;
+        }
+
+        bool ssh_signing(app::Application& app)
+        {
+            std::string format = git_value(app, Scope::GLOBAL, "gpg.format");
+            std::transform(format.begin(), format.end(), format.begin(),
+                           [](unsigned char c)
+                           {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            return format == "ssh";
         }
 
         // `program` when it starts, else, for the default "gpg", the gpg Git for Windows ships (usr/bin beside its
@@ -1159,6 +1220,28 @@ namespace imgit::ui
         void refresh_signing_keys(app::Application& app)
         {
             g_signing_keys_read = true;
+            if (ssh_signing(app))
+            {
+                // gpg.format ssh signs with an SSH key: user.signingkey is a public key file. The ones in ~/.ssh
+                // and the SSH page's.
+                std::vector<std::string> options{"<None>"};
+                std::error_code ec;
+                const std::filesystem::path folder = platform::home_directory() / ".ssh";
+                for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
+                {
+                    if (entry.path().extension() == ".pub")
+                    {
+                        options.push_back(entry.path().string());
+                    }
+                }
+                if (const std::string key = value_of(app::pref::SSH_PUBLIC_KEY);
+                    !key.empty() && std::find(options.begin(), options.end(), key) == options.end())
+                {
+                    options.push_back(key);
+                }
+                g_signing_keys = std::move(options);
+                return;
+            }
             if (app.background_running("gpg-keys"))
             {
                 return;
@@ -1184,22 +1267,38 @@ namespace imgit::ui
                                   });
         }
 
-        // Makes `option` ("<key id> <user id>", or "<None>") the signing key: kept in the preferences and set as
-        // user.signingkey in the global .gitconfig, which `git commit -S` reads.
+        // Makes `option` ("<key id> <user id>", an SSH public key file, or "<None>") the signing key: user.signingkey
+        // in the global .gitconfig, which `git commit -S` reads.
         void set_signing_key(app::Application& app, const std::string& option)
         {
-            set_value(app, "Commit Signing/Signing Key", option);
             if (option == "<None>")
             {
-                (void)git::cli::run({}, {"config", "--global", "--unset", "user.signingkey"});
+                set_git_value(app, Scope::GLOBAL, "user.signingkey", "");
                 return;
             }
-            const git::cli::Output out =
-                    git::cli::run({}, {"config", "--global", "user.signingkey", option.substr(0, option.find(' '))});
-            if (out.exit_code != 0)
+            set_git_value(app, Scope::GLOBAL, "user.signingkey",
+                          ssh_signing(app) ? option : option.substr(0, option.find(' ')));
+        }
+
+        // The Signing Key select's value: the option user.signingkey names (its key id, or its file).
+        std::string signing_key_option(app::Application& app)
+        {
+            const std::string key = git_value(app, Scope::GLOBAL, "user.signingkey");
+            if (key.empty())
             {
-                app.toasts.push(app::ToastKind::ERROR, "Could not set the signing key", out.text);
+                return "<None>";
             }
+            for (const std::string& option : g_signing_keys)
+            {
+                // The key may be named by its long id, a short one or the full fingerprint.
+                const std::string id = option.substr(0, option.find(' '));
+                if (option == key || id == key || (key.size() >= 8 && id.ends_with(key))
+                    || (id.size() >= 8 && key.ends_with(id)))
+                {
+                    return option;
+                }
+            }
+            return key;
         }
 
         // ssh-keygen makes an ed25519 key pair in ~/.ssh under a name no key there has yet (id_ed25519_imgit,
@@ -1238,8 +1337,8 @@ namespace imgit::ui
                         }
                         return [&app, private_key = key.string()]
                         {
-                            set_value(app, "SSH/Private key", private_key);
-                            set_value(app, "SSH/Public key", private_key + ".pub");
+                            set_value(app::pref::SSH_PRIVATE_KEY, private_key);
+                            set_value(app::pref::SSH_PUBLIC_KEY, private_key + ".pub");
                             app.toasts.push(app::ToastKind::SUCCESS, "SSH key generated", private_key + ".pub");
                         };
                     });
@@ -1305,6 +1404,49 @@ namespace imgit::ui
                     });
         }
 
+        // The Gitflow page's fields: the repository's gitflow.* configuration (git flow init's), or the defaults
+        // before it is initialized; edited here until Initialize Gitflow writes them.
+        struct GitflowField
+        {
+            const char* label;
+            const char* key;
+            const char* fallback;
+        };
+        constexpr GitflowField GITFLOW_FIELDS[] = {
+                {"Main/Master", "gitflow.branch.master", "main"},
+                {"Develop", "gitflow.branch.develop", "develop"},
+                {"Feature", "gitflow.prefix.feature", "feature/"},
+                {"Release", "gitflow.prefix.release", "release/"},
+                {"Hotfix", "gitflow.prefix.hotfix", "hotfix/"},
+                {"Version Tag", "gitflow.prefix.versiontag", ""},
+        };
+
+        struct GitflowDraft
+        {
+            std::string workdir = "\x01";
+            std::array<std::string, std::size(GITFLOW_FIELDS)> values;
+        };
+        GitflowDraft g_gitflow;
+
+        GitflowDraft& gitflow_draft(app::Application& app)
+        {
+            app::RepoState* state = app.active();
+            const std::string workdir = state != nullptr ? state->repo.workdir() : std::string();
+            if (g_gitflow.workdir != workdir)
+            {
+                g_gitflow.workdir = workdir;
+                for (std::size_t i = 0; i < std::size(GITFLOW_FIELDS); ++i)
+                {
+                    const std::string configured =
+                            state != nullptr ? state->repo.config_string(GITFLOW_FIELDS[i].key) : std::string();
+                    const bool initialized =
+                            state != nullptr && !state->repo.config_string("gitflow.branch.develop").empty();
+                    g_gitflow.values[i] = initialized ? configured : std::string(GITFLOW_FIELDS[i].fallback);
+                }
+            }
+            return g_gitflow;
+        }
+
         // What `git flow init` sets up: the branch names and prefixes from the Gitflow page in the repository's
         // configuration, and the develop branch (from main) when it is missing.
         void initialize_gitflow(app::Application& app)
@@ -1315,13 +1457,13 @@ namespace imgit::ui
                 app.toasts.push(app::ToastKind::ERROR, "Could not initialize Gitflow", "Open a repository first.");
                 return;
             }
-            const auto setting = [&app](const char* label, const char* fallback)
+            const GitflowDraft& draft = gitflow_draft(app);
+            const auto setting = [&draft](std::size_t i)
             {
-                const std::string value = value_of(app, std::string("Gitflow/") + label, fallback);
-                return value.empty() ? std::string(fallback) : value;
+                return draft.values[i].empty() ? std::string(GITFLOW_FIELDS[i].fallback) : draft.values[i];
             };
-            const std::string main_branch = setting("Main/Master", "main");
-            const std::string develop = setting("Develop", "develop");
+            const std::string main_branch = setting(0);
+            const std::string develop = setting(1);
             if (main_branch == develop)
             {
                 app.toasts.push(app::ToastKind::ERROR, "Could not initialize Gitflow",
@@ -1334,20 +1476,19 @@ namespace imgit::ui
                                 "There is no local branch '" + main_branch + "'.");
                 return;
             }
-            std::vector<std::vector<std::string>> runs{
-                    {"config", "gitflow.branch.master", main_branch},
-                    {"config", "gitflow.branch.develop", develop},
-                    {"config", "gitflow.prefix.feature", setting("Feature", "feature/")},
-                    {"config", "gitflow.prefix.release", setting("Release", "release/")},
-                    {"config", "gitflow.prefix.hotfix", setting("Hotfix", "hotfix/")},
-                    {"config", "gitflow.prefix.support", "support/"},
-                    {"config", "gitflow.prefix.versiontag", value_of(app, "Gitflow/Version Tag", "")},
-            };
+            std::vector<std::vector<std::string>> runs;
+            for (std::size_t i = 0; i < std::size(GITFLOW_FIELDS); ++i)
+            {
+                // The version tag prefix may be empty; the others fall back to their defaults.
+                runs.push_back({"config", GITFLOW_FIELDS[i].key, i == 5 ? draft.values[i] : setting(i)});
+            }
+            runs.push_back({"config", "gitflow.prefix.support", "support/"});
             if (state->find_ref("refs/heads/" + develop) == nullptr)
             {
                 runs.push_back({"branch", develop, main_branch});
             }
             app.run_git_cli_sequence(*state, "Initialize Gitflow", std::move(runs));
+            g_git.read_at = -1.0;
         }
 
         // ---------------------------------------------------------------------------------------------------------
@@ -1497,13 +1638,26 @@ namespace imgit::ui
         }
 
         // A checkbox row backed by a stored value.
-        void stored_checkbox(Row& r, const char* id, const std::string& key, bool fallback, std::string_view label = {},
+        void stored_checkbox(Row& r, const char* id, const app::Preference& preference, std::string_view label = {},
                              bool disabled = false)
         {
-            const bool value = flag_of(r.page().app, key, fallback);
+            const bool value = flag_of(preference);
             if (row_checkbox(r, id, value, label, disabled))
             {
-                set_value(r.page().app, key, value ? "0" : "1");
+                app::preferences().set_flag(preference, !value);
+            }
+        }
+
+        // A checkbox row over a git configuration boolean; `inverted`: checked while it is false.
+        void git_checkbox(Row& r, const char* id, Scope scope, const std::string& key, bool fallback,
+                          bool inverted = false)
+        {
+            app::Application& app = r.page().app;
+            const bool disabled = scope == Scope::REPO && app.active() == nullptr;
+            const bool checked = git_flag(app, scope, key, fallback) != inverted;
+            if (row_checkbox(r, id, checked, {}, disabled))
+            {
+                set_git_value(app, scope, key, !checked != inverted ? "true" : "false");
             }
         }
 
@@ -1517,14 +1671,38 @@ namespace imgit::ui
             }
         }
 
-        // A form-control text field backed by a stored value.
-        void stored_field(Row& r, const char* id, const std::string& key, const char* fallback, const Field& field = {},
+        // A form-control text field backed by a stored value: edited in a buffer, stored as it changes.
+        void stored_field(Row& r, const char* id, const app::Preference& preference, const Field& field = {},
                           float width = 300.f)
         {
-            std::string& value = value_of(r.page().app, key, fallback);
-            if (text_field(r.page(), id, r.x(), r.top, width, value, field))
+            static std::map<ImGuiID, std::string> buffers;
+            std::string& buffer = buffers[ImGui::GetID(id)];
+            if (!focused(id))
             {
-                save_stored(r.page().app);
+                buffer = value_of(preference);
+            }
+            if (text_field(r.page(), id, r.x(), r.top, width, buffer, field))
+            {
+                set_value(preference, buffer);
+            }
+            r.column = 34.f;
+        }
+
+        // A text field over a git configuration value, written when the field is left (empty: removed).
+        void git_field(Row& r, const char* id, Scope scope, const std::string& key, const Field& field = {},
+                       float width = 300.f)
+        {
+            app::Application& app = r.page().app;
+            static std::map<ImGuiID, std::string> buffers;
+            std::string& buffer = buffers[ImGui::GetID(id)];
+            if (!focused(id))
+            {
+                buffer = git_value(app, scope, key);
+            }
+            (void)text_field(r.page(), id, r.x(), r.top, width, buffer, field);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                set_git_value(app, scope, key, buffer);
             }
             r.column = 34.f;
         }
@@ -1549,32 +1727,43 @@ namespace imgit::ui
             r.column = 34.f;
         }
 
-        void stored_select(Row& r, const char* id, const std::string& key, const char* fallback,
+        void stored_select(Row& r, const char* id, const app::Preference& preference,
                            const std::vector<std::string>& options, float width = 300.f)
         {
-            app::Application& app = r.page().app;
-            native_select(r.page(), id, r.x(), r.top, width, value_of(app, key, fallback), options,
-                          [&app, key](const std::string& option)
+            native_select(r.page(), id, r.x(), r.top, width, value_of(preference), options,
+                          [preference](const std::string& option)
                           {
-                              set_value(app, key, option);
+                              set_value(preference, option);
                           });
             r.column = 34.f;
         }
 
-        // A Browse button with the chosen path after it (5px apart, the path on the button's text line).
-        void browse_row(Row& r, const std::string& key, const char* fallback, const char* extension)
+        // A Browse button with the chosen path after it (5px apart, the path on the button's text line), or
+        // `unset` while there is none; a set path has a Clear button after it. Returns the path's right edge.
+        float browse_row(Row& r, const app::Preference& preference, std::string_view unset, const char* extension)
         {
-            app::Application& app = r.page().app;
             if (button(r.page(), "##browse", r.x(), r.top, "Browse", Tone::PRIMARY))
             {
                 if (const auto path = platform::shell::open_file_dialog(extension); path)
                 {
-                    set_value(app, key, *path);
+                    set_value(preference, *path);
                 }
             }
             const float browse_w = 26.f + measure(Style{12.f}, "Browse");
-            text(r.page(), r.x() + browse_w + 5.f, r.top + 4.32f, LABEL, value_of(app, key, fallback));
+            const std::string path = value_of(preference);
+            float right = r.x() + browse_w + 5.f
+                          + text(r.page(), r.x() + browse_w + 5.f, r.top + 4.32f, path.empty() ? HELP : LABEL,
+                                 path.empty() ? unset : std::string_view(path));
+            if (!path.empty())
+            {
+                if (button(r.page(), "##clear", right + 10.f, r.top, "Clear", Tone::DEFAULT))
+                {
+                    set_value(preference, "");
+                }
+                right += 10.f + 26.f + measure(Style{12.f}, "Clear");
+            }
             r.column = 31.140625f;
+            return right;
         }
 
         // ---------------------------------------------------------------------------------------------------------
@@ -1601,12 +1790,13 @@ namespace imgit::ui
             row(form, "Auto-Prune",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##prune", "General/Auto-Prune", true);
+                    stored_checkbox(r, "##prune", app::pref::AUTO_PRUNE);
+                    help(r, "Fetches remove the remote-tracking branches whose branch is gone from the remote.");
                 });
             row(form, "Keep submodules up to date",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##submodules", "General/Keep submodules up to date", true,
+                    stored_checkbox(r, "##submodules", app::pref::UPDATE_SUBMODULES,
                                     "Automatically update all submodules after performing a Git action");
                 });
             row(form, "Default Branch Name",
@@ -1630,12 +1820,23 @@ namespace imgit::ui
             row(form, "Delete \".orig\" files after merging",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##orig", "General/Delete .orig files", false);
+                    git_checkbox(r, "##orig", Scope::GLOBAL, "mergetool.keepBackup", true, true);
+                    help(r, "Sets mergetool.keepBackup in your global Git Config: an external merge tool leaves no "
+                            ".orig backup of the conflicted file.");
                 });
             row(form, "Show All Commits in Graph",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##all_commits", "General/Show All Commits in Graph", false);
+                    const bool all = flag_of(app::pref::SHOW_ALL_COMMITS);
+                    if (row_checkbox(r, "##all_commits", all))
+                    {
+                        app::preferences().set_flag(app::pref::SHOW_ALL_COMMITS, !all);
+                        app.apply_settings();
+                        for (app::RepoState* tab : app.repo_states())
+                        {
+                            tab->refresh();
+                        }
+                    }
                     help(r, "{warning}Enabling this option may adversely affect performance.");
                 });
             row(form, "Initial Commits in Graph",
@@ -1654,38 +1855,27 @@ namespace imgit::ui
             row(form, "Lazy Load Commits in Graph",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##lazy", "General/Lazy Load Commits in Graph", true);
+                    stored_checkbox(r, "##lazy", app::pref::LAZY_LOAD_COMMITS);
                 });
             row(form, "Remember tabs",
                 [&](Row& r)
                 {
                     setting_checkbox(r, "##remember_tabs", s.remember_tabs);
                 });
-            row(form, "Path to sh.exe",
-                [&](Row& r)
-                {
-                    browse_row(r, "General/Path to sh.exe", "C:\\Program Files\\Git\\bin\\sh.exe", "exe");
-                    help(r, "Pointing to sh.exe is only required if you're using Git hooks.\nsh.exe can be found "
-                            "wherever you've installed Git for Windows,\nwhich is typically in Program Files\\Git\\bin."
-                            "\nIf you can't find it, you may need to install Git for Windows.");
-                });
+#ifdef _WIN32
             row(form, "Longpaths",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##longpaths", "General/Longpaths", false);
+                    git_checkbox(r, "##longpaths", Scope::GLOBAL, "core.longpaths", false);
                     help(r, "Sets core.longpaths in your global Git Config. By default, Windows only supports file "
                             "paths less than 260 characters. Enable support for longer file paths.");
                 });
+#endif
             row(form, "AutoCRLF",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##autocrlf", "General/AutoCRLF", true);
+                    git_checkbox(r, "##autocrlf", Scope::GLOBAL, "core.autocrlf", false);
                     help(r, "Sets core.autocrlf in your global Git Config.");
-                });
-            row(form, "Use extended logging in activity log",
-                [&](Row& r)
-                {
-                    stored_checkbox(r, "##extended_logging", "General/Extended logging", false);
                 });
             row(form, "Forget all Usernames and Passwords",
                 [&](Row& r)
@@ -2162,36 +2352,52 @@ namespace imgit::ui
         void ssh_page(Page& page)
         {
             app::Application& app = page.app;
-            const std::string& home = context(app).home;
             Form form{page};
             title(form, "SSH");
             row(form, "Use local SSH agent",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##ssh_agent", "SSH/Use local SSH agent", false);
+                    stored_checkbox(r, "##ssh_agent", app::pref::SSH_AGENT);
+                    help(r, "ssh takes its keys from the running SSH agent and your ssh config instead of the "
+                            "private key below.");
                 });
             // The path after the button sits on an inline line box half a pixel taller than the button.
             row(form, "SSH Private Key",
                 [&](Row& r)
                 {
-                    browse_row(r, "SSH/Private key", (home + "/.ssh/id_rsa").c_str(), "");
+                    (void)browse_row(r, app::pref::SSH_PRIVATE_KEY, "None: ssh's own configuration and keys", "");
                     r.column = 31.64f;
+                    help(r, "Git's network operations use only this key (unless the SSH agent is used).");
                 });
             row(form, "SSH Public Key",
                 [&](Row& r)
                 {
-                    browse_row(r, "SSH/Public key", (home + "/.ssh/id_rsa.pub").c_str(), "pub");
-                    const std::string path = value_of(app, "SSH/Public key", (home + "/.ssh/id_rsa.pub").c_str());
-                    // The copy button: btn-default with a clipboard (18px).
-                    const float copy_x = r.x() + 31.f + measure(Style{12.f}, "Browse") + measure(LABEL, path) + 5.f;
-                    box(page, copy_x, r.top - 0.5f, 40.f, 32.140625f, {CLEAR, white(0.75f), 2.f});
-                    svg(page, "clipboard", svg_path("clipboard"), 384.f, 512.f, copy_x + 11.f, r.top + 6.5f,
-                        13.5f, 18.f, white(0.75f));
-                    if (hit(page, "##copy_public_key", copy_x, r.top - 0.5f, 40.f, 32.140625f))
+                    std::string path = value_of(app::pref::SSH_PUBLIC_KEY);
+                    const float right = browse_row(r, app::pref::SSH_PUBLIC_KEY, "None", "pub");
+                    if (path.empty() && !value_of(app::pref::SSH_PRIVATE_KEY).empty())
                     {
-                        std::ifstream file(path);
-                        std::string key((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                        ImGui::SetClipboardText(key.c_str());
+                        path = value_of(app::pref::SSH_PRIVATE_KEY) + ".pub";
+                    }
+                    if (!path.empty())
+                    {
+                        // The copy button: btn-default with a clipboard (18px).
+                        const float copy_x = right + 5.f;
+                        box(page, copy_x, r.top - 0.5f, 40.f, 32.140625f, {CLEAR, white(0.75f), 2.f});
+                        svg(page, "clipboard", svg_path("clipboard"), 384.f, 512.f, copy_x + 11.f, r.top + 6.5f,
+                            13.5f, 18.f, white(0.75f));
+                        if (hit(page, "##copy_public_key", copy_x, r.top - 0.5f, 40.f, 32.140625f))
+                        {
+                            std::ifstream file(path);
+                            std::string key((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                            if (key.empty())
+                            {
+                                app.toasts.push(app::ToastKind::ERROR, "Could not read the public key", path);
+                            }
+                            else
+                            {
+                                app.copy_to_clipboard(key);
+                            }
+                        }
                     }
                     r.column = 31.64f;
                 });
@@ -2208,9 +2414,10 @@ namespace imgit::ui
             row(form, "Use default Git Credential Manager",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##credential_manager", "SSH/Use Git Credential Manager", false);
-                    help(r, "Select this to have ImGit use the credential manager in your Git config to access "
-                            "Git repositories");
+                    stored_checkbox(r, "##credential_manager", app::pref::CREDENTIAL_MANAGER);
+                    help(r, "Lets the credential manager in your Git config show its own sign-in window. Off, ImGit "
+                            "asks for usernames and passwords itself (the credential manager still answers with "
+                            "the ones it has stored).");
                 });
         }
 
@@ -2398,14 +2605,13 @@ namespace imgit::ui
         const Style DS_HINT{12.f, white(0.6f)};
 
         // A form-horizontal select over a stored value (External Tools' design-system selects).
-        void tool_select(Row& r, const char* id, const std::string& key, const char* fallback,
+        void tool_select(Row& r, const char* id, const app::Preference& preference,
                          const std::vector<std::string>& options)
         {
-            app::Application& app = r.page().app;
-            ds_select(r.page(), id, r.x(), r.top, value_of(app, key, fallback), "", options,
-                      [&app, key](const std::string& option)
+            ds_select(r.page(), id, r.x(), r.top, value_of(preference), "", options,
+                      [preference](const std::string& option)
                       {
-                          set_value(app, key, option);
+                          set_value(preference, option);
                       });
             r.column = 31.f;
         }
@@ -2431,8 +2637,9 @@ namespace imgit::ui
                       row(form, "External Merge Tool",
                           [&](Row& r)
                           {
-                              tool_select(r, "##merge_tool", "External Tools/Merge Tool", "Git Config Default",
-                                          {"<None>", "Git Config Default"});
+                              tool_select(r, "##merge_tool", app::pref::MERGE_TOOL, {"<None>", "Git Config Default"});
+                              help(r, "Git Config Default: conflicted files offer \"Open in external merge tool\" "
+                                      "(git mergetool, the tool merge.tool names).");
                           });
                   });
             group(form, "Diff Tool",
@@ -2441,19 +2648,38 @@ namespace imgit::ui
                       row(form, "External Diff Tool",
                           [&](Row& r)
                           {
-                              tool_select(r, "##diff_tool", "External Tools/Diff Tool", "<Use Merge Tool>",
+                              tool_select(r, "##diff_tool", app::pref::DIFF_TOOL,
                                           {"<Use Merge Tool>", "<None>", "Git Config Default"});
+                              help(r, "Files offer \"Open in external diff tool\" (git difftool, the tool diff.tool "
+                                      "or else merge.tool names).");
                           });
                   });
+            const auto custom_command = [&](const app::Preference& preference, const char* id)
+            {
+                row(form, "Command",
+                    [&](Row& r)
+                    {
+                        Field field;
+                        field.placeholder = "program --option %path%";
+                        field.inset = 1.f;
+                        stored_field(r, id, preference, field);
+                        help(r, "%path% is replaced by the folder or file (added at the end when missing). Quote a "
+                                "path with spaces.");
+                    });
+            };
             group(form, "Editor",
                   [&]
                   {
                       row(form, "External Editor",
                           [&](Row& r)
                           {
-                              tool_select(r, "##editor", "External Tools/Editor", "<None>",
-                                          {"<None>", "<Custom>", "Visual Studio Code", "Rider"});
+                              tool_select(r, "##editor", app::pref::EDITOR,
+                                          {"System Default", "Visual Studio Code", "Rider", "<Custom>"});
                           });
+                      if (value_of(app::pref::EDITOR) == "<Custom>")
+                      {
+                          custom_command(app::pref::EDITOR_COMMAND, "##editor_command");
+                      }
                   });
             group(form, "Terminal",
                   [&]
@@ -2461,10 +2687,19 @@ namespace imgit::ui
                       row(form, "External Terminal",
                           [&](Row& r)
                           {
-                              tool_select(r, "##terminal", "External Tools/Terminal", "<None>",
-                                          {"<None>", "ImGit Desktop Integrated Terminal", "<Custom>", "cmd",
-                                           "Git Bash", "PowerShell"});
+#ifdef _WIN32
+                              tool_select(
+                                      r, "##terminal", app::pref::TERMINAL,
+                                      {"System Default", "In-App Terminal", "Command Prompt", "Git Bash", "<Custom>"});
+#else
+                              tool_select(r, "##terminal", app::pref::TERMINAL,
+                                          {"System Default", "In-App Terminal", "<Custom>"});
+#endif
                           });
+                      if (value_of(app::pref::TERMINAL) == "<Custom>")
+                      {
+                          custom_command(app::pref::TERMINAL_COMMAND, "##terminal_command");
+                      }
                   });
         }
 
@@ -2475,85 +2710,10 @@ namespace imgit::ui
             row(form, "Enable Desktop Notifications",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##desktop", "Notifications/Desktop", false);
-                    help(r, "Allow ImGit to send desktop notifications.");
+                    stored_checkbox(r, "##desktop", app::pref::DESKTOP_NOTIFICATIONS);
+                    help(r, "While ImGit is in the background, a new notification makes its window ask for "
+                            "attention (the taskbar button flashes, the Dock icon bounces).");
                 });
-            row(form, "Receive Marketing Notifications",
-                [&](Row& r)
-                {
-                    stored_checkbox(r, "##marketing", "Notifications/Marketing", true);
-                    help(r, "Receive marketing related notifications.");
-                });
-        }
-
-        // moment.js format tokens the date fields take (the subset its defaults use).
-        std::string moment_format(std::string_view format, const std::tm& t)
-        {
-            static const char* months[] = {"January", "February", "March",     "April",   "May",      "June",
-                                           "July",    "August",   "September", "October", "November", "December"};
-            const auto two = [](int v)
-            {
-                return (v < 10 ? "0" : "") + std::to_string(v);
-            };
-            std::string out;
-            std::size_t i = 0;
-            while (i < format.size())
-            {
-                const auto take = [&](std::string_view token)
-                {
-                    if (format.compare(i, token.size(), token) == 0)
-                    {
-                        i += token.size();
-                        return true;
-                    }
-                    return false;
-                };
-                if (take("YYYY"))
-                {
-                    out += std::to_string(t.tm_year + 1900);
-                }
-                else if (take("MMMM"))
-                {
-                    out += months[t.tm_mon];
-                }
-                else if (take("MM"))
-                {
-                    out += two(t.tm_mon + 1);
-                }
-                else if (take("DD"))
-                {
-                    out += two(t.tm_mday);
-                }
-                else if (take("D"))
-                {
-                    out += std::to_string(t.tm_mday);
-                }
-                else if (take("hh"))
-                {
-                    out += two(t.tm_hour % 12 == 0 ? 12 : t.tm_hour % 12);
-                }
-                else if (take("h"))
-                {
-                    out += std::to_string(t.tm_hour % 12 == 0 ? 12 : t.tm_hour % 12);
-                }
-                else if (take("HH"))
-                {
-                    out += two(t.tm_hour);
-                }
-                else if (take("mm"))
-                {
-                    out += two(t.tm_min);
-                }
-                else if (take("A"))
-                {
-                    out += t.tm_hour < 12 ? "AM" : "PM";
-                }
-                else
-                {
-                    out += format[i++];
-                }
-            }
-            return out;
         }
 
         // The tab group colour a choice names: "Next color" (-1) or one of the graph's lane colours.
@@ -2674,7 +2834,7 @@ namespace imgit::ui
             row(form, "Notification Location",
                 [&](Row& r)
                 {
-                    stored_select(r, "##notification_location", "UI Customization/Notification Location", "Bottom Left",
+                    stored_select(r, "##notification_location", app::pref::NOTIFICATION_LOCATION,
                                   {"Top Left", "Top Right", "Bottom Left", "Bottom Right"});
                 });
 
@@ -2686,35 +2846,43 @@ namespace imgit::ui
                  "Date/Time");
             box(page, 55.f, header_top + 29.8f, 1140.f, 1.f, {white(0.6f)});
             form.advance(header_top, 30.8f, 5.f);
-            paragraph(form, "See [here](https://momentjs.com/docs/#/displaying/format/) for formatting options. "
-                            "Restart ImGit Desktop for changes to take effect.");
+            paragraph(form, "See [here](https://momentjs.com/docs/#/displaying/format/) for formatting options. The "
+                            "graph, the commit details and the file history show dates this way.");
             row(form, "Date/Time Locale",
                 [&](Row& r)
                 {
-                    stored_select(r, "##locale", "UI Customization/Locale", "System [system]",
+                    stored_select(r, "##locale", app::pref::LOCALE,
                                   {"System [system]", "English [en]", "English (United Kingdom) [en-gb]",
                                    "English (United States) [en-us]", "French [fr]", "German [de]", "Spanish [es]",
                                    "Italian [it]", "Japanese [ja]", "Russian [ru]", "Chinese (China) [zh-cn]"});
                 });
+            static const std::string system_locale = platform::system_locale();
+            const std::string locale = app::locale_code(value_of(app::pref::LOCALE), system_locale);
             const std::tm local = platform::local_time(std::time(nullptr));
-            const std::pair<const char*, const char*> formats[] = {{"Date Format", "MM/DD/YYYY"},
-                                                                   {"Date word Format", "MMMM D, YYYY"},
-                                                                   {"Date/Time Format", "MM/DD/YYYY @ h:mm A"},
-                                                                   {"Date verbose Format", "MMMM D, YYYY h:mm A"}};
-            for (const auto& [label, fallback] : formats)
+            const struct
             {
-                row(form, label,
+                const char* label;
+                const app::Preference& preference;
+                std::string_view fallback;
+            } formats[] = {{"Date Format", app::pref::DATE_FORMAT, app::DEFAULT_DATE_FORMAT},
+                           {"Date word Format", app::pref::DATE_WORD_FORMAT, app::DEFAULT_DATE_WORD_FORMAT},
+                           {"Date/Time Format", app::pref::DATE_TIME_FORMAT, app::DEFAULT_DATE_TIME_FORMAT},
+                           {"Date verbose Format", app::pref::DATE_VERBOSE_FORMAT, app::DEFAULT_DATE_VERBOSE_FORMAT}};
+            for (const auto& format : formats)
+            {
+                row(form, format.label,
                     [&](Row& r)
                     {
-                        ImGui::PushID(label);
+                        ImGui::PushID(format.label);
+                        const std::string placeholder(format.fallback);
                         Field field;
-                        field.placeholder = fallback;
+                        field.placeholder = placeholder.c_str();
                         field.inset = 1.f;
-                        const std::string key = std::string("UI Customization/") + label;
-                        stored_field(r, "##format", key, "", field);
-                        const std::string& value = value_of(app, key, "");
+                        stored_field(r, "##format", format.preference, field);
+                        const std::string value = value_of(format.preference);
                         text(page, r.x() + 305.f, r.top + 7.f, HELP,
-                             moment_format(value.empty() ? fallback : value, local));
+                             app::moment_format(value.empty() ? format.fallback : std::string_view(value), local,
+                                                locale));
                         ImGui::PopID();
                     });
             }
@@ -2730,17 +2898,12 @@ namespace imgit::ui
             row(form, "Automatically group worktree tabs together",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##group_worktrees", "UI Customization/Group worktree tabs", true);
+                    stored_checkbox(r, "##group_worktrees", app::pref::GROUP_WORKTREES);
                 });
             row(form, "Show toolbar icon labels",
                 [&](Row& r)
                 {
                     setting_checkbox(r, "##toolbar_labels", s.show_toolbar_labels);
-                });
-            row(form, "Enable spell checking",
-                [&](Row& r)
-                {
-                    stored_checkbox(r, "##spell", "UI Customization/Spell checking", true);
                 });
             row(form, "Display author initials and generic remote icons instead of avatars",
                 [&](Row& r)
@@ -2760,13 +2923,38 @@ namespace imgit::ui
             row(form, "Branch visibility in commit graph",
                 [&](Row& r)
                 {
-                    stored_select(r, "##branch_visibility", "UI Customization/Branch visibility", "All",
-                                  {"All", "Smart Branch Visibility"});
+                    native_select(page, "##branch_visibility", r.x(), r.top, 300.f,
+                                  s.smart_branch_visibility ? "Smart Branch Visibility" : "All",
+                                  {"All", "Smart Branch Visibility"},
+                                  [&app](const std::string& option)
+                                  {
+                                      app.settings.smart_branch_visibility = option != "All";
+                                      save_settings(app);
+                                  });
+                    r.column = 34.f;
                 });
+            // The graph's columns, as its header menu shows and hides them.
+            const auto column_checkbox = [&](Row& r, const char* id, const char* zone)
+            {
+                std::set<std::string>& hidden = s.hidden_graph_columns;
+                const bool shown = !hidden.contains(zone);
+                if (row_checkbox(r, id, shown))
+                {
+                    if (shown)
+                    {
+                        hidden.insert(zone);
+                    }
+                    else
+                    {
+                        hidden.erase(zone);
+                    }
+                    save_settings(app);
+                }
+            };
             row(form, "Show branches and tags in graph",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##refs", "UI Customization/Show refs", true);
+                    column_checkbox(r, "##refs", "ref");
                 });
             row(form, "Show commit author in graph",
                 [&](Row& r)
@@ -2781,22 +2969,17 @@ namespace imgit::ui
             row(form, "Show commit message in graph",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##message", "UI Customization/Show message", true);
+                    column_checkbox(r, "##message", "message");
                 });
             row(form, "Show commit description in graph",
                 [&](Row& r)
                 {
-                    const std::string key = "UI Customization/Show description";
-                    std::string value = s.show_description ? value_of(app, key, "Always") : std::string("Never");
-                    if (value == "Never" && s.show_description)
-                    {
-                        value = "Always";
-                    }
+                    const char* value = !s.show_description ? "Never" : s.description_on_hover ? "On hover" : "Always";
                     native_select(page, "##description", r.x(), r.top, 300.f, value, {"Always", "On hover", "Never"},
-                                  [&app, key](const std::string& option)
+                                  [&app](const std::string& option)
                                   {
-                                      set_value(app, key, option);
                                       app.settings.show_description = option != "Never";
+                                      app.settings.description_on_hover = option == "On hover";
                                       save_settings(app);
                                   });
                     r.column = 34.f;
@@ -2809,7 +2992,7 @@ namespace imgit::ui
             row(form, "Show commit tree in graph",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##tree", "UI Customization/Show tree", true);
+                    column_checkbox(r, "##tree", "graph");
                 });
         }
 
@@ -2821,22 +3004,46 @@ namespace imgit::ui
             row(form, "GPG Format",
                 [&](Row& r)
                 {
-                    stored_select(r, "##gpg_format", "Commit Signing/GPG Format", "OPENPGP", {"OPENPGP", "SSH"});
+                    std::string format = git_value(app, Scope::GLOBAL, "gpg.format");
+                    std::transform(format.begin(), format.end(), format.begin(),
+                                   [](unsigned char c)
+                                   {
+                                       return static_cast<char>(std::toupper(c));
+                                   });
+                    native_select(page, "##gpg_format", r.x(), r.top, 300.f, format.empty() ? "OPENPGP" : format,
+                                  {"OPENPGP", "X509", "SSH"},
+                                  [&app](const std::string& option)
+                                  {
+                                      std::string value = option;
+                                      std::transform(value.begin(), value.end(), value.begin(),
+                                                     [](unsigned char c)
+                                                     {
+                                                         return static_cast<char>(std::tolower(c));
+                                                     });
+                                      // openpgp is git's default: the key is removed.
+                                      set_git_value(app, Scope::GLOBAL, "gpg.format", value == "openpgp" ? "" : value);
+                                      refresh_signing_keys(app);
+                                  });
+                    r.column = 34.f;
+                    help(r, "Sets gpg.format in your global Git Config. SSH signs with an SSH public key file.");
                 });
             row(form, "GPG Program",
                 [&](Row& r)
                 {
-                    stored_field(r, "##gpg_program", "Commit Signing/GPG Program", "gpg", {}, 227.28f);
+                    Field field;
+                    field.placeholder = "gpg";
+                    git_field(r, "##gpg_program", Scope::GLOBAL, "gpg.program", field, 227.28f);
                     if (button(page, "##browse_gpg", r.x() + 232.28f, r.top, "Browse", Tone::PRIMARY, BTN_34))
                     {
                         if (const auto path = platform::shell::open_file_dialog("exe"); path)
                         {
-                            set_value(app, "Commit Signing/GPG Program", *path);
+                            set_git_value(app, Scope::GLOBAL, "gpg.program", *path);
+                            refresh_signing_keys(app);
                         }
                     }
                     help(r,
-                         "This is usually \"gpg\" or \"gpg2\" depending on the\nversion you are using.\nYou can also "
-                         "browse for the path directly.");
+                         "This is usually \"gpg\" or \"gpg2\" depending on the\nversion you are using.\nYou can "
+                         "also browse for the path directly. Sets gpg.program.");
                 });
             row(form, "Signing Key",
                 [&](Row& r)
@@ -2845,8 +3052,8 @@ namespace imgit::ui
                     {
                         refresh_signing_keys(app);
                     }
-                    native_select(r.page(), "##signing_key", r.x(), r.top, 257.f,
-                                  value_of(app, "Commit Signing/Signing Key", "<None>"), g_signing_keys,
+                    native_select(r.page(), "##signing_key", r.x(), r.top, 257.f, signing_key_option(app),
+                                  g_signing_keys,
                                   [&app](const std::string& option)
                                   {
                                       set_signing_key(app, option);
@@ -2882,73 +3089,72 @@ namespace imgit::ui
             row(form, "Sign Commits by Default",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##sign_commits", "Commit Signing/Sign Commits", false);
+                    git_checkbox(r, "##sign_commits", Scope::GLOBAL, "commit.gpgsign", false);
+                    help(r, "Sets commit.gpgsign: the commit form's \"Sign commit\" starts checked.");
                 });
             row(form, "Sign Tags by Default",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##sign_tags", "Commit Signing/Sign Tags", false);
+                    git_checkbox(r, "##sign_tags", Scope::GLOBAL, "tag.gpgSign", false);
+                    help(r, "Sets tag.gpgSign: tags ImGit creates are signed, annotated tags.");
                 });
         }
 
-        const std::vector<std::string>& monospace_fonts()
+        // A font select over a stored font name ("" the system's monospace face), from the fonts installed.
+        void font_row(Row& r, const app::Preference& preference)
         {
-            static const std::vector<std::string> list = {"Cascadia Code", "Cascadia Mono", "Consolas", "Courier New",
-                                                          "Lucida Console"};
-            return list;
-        }
-
-        void font_row(Row& r, const char* key_prefix)
-        {
-            app::Application& app = r.page().app;
-            const std::string key = std::string(key_prefix) + "/Font";
+            static const std::vector<std::string> options = []
+            {
+                std::vector<std::string> list{"System Default"};
+                for (std::string& name : platform::monospace_font_names())
+                {
+                    list.push_back(std::move(name));
+                }
+                return list;
+            }();
+            const std::string value = value_of(preference);
             combo(
-                    r.page(), "##font", r.x(), r.top, 300.f, 34.f, value_of(app, key, "Consolas"), false,
-                    monospace_fonts(),
-                    [&app, key](const std::string& option)
+                    r.page(), "##font", r.x(), r.top, 300.f, 34.f, value.empty() ? "System Default" : value, false,
+                    options,
+                    [preference](const std::string& option)
                     {
-                        set_value(app, key, option);
+                        set_value(preference, option == "System Default" ? std::string() : option);
                     },
                     Face::MONO);
             r.column = 34.f;
         }
+
+        const Field NUMBER_FIELD{"", 13.f, 13.f, {}, ImGuiInputTextFlags_CharsDecimal};
 
         void editor_page(Page& page)
         {
             app::Application& app = page.app;
             Form form{page};
             title(form, "Editor");
+            paragraph(form, "The diff, file and merge views.");
             row(form, "Font",
                 [&](Row& r)
                 {
-                    font_row(r, "Editor");
-                    help(r, "");
-                    // The help line is the "Show Only Monospace Fonts" checkbox.
-                    const float line = r.top + r.column - 17.140625f;
-                    const bool only_mono = flag_of(app, "Editor/Only monospace", true);
-                    if (checkbox(page, "##only_mono", r.x(), line + 2.56f, only_mono, false,
-                                 8.f + measure(HELP, "Show Only Monospace Fonts")))
-                    {
-                        set_value(app, "Editor/Only monospace", only_mono ? "0" : "1");
-                    }
-                    text(page, r.x() + 20.f, line, HELP, "Show Only Monospace Fonts");
+                    font_row(r, app::pref::EDITOR_FONT);
+                    help(r, "Changes to this setting apply after restarting ImGit Desktop");
                 });
             row(form, "Font Size",
                 [&](Row& r)
                 {
-                    stored_field(r, "##font_size", "Editor/Font Size", "12",
-                                 Field{"", 13.f, 13.f, {}, ImGuiInputTextFlags_CharsDecimal});
+                    stored_field(r, "##font_size", app::pref::EDITOR_FONT_SIZE, NUMBER_FIELD);
+                    help(r, "Between 6 and 40.");
                 });
             row(form, "Tab Size",
                 [&](Row& r)
                 {
-                    stored_field(r, "##tab_size", "Editor/Tab Size", "4",
-                                 Field{"", 13.f, 13.f, {}, ImGuiInputTextFlags_CharsDecimal});
+                    stored_field(r, "##tab_size", app::pref::EDITOR_TAB_SIZE, NUMBER_FIELD);
+                    help(r, "Columns a tab character takes, between 1 and 16.");
                 });
             row(form, "End of Line Character",
                 [&](Row& r)
                 {
-                    stored_select(r, "##eol", "Editor/End of Line", "CRLF", {"LF", "CRLF"});
+                    stored_select(r, "##eol", app::pref::EDITOR_EOL, {"LF", "CRLF"});
+                    help(r, "For files saved from the editor that have no line endings of their own yet.");
                 });
             row(form, "Syntax Highlighting",
                 [&](Row& r)
@@ -2958,7 +3164,7 @@ namespace imgit::ui
             row(form, "Show Line Numbers",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##line_numbers", "Editor/Show Line Numbers", true);
+                    stored_checkbox(r, "##line_numbers", app::pref::EDITOR_LINE_NUMBERS);
                 });
             row(form, "Word Wrap",
                 [&](Row& r)
@@ -2969,119 +3175,86 @@ namespace imgit::ui
 
         void terminal_page(Page& page)
         {
-            app::Application& app = page.app;
             Form form{page};
             title(form, "In-App Terminal");
             row(form, "Font",
                 [&](Row& r)
                 {
-                    font_row(r, "In-App Terminal");
-                    // The help block: the monospace checkbox in its div.checkbox, then the note.
-                    const float top = r.top + 44.f;
-                    const bool only_mono = flag_of(app, "In-App Terminal/Only monospace", true);
-                    if (checkbox(page, "##only_mono", r.x(), top + 11.f, only_mono, false,
-                                 8.f + measure(HELP, "Show Only Monospace Fonts")))
-                    {
-                        set_value(app, "In-App Terminal/Only monospace", only_mono ? "0" : "1");
-                    }
-                    text(page, r.x() + 20.f, top + 8.42f, HELP, "Show Only Monospace Fonts");
-                    text(page, r.x(), top + 27.f, HELP,
-                         "Changes to this setting will only apply to new tabs or after restarting ImGit Desktop");
-                    r.column = 103.14f;
+                    font_row(r, app::pref::TERMINAL_FONT);
+                    help(r, "Changes to this setting apply after restarting ImGit Desktop");
                 });
             row(form, "Font Size",
                 [&](Row& r)
                 {
-                    stored_field(r, "##font_size", "In-App Terminal/Font Size", "12",
-                                 Field{"", 13.f, 13.f, {}, ImGuiInputTextFlags_CharsDecimal});
+                    stored_field(r, "##font_size", app::pref::TERMINAL_FONT_SIZE, NUMBER_FIELD);
+                    help(r, "Between 6 and 40.");
                 });
             row(form, "Line Height",
                 [&](Row& r)
                 {
-                    stored_field(r, "##line_height", "In-App Terminal/Line Height", "1.2",
-                                 Field{"", 13.f, 13.f, {}, ImGuiInputTextFlags_CharsDecimal});
+                    Field field = NUMBER_FIELD;
+                    field.flags = ImGuiInputTextFlags_CharsScientific;
+                    stored_field(r, "##line_height", app::pref::TERMINAL_LINE_HEIGHT, field);
+                    help(r, "Between 1 and 3.");
                 });
             row(form, "Cursor Style",
                 [&](Row& r)
                 {
-                    stored_select(r, "##cursor", "In-App Terminal/Cursor Style", "Bar", {"Block", "Underline", "Bar"});
+                    stored_select(r, "##cursor", app::pref::TERMINAL_CURSOR, {"Block", "Underline", "Bar"});
                 });
             row(form, "Dim terminal when unfocused",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##dim", "In-App Terminal/Dim when unfocused", true);
+                    stored_checkbox(r, "##dim", app::pref::TERMINAL_DIM);
                 });
             row(form, "Default In-App Terminal",
                 [&](Row& r)
                 {
-                    stored_select(r, "##shell", "In-App Terminal/Default", "PowerShell", {"Git Bash", "PowerShell"});
-                    help(r,
-                         "Changes to this setting will only apply to new tabs or after restarting ImGit Desktop");
-                });
-            heading(form, "Autocomplete options");
-            row(form, "Tab Behavior",
-                [&](Row& r)
-                {
-                    stored_select(r, "##tab_behavior", "In-App Terminal/Tab Behavior", "Ignore",
-                                  {"Navigation", "Enter", "Ignore"});
-                });
-            row(form, "Enable Autocomplete Suggestions",
-                [&](Row& r)
-                {
-                    stored_checkbox(r, "##autocomplete", "In-App Terminal/Autocomplete", true);
-                });
-        }
-
-        void encoding_page(Page& page)
-        {
-            Form form{page};
-            title(form, "Encoding");
-            row(form, "Default encoding",
-                [&](Row& r)
-                {
-                    stored_select(r, "##encoding", "Encoding/Default", "UTF-8",
-                                  {"GUESS ENCODING", "UTF-8",        "UTF-8 BOM",    "UTF-16LE",     "UTF-16BE",
-                                   "UTF-32LE",       "UTF-32BE",     "windows-1250", "windows-1251", "windows-1252",
-                                   "windows-1253",   "windows-1254", "windows-1255", "windows-1256", "windows-1257",
-                                   "windows-1258",   "Windows 874",  "ISO-8859-1",   "ISO-8859-2",   "ISO-8859-3",
-                                   "ISO-8859-4",     "ISO-8859-5",   "ISO-8859-6",   "ISO-8859-7",   "ISO-8859-8",
-                                   "ISO-8859-9",     "ISO-8859-10",  "ISO-8859-11",  "ISO-8859-13",  "ISO-8859-14",
-                                   "ISO-8859-15",    "ISO-8859-16",  "Mac Roman",    "CP437",        "CP850",
-                                   "CP852",          "CP865",        "CP866",        "KOI8-R",       "KOI8-U",
-                                   "KOI8-RU",        "KOI8-T",       "GBK",          "GB18030",      "GB2312",
-                                   "Big5",           "Big5-HKSCS",   "Shift_JIS",    "EUC-JP",       "EUC-KR"});
-                    help(r, "Default encoding when reading or writing files in this repo.");
+                    static const std::vector<std::string> shells = platform::terminal_shell_names();
+                    const std::string value = value_of(app::pref::TERMINAL_SHELL);
+                    native_select(r.page(), "##shell", r.x(), r.top, 300.f,
+                                  value.empty() && !shells.empty() ? shells.front() : value, shells,
+                                  [](const std::string& option)
+                                  {
+                                      set_value(app::pref::TERMINAL_SHELL, option);
+                                  });
+                    r.column = 34.f;
+                    help(r, "Changes to this setting will only apply to new tabs or after restarting ImGit Desktop");
                 });
         }
 
         void gitflow_page(Page& page)
         {
             app::Application& app = page.app;
+            GitflowDraft& draft = gitflow_draft(app);
             Form form{page};
             title(form, "Gitflow");
             // section-header h4s (medium weight); the fields are text inputs: a form-control div around an input.
-            const auto field_row = [&](const char* label, const char* fallback)
+            const auto field_row = [&](std::size_t i)
             {
-                row(form, label,
+                row(form, GITFLOW_FIELDS[i].label,
                     [&](Row& r)
                     {
-                        ImGui::PushID(label);
+                        ImGui::PushID(static_cast<int>(i));
                         Field field;
                         field.inset = 1.f;
-                        stored_field(r, "##field", std::string("Gitflow/") + label, fallback, field);
+                        field.placeholder = GITFLOW_FIELDS[i].fallback;
+                        (void)text_field(page, "##field", r.x(), r.top, 300.f, draft.values[i], field);
+                        r.column = 34.f;
                         ImGui::PopID();
                     });
             };
             heading(form, "Branches", Face::REGULAR);
-            field_row("Main/Master", "main");
-            field_row("Develop", "develop");
+            field_row(0);
+            field_row(1);
             heading(form, "Prefixes", Face::REGULAR);
-            field_row("Feature", "feature/");
-            field_row("Release", "release/");
-            field_row("Hotfix", "hotfix/");
-            field_row("Version Tag", "");
+            for (std::size_t i = 2; i < std::size(GITFLOW_FIELDS); ++i)
+            {
+                field_row(i);
+            }
             const float top = form.place(0.f);
-            if (button(page, "##init_gitflow", form.control_x(), top, "Initialize Gitflow", Tone::SUCCESS))
+            if (button(page, "##init_gitflow", form.control_x(), top, "Initialize Gitflow", Tone::SUCCESS, BTN,
+                       app.active() == nullptr))
             {
                 initialize_gitflow(app);
             }
@@ -3102,27 +3275,40 @@ namespace imgit::ui
                 {
                     Field field;
                     field.placeholder = context(app).hooks_path.c_str();
-                    stored_field(r, "##hooks_dir", "Git Hooks/Directory", "", field, 227.28f);
-                    if (button(page, "##browse_hooks", r.x() + 232.28f, r.top, "Browse", Tone::PRIMARY, BTN_34))
+                    git_field(r, "##hooks_dir", Scope::REPO, "core.hooksPath", field, 227.28f);
+                    if (button(page, "##browse_hooks", r.x() + 232.28f, r.top, "Browse", Tone::PRIMARY, BTN_34,
+                               app.active() == nullptr))
                     {
-                        if (const auto path = platform::shell::open_file_dialog(""); path)
+                        if (const auto path = platform::shell::pick_folder_dialog(context(app).hooks_path); path)
                         {
-                            set_value(app, "Git Hooks/Directory", *path);
+                            set_git_value(app, Scope::REPO, "core.hooksPath", *path);
                         }
                     }
-                    help(r, "The directory that Git hooks will use for this repository and its linked worktrees.");
+                    help(r, "The directory that Git hooks will use for this repository and its linked worktrees. "
+                            "Sets core.hooksPath in the repository's config.");
                 });
             row(form, "Skip git hooks by default when committing",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##skip_hooks", "Commit/Skip hooks", false);
+                    git_checkbox(r, "##skip_hooks", Scope::REPO, "imgit.skipHooks", false);
                 });
         }
+
+        // The commit template being edited, for the repository it was read from.
+        struct TemplateDraft
+        {
+            std::string workdir = "\x01";
+            std::string summary;
+            std::string description;
+            std::string saved_summary;
+            std::string saved_description;
+        };
 
         void commit_page(Page& page)
         {
             app::Application& app = page.app;
             app::Settings& s = app.settings;
+            app::RepoState* state = app.active();
             Form form{page};
             title(form, "Commit");
             row(form, "Push after each commit",
@@ -3141,13 +3327,13 @@ namespace imgit::ui
             row(form, "Skip git hooks by default when committing",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##skip_hooks", "Commit/Skip hooks", false);
+                    git_checkbox(r, "##skip_hooks", Scope::REPO, "imgit.skipHooks", false);
                 });
             heading(form, "Merge Behavior");
             row(form, "Squash",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##squash", "Commit/Squash merges", false);
+                    git_checkbox(r, "##squash", Scope::REPO, "imgit.squashMerges", false);
                     help(r,
                          "When enabled, merging branches locally will stage all changes without creating a merge "
                          "commit automatically. You will need to commit manually.",
@@ -3161,23 +3347,40 @@ namespace imgit::ui
             row(form, "Apply this template to commit messages",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##apply_template", "Commit/Apply template", true);
+                    git_checkbox(r, "##apply_template", Scope::REPO, "imgit.applyCommitTemplate", true);
                 });
             row(form, "Remove comments from commit messages",
                 [&](Row& r)
                 {
-                    stored_checkbox(r, "##strip_comments", "Commit/Remove comments", false);
+                    git_checkbox(r, "##strip_comments", Scope::REPO, "imgit.stripComments", false);
+                    help(r, "Lines starting with # are left out of the commits you make (git commit --cleanup=strip).");
                 });
-            // The template being edited; Save stores it.
-            static std::string summary;
-            static std::string description;
-            static bool loaded = false;
-            if (!loaded)
+            // The template being edited: commit.template's text, read again for another repository; Save writes it.
+            static TemplateDraft draft;
+            const std::string workdir = state != nullptr ? state->repo.workdir() : std::string();
+            if (draft.workdir != workdir)
             {
-                loaded = true;
-                summary = value_of(app, "Commit/Template summary", "");
-                description = value_of(app, "Commit/Template description", "");
+                draft = TemplateDraft{};
+                draft.workdir = workdir;
+                if (state != nullptr)
+                {
+                    const std::string text = state->repo.commit_template();
+                    const std::size_t newline = text.find('\n');
+                    draft.summary = text.substr(0, newline);
+                    if (newline != std::string::npos)
+                    {
+                        draft.description = text.substr(newline + 1);
+                        while (!draft.description.empty() && draft.description.front() == '\n')
+                        {
+                            draft.description.erase(draft.description.begin());
+                        }
+                    }
+                }
+                draft.saved_summary = draft.summary;
+                draft.saved_description = draft.description;
             }
+            std::string& summary = draft.summary;
+            std::string& description = draft.description;
             row(form, "Summary",
                 [&](Row& r)
                 {
@@ -3196,14 +3399,38 @@ namespace imgit::ui
                                     7.f, 20.f, LABEL);
                     r.column = 400.f;
                 });
-            const bool changed = summary != value_of(app, "Commit/Template summary", "")
-                                 || description != value_of(app, "Commit/Template description", "");
+            const bool changed = summary != draft.saved_summary || description != draft.saved_description;
             const float top = form.place(0.f);
             if (button(page, "##save_template", form.control_x(), top, "Save Commit Template", Tone::SUCCESS, BTN,
-                       !changed))
+                       !changed || state == nullptr)
+                && state != nullptr)
             {
-                stored(app)["Commit/Template summary"] = summary;
-                set_value(app, "Commit/Template description", description);
+                // The repository's own template file, which commit.template (in its config) names.
+                const std::filesystem::path file = std::filesystem::path(state->repo.common_dir()) / "imgit_template";
+                std::ofstream out(file, std::ios::binary);
+                out << summary << (description.empty() ? "" : "\n\n" + description) << '\n';
+                out.close();
+                if (!out)
+                {
+                    app.toasts.push(app::ToastKind::ERROR, "Could not save the commit template", file.string());
+                }
+                else
+                {
+                    std::string path = file.string();
+                    std::replace(path.begin(), path.end(), '\\', '/');
+                    set_git_value(app, Scope::REPO, "commit.template", path);
+                    draft.saved_summary = summary;
+                    draft.saved_description = description;
+                    // The commit forms read it again.
+                    for (app::RepoState* tab : app.repo_states())
+                    {
+                        if (tab->repo.common_dir() == state->repo.common_dir())
+                        {
+                            tab->commit_form_ready = false;
+                        }
+                    }
+                    app.toasts.push(app::ToastKind::SUCCESS, "Commit template saved");
+                }
             }
             form.advance(top, 31.140625f, 0.f);
         }
@@ -3233,47 +3460,79 @@ namespace imgit::ui
             form.advance(top, 31.140625f, 0.f);
         }
 
+        // The paths a sparse checkout includes, as .git/info/sparse-checkout lists them (cone mode's "/*" and
+        // "!/*/" patterns left out, the slashes around folders dropped).
+        std::string sparse_paths(const app::RepoState& state)
+        {
+            std::ifstream file(std::filesystem::path(state.repo.git_dir()) / "info" / "sparse-checkout");
+            std::string paths;
+            std::string line;
+            while (std::getline(file, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                if (line.empty() || line == "/*" || line.front() == '!' || line.front() == '#')
+                {
+                    continue;
+                }
+                if (line.front() == '/')
+                {
+                    line.erase(line.begin());
+                }
+                paths += line + "\n";
+            }
+            return paths;
+        }
+
         void sparse_checkout_page(Page& page)
         {
             app::Application& app = page.app;
+            app::RepoState* state = app.active();
             ds_title(page, "Sparse checkout");
             text(page, 40.f, 64.2f, DS_TEXT, "Paths to include");
             const float right = std::min(857.69f, page.width - 40.f);
-            std::string& paths = value_of(app, "Sparse Checkout/Paths", "");
-            box(page, 40.f, 96.2f, right - 40.f, 238.f, {FIELD_BG, white(0.2f), 2.f});
-            if (text_area(page, "##paths", 40.f, 96.2f, right - 40.f, 238.f, paths, "e.g.\nsrc/\ndocs/\nREADME.md", 9.f,
-                          21.f, DS_TEXT))
+            // The paths being edited, read from the repository when it changes.
+            static std::string paths;
+            static std::string paths_for = "\x01";
+            const std::string workdir = state != nullptr ? state->repo.workdir() : std::string();
+            if (paths_for != workdir)
             {
-                save_stored(app);
+                paths_for = workdir;
+                paths = state != nullptr ? sparse_paths(*state) : std::string();
             }
+            box(page, 40.f, 96.2f, right - 40.f, 238.f, {FIELD_BG, white(0.2f), 2.f});
+            (void)text_area(page, "##paths", 40.f, 96.2f, right - 40.f, 238.f, paths, "e.g.\nsrc/\ndocs/\nREADME.md",
+                            9.f, 21.f, DS_TEXT);
             text(page, 40.f, 346.2f, DS_HINT,
                  "Enter one path per line. Only these paths will be checked out in your working directory. If no paths "
                  "are provided, only root files will be checked out.");
-            app::RepoState* state = app.active();
-            const bool enabled = flag_of(app, "Sparse Checkout/Enabled", false);
+            const bool enabled = git_flag(app, Scope::REPO, "core.sparseCheckout", false);
             float w = 0.f;
             float x = 40.f;
-            if (ds_button(page, "##enable", x, 376.2f, "Enable sparse checkout", DsTone::OUTLINE, true,
-                          state == nullptr, &w)
+            if (ds_button(page, "##enable", x, 376.2f, enabled ? "Update sparse checkout" : "Enable sparse checkout",
+                          DsTone::OUTLINE, true, state == nullptr, &w)
                 && state != nullptr)
             {
                 std::vector<std::string> args = {"sparse-checkout", "set"};
-                for (const std::string_view line : wrap(DS_TEXT, paths, 1e9f))
+                std::istringstream lines(paths);
+                for (std::string line; std::getline(lines, line);)
                 {
                     if (!line.empty())
                     {
-                        args.emplace_back(line);
+                        args.push_back(line);
                     }
                 }
                 app.run_git_cli(*state, "Enable sparse checkout", args);
-                set_value(app, "Sparse Checkout/Enabled", "1");
+                g_git.read_at = -1.0;
             }
             x += w + 8.f;
             if (ds_button(page, "##disable", x, 376.2f, "Disable sparse checkout", DsTone::OUTLINE, true, !enabled, &w)
                 && state != nullptr)
             {
                 app.run_git_cli(*state, "Disable sparse checkout", {"sparse-checkout", "disable"});
-                set_value(app, "Sparse Checkout/Enabled", "0");
+                g_git.read_at = -1.0;
             }
             x += w + 8.f;
             if (ds_button(page, "##reapply", x, 376.2f, "Reapply sparse checkout", DsTone::OUTLINE, true, !enabled)
@@ -3308,7 +3567,6 @@ namespace imgit::ui
         };
 
         constexpr PageEntry REPO_PAGES[] = {
-                {"Encoding", "far:text-size", encoding_page},
                 {"Gitflow", "fas:exchange", gitflow_page},
                 {"Git Hooks", "fas:brackets-curly", git_hooks_page},
                 {"Commit", "fas:code-commit", commit_page},

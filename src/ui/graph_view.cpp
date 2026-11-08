@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "gfx/lcd_renderer.hpp"
 #include "graph/graph_layout.hpp"
@@ -2340,6 +2341,13 @@ namespace imgit::ui
                     {
                         show_more = true;
                     }
+                    // Lazy Load Commits in Graph: reaching the end loads the next ones (once per load: the limit is
+                    // past what is shown until the history is read again).
+                    if (app::preferences().flag(app::pref::LAZY_LOAD_COMMITS)
+                        && static_cast<std::size_t>(row_count) >= state.commit_limit)
+                    {
+                        show_more = true;
+                    }
                     ImGui::SetCursorScreenPos(ImVec2(origin.x, y0));
                     ImGui::Dummy(ImVec2(size.x, row_h));
                     continue;
@@ -2682,7 +2690,9 @@ namespace imgit::ui
                                                               ImVec2(text_x, ty), z.message_w - px(13.f),
                                                               theme::u32(theme::with_alpha(base, base.w * alpha)),
                                                               commit.summary.c_str());
-                        if (app.settings.show_description && !commit.body.empty())
+                        // Show commit description in graph: always, or on the row under the mouse.
+                        if (app.settings.show_description && !commit.body.empty()
+                            && (!app.settings.description_on_hover || commit.sha == state.hovered_sha))
                         {
                             // .message-zone--body: the rest of the message on one line, 8px after the summary at
                             // 60% opacity.

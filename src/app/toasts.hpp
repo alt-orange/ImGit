@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace imgit::app
@@ -14,7 +15,18 @@ namespace imgit::app
         ERROR,
     };
 
-    // Bottom-left notifications. Every toast is also kept for the notifications popover.
+    // The window corner the toast cards stack in (Preferences → UI Customization → Notification Location).
+    enum class ToastCorner
+    {
+        TOP_LEFT,
+        TOP_RIGHT,
+        BOTTOM_LEFT,
+        BOTTOM_RIGHT,
+    };
+    // "Top Right" -> TOP_RIGHT; BOTTOM_LEFT for anything else.
+    [[nodiscard]] ToastCorner toast_corner(std::string_view name);
+
+    // Notifications in a corner of the window. Every toast is also kept for the notifications popover.
     class Toasts
     {
     public:
@@ -28,7 +40,7 @@ namespace imgit::app
         };
 
         void push(ToastKind kind, std::string title, std::string detail = {});
-        void draw(); // call once per frame, after the main window
+        void draw(ToastCorner corner = ToastCorner::BOTTOM_LEFT); // call once per frame, after the main window
         [[nodiscard]] std::vector<Entry>& history() noexcept
         {
             return m_history;

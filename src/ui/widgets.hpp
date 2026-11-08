@@ -20,6 +20,10 @@ namespace imgit::ui
         ImFont* mono = nullptr;
         ImFont* system = nullptr; // Segoe UI: the native Windows menu bar
         ImFont* arial = nullptr; // Bootstrap tooltips ("Helvetica Neue", Helvetica, Arial)
+        // Preferences → Editor / In-App Terminal: the code in the file view, the diff and the merge tool, and the
+        // terminal's cells. Chosen at startup (mono when the face is missing).
+        ImFont* editor = nullptr;
+        ImFont* terminal = nullptr;
     };
 
     [[nodiscard]] Fonts& fonts() noexcept;
@@ -158,9 +162,12 @@ namespace imgit::ui
     // The file status glyphs: pencil (modified), plus (added), minus (deleted), arrow (renamed).
     void draw_status_icon(ImDrawList* draw, ImVec2 center, float size, git::FileStatus status);
 
+    // Dates in the Preferences → UI Customization → Date/Time formats and locale: the Date/Time Format
+    // ("10/24/2026 @ 4:43 PM"), the Date Format ("10/25/2026": the date alone), the Date word Format ("October 25,
+    // 2026") and the Date verbose Format ("October 25, 2026 4:43 PM").
     [[nodiscard]] std::string format_date_time(std::int64_t unix_seconds);
-    // "10/25/2026": the date alone.
     [[nodiscard]] std::string format_date(std::int64_t unix_seconds);
+    [[nodiscard]] std::string format_date_word(std::int64_t unix_seconds);
     [[nodiscard]] std::string format_date_long(std::int64_t unix_seconds);
     [[nodiscard]] std::string format_relative(std::int64_t unix_seconds);
     [[nodiscard]] std::string file_name(const std::string& path);

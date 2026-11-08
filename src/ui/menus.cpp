@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "platform/shell.hpp"
 #include "ui/panels.hpp"
@@ -127,6 +128,12 @@ namespace imgit::ui
 
         void merge_into_head(Application& app, RepoState& state, const std::string& name, bool no_fast_forward = false)
         {
+            // Preferences → Commit → Squash: the branch's changes are staged without a merge commit.
+            if (state.repo.config_bool("imgit.squashMerges", false))
+            {
+                app.run_git_cli(state, "Squash merge", {"merge", "--squash", name});
+                return;
+            }
             const std::string head = state.history.head_branch;
             app::UndoEntry undo = tip_restore_entry(state, "merge " + name, git::ResetMode::HARD);
             auto result = state.repo.merge(name, no_fast_forward);
@@ -1582,7 +1589,7 @@ namespace imgit::ui
             return menu_submenu("Ignore", std::move(items));
         }
 
-        MenuItems open_file_items(RepoState& state, const std::string& path)
+        MenuItems open_file_items(Application& app, RepoState& state, const std::string& path)
         {
             const std::string full = full_path(state, path);
             if (!std::filesystem::is_regular_file(full))
@@ -1590,9 +1597,9 @@ namespace imgit::ui
                 return {};
             }
             return {item("Open in external editor",
-                         [full]
+                         [&app, full]
                          {
-                             platform::shell::open_in_editor(full);
+                             app.open_in_editor(full);
                          }),
                     item("Open file in default program",
                          [full]
@@ -1975,6 +1982,15 @@ namespace imgit::ui
                                  state.open_diff({app::DiffTarget::Source::UNSTAGED, {}, copy.path, copy.status});
                              }
                          }));
+            if (app::external_merge_tool_enabled())
+            {
+                ops.push_back(item("Open in external merge tool",
+                                   [&app, &state, path]
+                                   {
+                                       app.run_git_cli(state, "External merge tool",
+                                                       {"mergetool", "--no-prompt", "--", path});
+                                   }));
+            }
             ops.push_back(item("Mark resolved",
                                [&app, &state, path]
                                {
@@ -2061,19 +2077,22 @@ namespace imgit::ui
         }
         MenuItems history = added ? MenuItems{} : history_items(state, path, {});
         MenuItems open;
-        open.push_back(item("Open in external diff tool",
-                            [&app, &state, path, staged]
-                            {
-                                std::vector<std::string> args{"difftool", "-y"};
-                                if (staged)
+        if (app::external_diff_tool_enabled() && !conflicted)
+        {
+            open.push_back(item("Open in external diff tool",
+                                [&app, &state, path, staged]
                                 {
-                                    args.push_back("--cached");
-                                }
-                                args.push_back("--");
-                                args.push_back(path);
-                                app.run_git_cli(state, "Open in diff tool", args, true);
-                            }));
-        for (MenuItem& entry : open_file_items(state, path))
+                                    std::vector<std::string> args{"difftool", "-y"};
+                                    if (staged)
+                                    {
+                                        args.push_back("--cached");
+                                    }
+                                    args.push_back("--");
+                                    args.push_back(path);
+                                    app.run_git_cli(state, "Open in diff tool", args, true);
+                                }));
+        }
+        for (MenuItem& entry : open_file_items(app, state, path))
         {
             open.push_back(std::move(entry));
         }
@@ -2124,13 +2143,16 @@ namespace imgit::ui
                                    }));
         }
         MenuItems open;
-        open.push_back(item("Open in external diff tool",
-                            [&app, &state, sha, path]
-                            {
-                                app.run_git_cli(state, "Open in diff tool", {"difftool", "-y", sha + "^!", "--", path},
-                                                true);
-                            }));
-        for (MenuItem& entry : open_file_items(state, path))
+        if (app::external_diff_tool_enabled())
+        {
+            open.push_back(item("Open in external diff tool",
+                                [&app, &state, sha, path]
+                                {
+                                    app.run_git_cli(state, "Open in diff tool",
+                                                    {"difftool", "-y", sha + "^!", "--", path}, true);
+                                }));
+        }
+        for (MenuItem& entry : open_file_items(app, state, path))
         {
             open.push_back(std::move(entry));
         }

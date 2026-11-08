@@ -1,4 +1,5 @@
 #include "app/application.hpp"
+#include "app/preferences.hpp"
 #include "app/theme.hpp"
 #include "ui/panels.hpp"
 #include "ui/vector_icons.hpp"
@@ -16,15 +17,14 @@
 // side; a click on a line picks or drops that line alone. The Output shows the merge: agreed lines, the picked
 // lines tagged A / B, and the base's lines (magenta) where nothing was picked yet; a double-click edits it as
 // text. Save writes the Output and marks the file resolved. A | B and the Output are split by drag handles, the
-// split kept in the settings. Positions are CSS px; code is Consolas 12px on 16px lines with an 82px margin
-// (glyphs, line numbers, decorations).
+// split kept in the settings. Positions are CSS px; code is Consolas 12px on 16px lines (by default: the Editor
+// preferences) with an 82px margin (glyphs, line numbers, decorations).
 namespace imgit::ui
 {
     namespace
     {
         constexpr float HEADER_H = 38.2f;
         constexpr float PANE_HEADER_H = 35.f;
-        constexpr float LINE_H = 16.f;
         constexpr float MARGIN_W = 82.f;
         constexpr float NUMBERS_RIGHT = 62.f;
         constexpr float DECORATION_X = 18.f; // the margin decoration: a 4px bar, then the side's tint
@@ -65,9 +65,56 @@ namespace imgit::ui
                       color, text);
         }
 
+        // ImGui advances a tab by IM_TABSIZE spaces; the Tab Size preference replaces that in the editor font at
+        // this size. Set again each frame: ImGui rebuilds a baked size it dropped.
+        void set_tab_size(ImFontBaked* baked, int tab_size)
+        {
+            const ImFontGlyph* space = baked->FindGlyphNoFallback(' ');
+            if (space == nullptr)
+            {
+                return;
+            }
+            const float advance = space->AdvanceX * static_cast<float>(tab_size);
+            if (ImFontGlyph* tab = baked->FindGlyphNoFallback('\t'); tab != nullptr)
+            {
+                tab->AdvanceX = advance;
+                if ('\t' < baked->IndexAdvanceX.Size)
+                {
+                    baked->IndexAdvanceX['\t'] = advance;
+                }
+            }
+        }
+
+        // Preferences -> Editor, read at the start of each draw_merge_view: the face and size, Monaco's line height
+        // for the size (16px at the default 12px), the glyph box's offset in the line, and whether numbers show.
+        struct CodeStyle
+        {
+            ImFont* font = nullptr;
+            float size = 12.f;
+            float line_h = 16.f; // CSS px, as the offset
+            float text_dy = 2.f;
+            bool line_numbers = true;
+            int tab_size = 4;
+        };
+        CodeStyle g_code;
+
+        void read_code_style()
+        {
+            const app::Preferences& prefs = app::preferences();
+            g_code.font = fonts().editor != nullptr ? fonts().editor : fonts().mono;
+            g_code.size = static_cast<float>(prefs.number(app::pref::EDITOR_FONT_SIZE, 6, 40));
+            g_code.line_h = std::round(g_code.size * 1.35f);
+            // Chromium centres the glyph box in the line; its baseline lands a pixel lower (measured).
+            g_code.text_dy = std::round((g_code.line_h - g_code.size * font_em_scale(g_code.font)) / 2.f) + 1.f;
+            g_code.line_numbers = prefs.flag(app::pref::EDITOR_LINE_NUMBERS);
+            g_code.tab_size = prefs.number(app::pref::EDITOR_TAB_SIZE, 1, 16);
+            set_tab_size(g_code.font->GetFontBaked(font_px(g_code.font, g_code.size)), g_code.tab_size);
+        }
+
         void mono_text(ImDrawList* draw, float x, float line_top, ImU32 color, const char* text)
         {
-            draw_text(draw, fonts().mono, 12.f, ImVec2(x, css_y(12.f, line_top + px(2.f), true)), color, text);
+            draw_text(draw, g_code.font, g_code.size,
+                      ImVec2(x, css_y(g_code.size, line_top + px(g_code.text_dy), true)), color, text);
         }
 
         // The design-system checkbox: 12px, rgba(0,0,0,.2) with a 1px 40% white border, radius 1; checked: the
@@ -138,15 +185,19 @@ namespace imgit::ui
         void decorate(ImDrawList* draw, ImVec4 color, float left, float top, float right)
         {
             const ImU32 tint = theme::u32(theme::with_alpha(color, 0.25f));
-            draw->AddRectFilled(ImVec2(left + px(DECORATION_X), top), ImVec2(right, top + px(LINE_H)), tint);
-            draw->AddRectFilled(ImVec2(left + px(DECORATION_X), top), ImVec2(left + px(DECORATION_X + 4.f), top + px(LINE_H)),
-                                theme::u32(color));
+            draw->AddRectFilled(ImVec2(left + px(DECORATION_X), top), ImVec2(right, top + px(g_code.line_h)), tint);
+            draw->AddRectFilled(ImVec2(left + px(DECORATION_X), top),
+                                ImVec2(left + px(DECORATION_X + 4.f), top + px(g_code.line_h)), theme::u32(color));
         }
 
         void line_number(ImDrawList* draw, float left, float top, int number)
         {
+            if (!g_code.line_numbers)
+            {
+                return;
+            }
             const std::string text = std::to_string(number);
-            mono_text(draw, left + px(NUMBERS_RIGHT) - text_size(fonts().mono, 12.f, text.c_str()).x, top,
+            mono_text(draw, left + px(NUMBERS_RIGHT) - text_size(g_code.font, g_code.size, text.c_str()).x, top,
                       LINE_NUMBER, text.c_str());
         }
 
@@ -168,14 +219,15 @@ namespace imgit::ui
             }
             if (icon != nullptr)
             {
-                draw_fa_icon(draw, icon, ImVec2(left + px(GLYPH_X + 7.2f), top + px(8.f)), px(14.f), theme::u32(color));
+                draw_fa_icon(draw, icon, ImVec2(left + px(GLYPH_X + 7.2f), top + px(g_code.line_h / 2.f)), px(14.f),
+                             theme::u32(color));
             }
         }
 
         // Scrolls the current child so `line` sits a few lines below the top.
         void scroll_to_line(int line)
         {
-            ImGui::SetScrollY(std::max(0.f, static_cast<float>(line - 3)) * px(LINE_H));
+            ImGui::SetScrollY(std::max(0.f, static_cast<float>(line - 3)) * px(g_code.line_h));
         }
 
         // A (ours) or B (theirs): the side's file with its conflicts highlighted and pickable, its code coloured by
@@ -249,13 +301,13 @@ namespace imgit::ui
             // A final line break shows as an empty last line, like any editor.
             const int shown = static_cast<int>(lines.size()) + (tool.final_newline && !lines.empty() ? 1 : 0);
             ImGuiListClipper clipper;
-            clipper.Begin(shown, px(LINE_H));
+            clipper.Begin(shown, px(g_code.line_h));
             float widest = 0.f;
             while (clipper.Step())
             {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
                 {
-                    const float top = top_left.y + static_cast<float>(i) * px(LINE_H);
+                    const float top = top_left.y + static_cast<float>(i) * px(g_code.line_h);
                     if (i >= static_cast<int>(lines.size()))
                     {
                         line_number(code, top_left.x, top, i + 1);
@@ -280,7 +332,7 @@ namespace imgit::ui
                         ImGui::SetCursorScreenPos(ImVec2(top_left.x + px(16.f), top));
                         const bool clicked = ImGui::InvisibleButton("##pick_line",
                                                                     ImVec2(std::max(1.f, right - top_left.x - px(16.f)),
-                                                                           px(LINE_H)));
+                                                                           px(g_code.line_h)));
                         const bool hovered = ImGui::IsItemHovered() && !tool.edited;
                         if (clicked && !tool.edited)
                         {
@@ -291,16 +343,17 @@ namespace imgit::ui
                     ImGui::PopID();
                     line_number(code, top_left.x, top, i + 1);
                     const std::string& text = lines[static_cast<std::size_t>(i)];
-                    draw_code_text(code, fonts().mono, 12.f,
-                                   ImVec2(top_left.x + px(MARGIN_W), css_y(12.f, top + px(2.f), true)), text,
+                    draw_code_text(code, g_code.font, g_code.size,
+                                   ImVec2(top_left.x + px(MARGIN_W), css_y(g_code.size, top + px(g_code.text_dy), true)),
+                                   text,
                                    colours != nullptr ? colours->line(static_cast<std::size_t>(i))
                                                       : std::span<const syntax::Span>(),
                                    theme::u32(p.text_normal));
-                    widest = std::max(widest, text_size(fonts().mono, 12.f, text.c_str()).x);
+                    widest = std::max(widest, text_size(g_code.font, g_code.size, text.c_str()).x);
                 }
             }
             ImGui::SetCursorScreenPos(top_left);
-            ImGui::Dummy(ImVec2(px(MARGIN_W) + widest + px(40.f), static_cast<float>(shown) * px(LINE_H) + size.y / 2.f));
+            ImGui::Dummy(ImVec2(px(MARGIN_W) + widest + px(40.f), static_cast<float>(shown) * px(g_code.line_h) + size.y / 2.f));
             ImGui::EndChild();
         }
 
@@ -365,7 +418,8 @@ namespace imgit::ui
                 ImGui::SetCursorScreenPos(body);
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, p.app_bg0);
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(px(MARGIN_W), px(2.f)));
-                push_font(fonts().mono, 12.f);
+                push_font(g_code.font, g_code.size);
+                set_tab_size(ImGui::GetFontBaked(), g_code.tab_size);
                 input_multiline("##merge_output_text", tool.edited_text, "", body_size);
                 ImGui::PopFont();
                 ImGui::PopStyleVar();
@@ -414,7 +468,7 @@ namespace imgit::ui
             }
             const int shown = static_cast<int>(lines.size()) + (tool.final_newline && number > 0 ? 1 : 0);
             ImGuiListClipper clipper;
-            clipper.Begin(shown, px(LINE_H));
+            clipper.Begin(shown, px(g_code.line_h));
             float widest = 0.f;
             int remove_conflict = -1;
             std::pair<app::Side, int> remove_pick{app::Side::A, -1};
@@ -422,7 +476,7 @@ namespace imgit::ui
             {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
                 {
-                    const float top = top_left.y + static_cast<float>(i) * px(LINE_H);
+                    const float top = top_left.y + static_cast<float>(i) * px(g_code.line_h);
                     if (i >= static_cast<int>(lines.size()))
                     {
                         line_number(code, top_left.x, top, number + 1);
@@ -440,11 +494,11 @@ namespace imgit::ui
                     {
                         const bool a = line.origin == app::OutputLine::Origin::PICKED_A;
                         decorate(code, a ? A_COLOR : B_COLOR, top_left.x, top, right);
-                        line_text(code, fonts().regular, 12.f, top_left.x + px(4.f), top, px(LINE_H),
+                        line_text(code, fonts().regular, 12.f, top_left.x + px(4.f), top, px(g_code.line_h),
                                   theme::u32(p.text_normal), a ? "A" : "B");
                         // The glyph takes the line back out.
                         ImGui::SetCursorScreenPos(ImVec2(top_left.x + px(GLYPH_X), top));
-                        const bool clicked = ImGui::InvisibleButton("##drop_line", ImVec2(px(15.f), px(LINE_H)));
+                        const bool clicked = ImGui::InvisibleButton("##drop_line", ImVec2(px(15.f), px(g_code.line_h)));
                         glyph(code, top_left.x, top, true, ImGui::IsItemHovered());
                         if (clicked)
                         {
@@ -461,17 +515,18 @@ namespace imgit::ui
                     {
                         line_number(code, top_left.x, top, numbers[static_cast<std::size_t>(i)]);
                     }
-                    draw_code_text(code, fonts().mono, 12.f,
-                                   ImVec2(top_left.x + px(MARGIN_W), css_y(12.f, top + px(2.f), true)), line.text,
+                    draw_code_text(code, g_code.font, g_code.size,
+                                   ImVec2(top_left.x + px(MARGIN_W), css_y(g_code.size, top + px(g_code.text_dy), true)),
+                                   line.text,
                                    colours != nullptr ? colours->line(static_cast<std::size_t>(i))
                                                       : std::span<const syntax::Span>(),
                                    theme::u32(p.text_normal));
-                    widest = std::max(widest, text_size(fonts().mono, 12.f, line.text.c_str()).x);
+                    widest = std::max(widest, text_size(g_code.font, g_code.size, line.text.c_str()).x);
                 }
             }
             // A double-click on the text switches to editing the output by hand.
             ImGui::SetCursorScreenPos(ImVec2(top_left.x + px(MARGIN_W), top_left.y));
-            const float content_h = static_cast<float>(shown) * px(LINE_H) + body_size.y / 2.f;
+            const float content_h = static_cast<float>(shown) * px(g_code.line_h) + body_size.y / 2.f;
             ImGui::InvisibleButton("##output_text", ImVec2(std::max(1.f, right - top_left.x - px(MARGIN_W)), content_h));
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
@@ -499,6 +554,7 @@ namespace imgit::ui
     {
         const theme::Palette& p = theme::palette();
         app::MergeTool& tool = *state.merge_tool;
+        read_code_style();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::BeginChild("##merge_view", size, ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);

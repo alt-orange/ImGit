@@ -47,6 +47,24 @@ namespace imgit::platform::shell
         }
     }
 
+    bool launch(const std::vector<std::string>& args, const std::string& workdir, bool hide_console)
+    {
+        if (args.empty())
+        {
+            return false;
+        }
+        // ShellExecute finds scripts (code.cmd) on PATH as well as programs; CreateProcess only takes programs.
+        std::wstring parameters;
+        for (std::size_t i = 1; i < args.size(); ++i)
+        {
+            parameters += (i > 1 ? L" " : L"") + (L"\"" + win32::widen(args[i]) + L"\"");
+        }
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(
+                nullptr, L"open", win32::widen(args[0]).c_str(), parameters.c_str(),
+                workdir.empty() ? nullptr : win32::widen(workdir).c_str(), hide_console ? SW_HIDE : SW_SHOWNORMAL));
+        return result > 32;
+    }
+
     void open_url(const std::string& url)
     {
         ShellExecuteW(nullptr, L"open", win32::widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);

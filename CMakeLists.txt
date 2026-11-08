@@ -50,6 +50,8 @@ target_include_directories(imgit_syntax PUBLIC src)
 add_executable(imgit
     src/main.cpp
     src/app/application.cpp
+    src/app/date_format.cpp
+    src/app/preferences.cpp
     src/app/connections.cpp
     src/app/connection_checks.cpp
     src/app/profiles.cpp
