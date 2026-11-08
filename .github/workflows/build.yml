@@ -189,7 +189,9 @@ jobs:
             asset="upx-$UPX_VERSION-amd64_linux.tar.xz"
             sha256=ddc2654063fe4dc80d95b420788494e4db078ebb01a650692d623b5a9906e61e
           fi
-          curl -sSLf -o "$temp/$asset" "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$asset"
+          # GitHub's release downloads fail now and then (5xx): retry before failing the job.
+          curl -sSLf --retry 5 --retry-all-errors --retry-delay 10 -o "$temp/$asset" \
+            "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$asset"
           echo "$sha256  $temp/$asset" | sha256sum -c -
           if [ "$RUNNER_OS" = Windows ]; then
             7z x -o"$temp" "$temp/$asset" > /dev/null
