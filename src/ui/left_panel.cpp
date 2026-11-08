@@ -591,16 +591,6 @@ namespace imgit::ui
             }
         }
 
-        void simple_row(Context& ctx, const char* id, const char* icon, const std::string& label,
-                        const std::string& detail)
-        {
-            RowOptions options;
-            options.icon = icon;
-            options.can_hide = false;
-            options.tooltip = detail;
-            panel_row(ctx, id, RowLabel{label, {}}, options);
-        }
-
         // The left panel sections, in order.
         const std::vector<std::string> SECTIONS = {"Local", "Remote", "Worktrees", "Stashes", "Tags", "Submodules"};
 
@@ -1029,8 +1019,20 @@ namespace imgit::ui
                                 {
                                     for (const git::Worktree& worktree : state.history.worktrees)
                                     {
-                                        simple_row(ctx, worktree.path.c_str(), "far:sitemap", worktree.name,
-                                                   worktree.path);
+                                        RowOptions options;
+                                        options.icon = "far:sitemap";
+                                        options.can_hide = false;
+                                        options.tooltip = worktree.path;
+                                        const RowResult row = panel_row(ctx, worktree.path.c_str(),
+                                                                        RowLabel{worktree.name, {}}, options);
+                                        if (row.context)
+                                        {
+                                            popup_menu(worktree_menu(app, state, worktree));
+                                        }
+                                        if (row.double_clicked)
+                                        {
+                                            app.open_repository(worktree.path);
+                                        }
                                     }
                                 }});
         }

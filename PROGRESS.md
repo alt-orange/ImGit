@@ -46,7 +46,7 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Create branch / add remote / create tag | ✅ | From the context menus |
 | Double-click to checkout, right-click menus | ✅ | |
 | Drag branch onto branch → Merge / Rebase / Reset menu | ✅ | Fast-forward, merge, rebase, interactive rebase, push, reset; gold drop targets, the 75% drag image and the Windows drag cursors |
-| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | Worktrees are listed only; Add Submodule is the panel sliding out of the left panel |
+| TAGS, STASHES, WORKTREES, SUBMODULES sections | ✅ | A worktree row's menu opens it, copies its path or removes it; Add Submodule is the panel sliding out of the left panel |
 | Edit / open / delete a submodule | 🟡 | Double-click a submodule: the Edit Submodule panel slides out (Remote URL via `git submodule set-url`, in-sync / out of sync / not initialized with Update / Initialize, the checked-out commit, Open / Delete). Open shows it in the same tab, *repository › submodule ✕ › branch*; the cross goes back |
 | Gitflow | ⬜ | |
 | Branch cleanup | ⬜ | |
@@ -81,7 +81,7 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Sort, Path \| Tree, folder counts ✎ / + / − | ✅ | Sort button has no effect yet |
 | Unstaged / Staged / Conflicted sections, Stage all / Unstage All, per-file hover actions | ✅ | |
 | Commit form: Commit / Stash tabs, amend, 72 counter, description, Commit options, commit button | ✅ | |
-| Commit template, GPG signing, skip hooks | ⬜ | |
+| Commit template, GPG signing, skip hooks | ✅ | The form starts from `commit.template` (comment lines left out; again after each commit). Commit options: Sign commit with GPG (`-S`, ticked by `commit.gpgsign`) and Skip commit hooks (`--no-verify`). A commit goes through `git commit` when it is signed or the repository has commit hooks (libgit2 runs neither), otherwise through libgit2 |
 | Commit details: working-directory banner, commit sha, message view, author, parent, co-authors, change summary, Path / Tree, View all files | ✅ | View all files is a placeholder |
 | Commit message height resize (row-resize handle, saved) and click-to-amend HEAD's message (Update Message / Cancel Amend) | ✅ | Rewording older commits from the detail panel is not done |
 | Multi-select summary | ✅ | |
@@ -89,7 +89,8 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | File history | ✅ | Blame / History in the file view's toolbar, File History / File Blame in the file menus: the commits that changed the file (libgit2 walk, renames followed) down the left, the file as the selected commit left it or its diff on the right, Esc or the cross closes it |
 | Blame | ✅ | The file view in the File History view: each line's commit in the gutter (the author's avatar at each run's first line, a bar in the commit's colour); the Blame toggle adds the commit's summary and date; clicking the gutter selects that commit; hovering it shows the commit |
 | Syntax highlighting | 🟡 | In the diff / file / File History editors and the merge tool's A / B panes; Preferences → Editor → Syntax Highlighting (on by default). A small line-based tokenizer (`src/ui/syntax/`), Monaco's vs-dark token colours (vs on a light background) from the theme. Own scanners for C, C++, C#, Java, Kotlin, Scala, Go, Rust, Dart, JavaScript, TypeScript, PHP, Python, Ruby, Lua, shell, PowerShell, SQL, JSON, YAML, INI, XML, HTML (with `<script>` / `<style>`), CSS / SCSS / Less, Markdown (fenced code by its language) and Dockerfile; keyword / comment / string tables for the rest of the list in `languages.cpp`. Each diff hunk starts from a fresh state (a hunk that starts inside a comment can be mis-coloured); the merge panes are tokenized whole. Lines over 2,000 characters and files over 5,000 lines or 1 MiB are plain. Unit tests in `test/` |
-| Word wrap, whitespace, hunk / line staging, file editing | ⬜ | Buttons present |
+| Hunk / line staging | ✅ | Working-directory diffs: Stage / Unstage Hunk on each hunk header (hunk view); click a changed line's number gutter to pick it (Shift: a range), then Stage / Unstage N Lines in the header. A partial patch goes through `git apply --cached` (reversed to unstage); every change picked stages the whole file |
+| Word wrap, whitespace, file editing | ⬜ | Buttons present |
 | Merge conflict editor (A / B / Output) | ✅ | Opens from a conflicted file: three-way line merge of the index's base / ours / theirs, pick whole conflicts or single lines from A and B, conflict navigator, Reset, double-click Output to edit it by hand, Save writes and stages the file; Open in external merge tool runs `git mergetool`. A / B are syntax highlighted, the Output is not; panes not resizable |
 | Interactive rebase (pick / reword / squash / drop, P R S D, reorder with Ctrl + ↑ / ↓, Reset) | ✅ | Takes the left panel's and graph's place; rows show the commit's lane node and streak; reword edits the message in a floating editor; the right panel shows the selected row's commit |
 
@@ -98,11 +99,11 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Feature | Status | Notes |
 |---|---|---|
 | Checkout branch / remote branch / tag / commit | ✅ | |
-| Create / rename / delete branch, set upstream | ✅ | Renaming asks for the new name in the prompt bar; pushing a branch without an upstream asks there too (remote select, branch name) |
+| Create / rename / delete branch, set upstream | ✅ | Delete all "x" branches deletes the local one (undoable) and every remote one at a commit; renaming asks for the new name in the prompt bar; pushing a branch without an upstream asks there too (remote select, branch name) |
 | Text field right-click menu | ✅ | Cut / Copy / Paste / Select All; no spelling suggestions |
 | Create (annotated) tag, delete tag, push tag | ✅ | |
 | Stage / unstage / discard files or all, commit, amend, push after commit | ✅ | |
-| Stash push / apply / pop / drop | ✅ | |
+| Stash push / apply / pop / drop, edit stash message | ✅ | Edit stash message asks in the prompt bar and rewrites the stash's reflog entry in place |
 | Merge (ff or merge commit), rebase (git CLI), reset soft / mixed / hard | ✅ | |
 | Cherry pick (single / multi), revert | ✅ | |
 | Squash, drop, edit message of any commit on the branch, interactive rebase | ✅ | Refused across merge commits; conflicts roll back |
@@ -112,7 +113,8 @@ Status as of 2026-10-26. ✅ implemented and exercised (headless screenshots or 
 | Add / edit / remove remote | ✅ | |
 | Undo / Redo | ✅ | checkout, commit, branch / tag create / delete / rename, reset, stash, merge, cherry pick, revert, squash, drop, rebase; uncommitted changes are auto-stashed around undo |
 | Abort in-progress merge / rebase / cherry-pick | 🟡 | Toolbar banner |
-| Worktree create / remove, submodule add / update | ⬜ | |
+| Worktree create / remove | ✅ | Create worktree from a branch (a remote one through a local branch tracking it) or a commit (detached): a dialog asks for the folder, `git worktree add` runs; Remove / Remove and discard its changes (`git worktree remove [--force]`) from the worktree's row |
+| Submodule add / update | ⬜ | |
 | Patch files | ✅ | Create patch from commits, apply patch |
 
 ## Other

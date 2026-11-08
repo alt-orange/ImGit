@@ -351,6 +351,17 @@ namespace imgit::ui
                 break;
             }
         }
+        // Line staging: a changed line's key in the selection, and per editor the row a shift-click extends from.
+        const bool line_staging = options.selected_lines != nullptr && !split && !options.file_view;
+        static std::unordered_map<std::string, int> selection_anchors;
+        const auto line_key = [](const git::DiffLine& line)
+        {
+            return git::LineSelection{line.origin, line.origin == '+' ? line.new_lineno : line.old_lineno};
+        };
+        const auto line_selected = [&](const git::DiffLine& line)
+        {
+            return std::ranges::find(*options.selected_lines, line_key(line)) != options.selected_lines->end();
+        };
         const float half = (content_right - editor_min.x) / 2.f;
         const float base_x = ImGui::GetCursorScreenPos().x;
         float max_text = 0.f;
@@ -372,6 +383,31 @@ namespace imgit::ui
                                         theme::u32(p.hunk_header));
                     mono_text(body, base_x + px(TEXT_X), pos.y, theme::u32(p.text_secondary),
                               diff.hunks[row.hunk].header.c_str());
+                    // Stage / Unstage Hunk at the visible right edge, whatever the horizontal scroll.
+                    if (options.hunk_action != nullptr && options.hunk_clicked != nullptr)
+                    {
+                        const char* label = options.hunk_action;
+                        const ImVec4 tone = label[0] == 'U' ? p.red : p.green;
+                        const float bw = text_size(fonts().regular, theme::FONT_SIZE_ROW, label).x + px(12.f);
+                        const float visible_right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+                        const ImVec2 bmin(visible_right - bw - px(6.f), pos.y);
+                        const ImVec2 bmax(bmin.x + bw, pos.y + line_h);
+                        ImGui::SetCursorScreenPos(bmin);
+                        ImGui::PushID(i);
+                        if (ImGui::InvisibleButton("##hunk_action", ImVec2(bw, line_h)))
+                        {
+                            *options.hunk_clicked = static_cast<int>(row.hunk);
+                        }
+                        ImGui::PopID();
+                        const bool hovered = ImGui::IsItemHovered();
+                        body->AddRectFilled(bmin, bmax, theme::u32(theme::with_alpha(tone, hovered ? 0.3f : 0.2f)),
+                                            px(2.f));
+                        body->AddRect(bmin, bmax, theme::u32(tone), px(2.f), 0, 1.f);
+                        draw_text(body, fonts().regular, theme::FONT_SIZE_ROW,
+                                  ImVec2(bmin.x + px(6.f), css_text_y(12.f, pos.y + px(1.f), false)),
+                                  theme::u32(p.text_normal), label);
+                        ImGui::SetCursorScreenPos(pos);
+                    }
                 }
                 else if (gutter)
                 {
@@ -452,6 +488,49 @@ namespace imgit::ui
                 else
                 {
                     const git::DiffLine& line = *row.left;
+                    if (line_staging && line.origin != ' ')
+                    {
+                        // The number gutter picks the line for Stage / Unstage Lines; picked lines are tinted.
+                        const ImVec2 gmin(base_x, pos.y);
+                        const ImVec2 gmax(base_x + px(TEXT_X), pos.y + line_h);
+                        const bool gutter_hovered = window_hovered && ImGui::IsMouseHoveringRect(gmin, gmax);
+                        if (gutter_hovered)
+                        {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                            {
+                                std::vector<git::LineSelection>& picked = *options.selected_lines;
+                                const auto anchor = selection_anchors.find(options.id);
+                                if (ImGui::GetIO().KeyShift && anchor != selection_anchors.end()
+                                    && anchor->second < static_cast<int>(rows.size()))
+                                {
+                                    for (int k = std::min(anchor->second, i); k <= std::max(anchor->second, i); ++k)
+                                    {
+                                        const git::DiffLine* other = rows[static_cast<std::size_t>(k)].left;
+                                        if (other != nullptr && other->origin != ' ' && !line_selected(*other))
+                                        {
+                                            picked.push_back(line_key(*other));
+                                        }
+                                    }
+                                }
+                                else if (line_selected(line))
+                                {
+                                    std::erase(picked, line_key(line));
+                                }
+                                else
+                                {
+                                    picked.push_back(line_key(line));
+                                }
+                                selection_anchors[options.id] = i;
+                            }
+                        }
+                        if (line_selected(line) || gutter_hovered)
+                        {
+                            body->AddRectFilled(
+                                    gmin, ImVec2(right, pos.y + line_h),
+                                    theme::u32(theme::with_alpha(p.accent, line_selected(line) ? 0.4f : 0.15f)));
+                        }
+                    }
                     if (line.origin != ' ')
                     {
                         body->AddRectFilled(ImVec2(base_x + px(TEXT_X), pos.y), ImVec2(right, pos.y + line_h),
@@ -531,6 +610,24 @@ namespace imgit::ui
         const app::DiffTarget target = *state.diff_target;
         const bool commit_diff = target.source == app::DiffTarget::Source::COMMIT;
         draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), theme::u32(p.app_bg0));
+        // Line staging: the picked lines belong to the diff they were picked in.
+        const std::uint64_t diff_revision = state.diff ? state.diff->revision : 0;
+        if (state.diff_selection_revision != diff_revision)
+        {
+            state.diff_selection_revision = diff_revision;
+            state.diff_selected_lines.clear();
+        }
+        const bool unstaging = target.source == app::DiffTarget::Source::STAGED;
+        const auto apply_lines = [&](const std::vector<git::LineSelection>& lines)
+        {
+            const std::string path = target.path;
+            app.run(state, unstaging ? "Unstage lines" : "Stage lines",
+                    [&]
+                    {
+                        return state.repo.apply_lines(path, lines, unstaging);
+                    });
+            state.diff_selected_lines.clear();
+        };
 
         // .file-view-header: status icon, the 14px white name; the encoding button and the close cross.
         {
@@ -612,6 +709,32 @@ namespace imgit::ui
                     return;
                 }
                 encoding_right = bmin.x - px(20.f);
+                // Stage / Unstage Lines for the lines picked in the gutter.
+                if (!state.diff_selected_lines.empty())
+                {
+                    const std::size_t n = state.diff_selected_lines.size();
+                    const std::string lines_label = std::string(staged ? "Unstage " : "Stage ") + std::to_string(n)
+                                                    + (n == 1 ? " Line" : " Lines");
+                    const float lw = text_size(fonts().regular, theme::FONT_SIZE_ROW, lines_label.c_str()).x + px(12.f);
+                    const ImVec2 lmin(bmin.x - px(8.f) - lw, origin.y + px(4.5f));
+                    const ImVec2 lmax(lmin.x + lw, lmin.y + px(26.f));
+                    ImGui::SetCursorScreenPos(lmin);
+                    const bool lines_clicked = ImGui::InvisibleButton("##stage_lines", ImVec2(lw, px(26.f)));
+                    const bool lines_hovered = ImGui::IsItemHovered();
+                    draw->AddRectFilled(lmin, lmax, theme::u32(theme::with_alpha(tone, lines_hovered ? 0.3f : 0.2f)),
+                                        px(2.f));
+                    draw->AddRect(lmin, lmax, theme::u32(tone), px(2.f), 0, 1.f);
+                    draw_text(draw, fonts().regular, theme::FONT_SIZE_ROW,
+                              ImVec2(lmin.x + px(6.f), css_text_y(12.f, origin.y + px(8.5f), false)),
+                              theme::u32(p.text_normal), lines_label.c_str());
+                    if (lines_clicked)
+                    {
+                        apply_lines(state.diff_selected_lines);
+                        ImGui::EndChild();
+                        return;
+                    }
+                    encoding_right = lmin.x - px(20.f);
+                }
             }
             // UTF-8: a 10px text-disabled dropdown button, 5px padding.
             const char* encoding = "UTF-8";
@@ -768,7 +891,26 @@ namespace imgit::ui
         options.scroll_prev = scroll_prev;
         options.scroll_next = scroll_next;
         options.syntax_highlighting = app.settings.syntax_highlighting;
+        int hunk_clicked = -1;
+        if (!commit_diff)
+        {
+            options.selected_lines = &state.diff_selected_lines;
+            options.hunk_action = unstaging ? "Unstage Hunk" : "Stage Hunk";
+            options.hunk_clicked = &hunk_clicked;
+        }
         draw_diff_editor(state.diff ? &*state.diff : nullptr, state.diff_error, editor_min, editor_max, options);
+        if (hunk_clicked >= 0 && state.diff && hunk_clicked < static_cast<int>(state.diff->hunks.size()))
+        {
+            std::vector<git::LineSelection> lines;
+            for (const git::DiffLine& line : state.diff->hunks[static_cast<std::size_t>(hunk_clicked)].lines)
+            {
+                if (line.origin != ' ')
+                {
+                    lines.push_back({line.origin, line.origin == '+' ? line.new_lineno : line.old_lineno});
+                }
+            }
+            apply_lines(lines);
+        }
         ImGui::EndChild();
     }
 } // namespace imgit::ui

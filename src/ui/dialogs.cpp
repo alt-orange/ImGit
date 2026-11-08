@@ -38,6 +38,8 @@ namespace imgit::ui
                 return "Delete Tag";
             case app::Dialog::Kind::DELETE_STASH:
                 return "Delete Stash";
+            case app::Dialog::Kind::CREATE_WORKTREE:
+                return "Create Worktree";
             case app::Dialog::Kind::DISCARD_ALL:
                 return "Discard All Changes";
             case app::Dialog::Kind::RESET:
@@ -876,8 +878,8 @@ namespace imgit::ui
                           ImVec2(x, std::round(box_top + std::round(ascent)) - std::ceil(ascent)), color, label);
             };
 
-            const std::string message = "Rename '" + d.ref_name + "' to:";
-            const float field_w = px(230.f);
+            const std::string message = d.message.empty() ? "Rename '" + d.ref_name + "' to:" : d.message;
+            const float field_w = px(d.message.empty() ? 230.f : 360.f);
             const float message_w = text_size(fonts().regular, 14.f, message.c_str()).x;
             const float submit_w = text_size(fonts().bold, 12.f, "Submit").x + px(12.f);
             const float cancel_w = text_size(fonts().bold, 12.f, "Cancel").x + px(12.f);
@@ -1568,6 +1570,31 @@ namespace imgit::ui
             }
             return;
         }
+        // Editing a stash's message asks for the new one in the same prompt bar.
+        if (d.kind == app::Dialog::Kind::EDIT_STASH_MESSAGE)
+        {
+            const int answer = draw_rename_prompt(d);
+            if (answer == 0)
+            {
+                return;
+            }
+            const app::Dialog request = d;
+            d.close();
+            if (answer < 0)
+            {
+                return;
+            }
+            const git::Sha sha = request.sha;
+            const std::string message = request.text_a;
+            app.run(
+                    *state, "Edit stash message",
+                    [&]
+                    {
+                        return state->repo.stash_set_message(sha, message);
+                    },
+                    "Stash message updated");
+            return;
+        }
         // Destructive confirmations are the prompt bar over the toolbar, not a modal.
         if (d.kind == app::Dialog::Kind::CONFIRM || d.kind == app::Dialog::Kind::DISCARD_ALL
             || d.kind == app::Dialog::Kind::DELETE_BRANCH || d.kind == app::Dialog::Kind::DELETE_TAG
@@ -2064,6 +2091,65 @@ namespace imgit::ui
             }
             break;
         }
+        case app::Dialog::Kind::CREATE_WORKTREE:
+        {
+            // git worktree add: the branch checked out in a new folder (a remote one through a local branch
+            // tracking it), or the commit detached.
+            const std::string from = d.ref_name.empty()
+                                             ? git::short_sha(d.sha)
+                                             : (d.ref_remote.empty() ? d.ref_name : d.ref_remote + "/" + d.ref_name);
+            if (ImGui::IsWindowAppearing() && d.text_a.empty())
+            {
+                std::string leaf = d.ref_name.empty() ? git::short_sha(d.sha) : d.ref_name;
+                std::ranges::replace(leaf, '/', '-');
+                const std::filesystem::path workdir = std::filesystem::path(state->repo.workdir()).lexically_normal();
+                const std::filesystem::path base = workdir.has_filename() ? workdir : workdir.parent_path();
+                d.text_a = (base.parent_path() / (base.filename().string() + "-" + leaf)).string();
+            }
+            secondary_text(("Worktree from " + from).c_str());
+            ImGui::Dummy(ImVec2(0.f, px(4.f)));
+            secondary_text("Folder");
+            if (ImGui::IsWindowAppearing())
+            {
+                ImGui::SetKeyboardFocusHere();
+            }
+            const bool submitted = input_text("##worktree_path", d.text_a, "Folder for the worktree",
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+            error_text(d.error);
+            if ((buttons("Create Worktree", !d.text_a.empty(), false, false) || submitted) && !d.text_a.empty())
+            {
+                std::vector<std::string> args{"worktree", "add"};
+                if (d.ref_name.empty())
+                {
+                    args.insert(args.end(), {"--detach", d.text_a, d.sha});
+                }
+                else if (d.ref_remote.empty())
+                {
+                    args.insert(args.end(), {d.text_a, d.ref_name});
+                }
+                else
+                {
+                    const bool local_exists = std::ranges::any_of(state->history.refs,
+                                                                  [&](const git::Ref& ref)
+                                                                  {
+                                                                      return ref.type == git::RefType::LOCAL_BRANCH
+                                                                             && ref.name == d.ref_name;
+                                                                  });
+                    if (local_exists)
+                    {
+                        args.insert(args.end(), {d.text_a, d.ref_name});
+                    }
+                    else
+                    {
+                        args.insert(args.end(),
+                                    {"--track", "-b", d.ref_name, d.text_a, d.ref_remote + "/" + d.ref_name});
+                    }
+                }
+                app.run_git_cli(*state, "Create worktree", args);
+                ImGui::CloseCurrentPopup();
+            }
+            break;
+        }
         case app::Dialog::Kind::DISCARD_ALL:
         {
             ImGui::TextWrapped("Discard all unstaged changes in the working directory? Untracked files are deleted. "
@@ -2400,6 +2486,7 @@ namespace imgit::ui
         }
         case app::Dialog::Kind::NONE:
         case app::Dialog::Kind::RENAME_BRANCH: // the prompt bar
+        case app::Dialog::Kind::EDIT_STASH_MESSAGE:
         case app::Dialog::Kind::PUSH_NEW_BRANCH:
         case app::Dialog::Kind::ADD_SUBMODULE: // the slide panel
         case app::Dialog::Kind::EDIT_SUBMODULE:

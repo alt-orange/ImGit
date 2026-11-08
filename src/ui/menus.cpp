@@ -391,10 +391,33 @@ namespace imgit::ui
                         });
         }
 
-        MenuItem worktree_commit_item(Application& app, bool in_submenu)
+        // The Create Worktree dialog for a branch (null: the commit `sha`, detached).
+        std::function<void()> create_worktree_action(Application& app, const git::Ref* ref, const git::Sha& sha)
+        {
+            std::string branch;
+            std::string remote;
+            if (ref != nullptr)
+            {
+                branch = ref->name;
+                if (ref->type == git::RefType::REMOTE_BRANCH)
+                {
+                    remote = ref->remote;
+                    branch = ref->name.substr(ref->remote.size() + 1);
+                }
+            }
+            return [&app, branch, remote, sha]
+            {
+                app.dialog.open(app::Dialog::Kind::CREATE_WORKTREE);
+                app.dialog.ref_name = branch;
+                app.dialog.ref_remote = remote;
+                app.dialog.sha = sha;
+            };
+        }
+
+        MenuItem worktree_commit_item(Application& app, const git::Sha& sha, bool in_submenu)
         {
             return item(in_submenu ? "this commit" : "Create worktree from this commit",
-                        placeholder(app, "Create worktree", "Worktree creation is not available in ImGit yet."));
+                        create_worktree_action(app, nullptr, sha));
         }
 
         MenuItem create_branch_item(Application& app, const git::Sha& sha)
@@ -910,6 +933,67 @@ namespace imgit::ui
                         });
         }
 
+        // Deletes every branch in `refs` after a confirmation: the local ones here (each undoable), the remote ones
+        // with one `git push <remote> --delete` per remote branch, run one after another.
+        void delete_branches(Application& app, RepoState& state, const std::vector<git::Ref>& refs)
+        {
+            app.dialog.open(app::Dialog::Kind::CONFIRM);
+            app.dialog.workdir = state.repo.workdir();
+            app.dialog.message = "This is a destructive operation, are you sure you want to delete all \""
+                                 + refs.front().name + "\" branches, local and remote?";
+            app.dialog.confirm_label = "Delete";
+            app.dialog.danger = true;
+            app.dialog.on_confirm = [&app, workdir = state.repo.workdir(), refs]
+            {
+                RepoState* tab = app.find_repo_state(workdir);
+                if (tab == nullptr)
+                {
+                    return;
+                }
+                git::Repository* repo = &tab->repo;
+                std::vector<std::vector<std::string>> pushes;
+                std::vector<std::string> deleted;
+                for (const git::Ref& ref : refs)
+                {
+                    if (ref.type == git::RefType::REMOTE_BRANCH)
+                    {
+                        pushes.push_back({"push", ref.remote, "--delete", ref.name.substr(ref.remote.size() + 1)});
+                        continue;
+                    }
+                    if (ref.type != git::RefType::LOCAL_BRANCH)
+                    {
+                        continue;
+                    }
+                    const std::string name = ref.name;
+                    const git::Sha sha = ref.target;
+                    if (auto result = repo->delete_branch(name); !result)
+                    {
+                        app.toasts.push(app::ToastKind::ERROR, "Delete branch failed", result.error().message);
+                        continue;
+                    }
+                    deleted.push_back(name);
+                    tab->push_undo({"delete branch " + name,
+                                    [repo, name, sha]
+                                    {
+                                        return repo->set_branch_target(name, sha);
+                                    },
+                                    [repo, name]
+                                    {
+                                        return repo->delete_branch(name);
+                                    }});
+                }
+                tab->refresh();
+                if (!pushes.empty())
+                {
+                    app.run_git_cli_sequence(*tab, "Delete remote branches", std::move(pushes));
+                }
+                else if (!deleted.empty())
+                {
+                    app.toasts.push(app::ToastKind::SUCCESS, "Deleted " + deleted.front());
+                }
+            };
+        }
+
         MenuItems delete_items(Application& app, RepoState& state, const std::vector<git::Ref>& refs)
         {
             MenuItems items;
@@ -949,9 +1033,11 @@ namespace imgit::ui
             else if (refs.size() > 2)
             {
                 items.push_back(item(fmt("Delete all \"{0}\" branches (local && remote)", {refs[0].name}),
-                                     placeholder(app, "Delete branches", "Delete them one at a time.")));
+                                     [&app, &state, refs]
+                                     {
+                                         delete_branches(app, state, refs);
+                                     }));
             }
-            (void)state;
             return items;
         }
 
@@ -1070,12 +1156,11 @@ namespace imgit::ui
                 {
                     continue;
                 }
-                worktree_sub.push_back(item(ref.name, placeholder(app, "Create worktree",
-                                                                  "Worktree creation is not available in ImGit yet.")));
+                worktree_sub.push_back(item(ref.name, create_worktree_action(app, &ref, sha)));
             }
             if (extra != 0)
             {
-                worktree_sub.push_back(worktree_commit_item(app, true));
+                worktree_sub.push_back(worktree_commit_item(app, sha, true));
             }
             if (worktree_sub.size() > 1)
             {
@@ -1246,7 +1331,7 @@ namespace imgit::ui
             if (!in_left_panel)
             {
                 checkout.push_back(checkout_commit_item(app, state, sha, false));
-                worktree.push_back(worktree_commit_item(app, false));
+                worktree.push_back(worktree_commit_item(app, sha, false));
                 compare = compare_items(app, state, sha);
             }
             MenuItems commit_ops;
@@ -1347,8 +1432,14 @@ namespace imgit::ui
                               app.dialog.ref_name = name;
                               app.dialog.text_b = git::stash_summary(stash_message);
                           })},
-                    {item("Edit stash message", placeholder(app, "Edit stash message",
-                                                            "Editing stash messages is not available in ImGit yet."))},
+                    {item("Edit stash message",
+                          [&app, sha = stash.target, stash_message = stash.message]
+                          {
+                              app.dialog.open(app::Dialog::Kind::EDIT_STASH_MESSAGE);
+                              app.dialog.sha = sha;
+                              app.dialog.message = "Stash message:";
+                              app.dialog.text_a = git::stash_summary(stash_message);
+                          })},
                     {toggle_hide_item(state, full_name, true)},
             });
         }
@@ -1409,7 +1500,7 @@ namespace imgit::ui
             else
             {
                 checkout.push_back(checkout_commit_item(app, state, sha, false));
-                worktree.push_back(worktree_commit_item(app, false));
+                worktree.push_back(worktree_commit_item(app, sha, false));
             }
             MenuItems commit_ops;
             commit_ops.push_back(create_branch_item(app, sha));
@@ -2344,6 +2435,53 @@ namespace imgit::ui
                           app.settings.graph_column_order.clear();
                           app.settings.save(app.config_path("settings.txt"));
                       })},
+        });
+    }
+
+    MenuItems worktree_menu(app::Application& app, app::RepoState& state, const git::Worktree& worktree)
+    {
+        const std::string path = worktree.path;
+        const std::string name = worktree.name;
+        const auto remove = [&app, &state, path, name](bool force)
+        {
+            return [&app, &state, path, name, force]
+            {
+                app.dialog.open(app::Dialog::Kind::CONFIRM);
+                app.dialog.workdir = state.repo.workdir();
+                const std::string quoted = "\"" + name + "\"";
+                app.dialog.message =
+                        force ? "This is a destructive operation, are you sure you want to remove the worktree "
+                                        + quoted + " and discard its uncommitted changes?"
+                              : "Remove the worktree " + quoted + "? Its folder is deleted; its branch stays.";
+                app.dialog.confirm_label = "Remove";
+                app.dialog.danger = true;
+                app.dialog.on_confirm = [&app, workdir = state.repo.workdir(), path, force]
+                {
+                    if (RepoState* tab = app.find_repo_state(workdir); tab != nullptr)
+                    {
+                        std::vector<std::string> args{"worktree", "remove"};
+                        if (force)
+                        {
+                            args.emplace_back("--force");
+                        }
+                        args.push_back(path);
+                        app.run_git_cli(*tab, "Remove worktree", args);
+                    }
+                };
+            };
+        };
+        return separated_menu({
+                {item("Open worktree",
+                      [&app, path]
+                      {
+                          app.open_repository(path);
+                      }),
+                 item("Copy worktree path",
+                      [&app, path]
+                      {
+                          app.copy_to_clipboard(path);
+                      })},
+                {item("Remove worktree", remove(false)), item("Remove worktree and discard its changes", remove(true))},
         });
     }
 

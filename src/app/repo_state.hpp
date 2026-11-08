@@ -179,6 +179,9 @@ namespace imgit::app
         DiffMode diff_mode = DiffMode::INLINE;
         bool file_view = false;
         bool diff_whitespace = true; // show changes in whitespace only (off: GIT_DIFF_IGNORE_WHITESPACE)
+        // The working-directory diff's lines picked for Stage / Unstage Lines, dropped when the diff reloads.
+        std::vector<git::LineSelection> diff_selected_lines;
+        std::uint64_t diff_selection_revision = 0;
         bool left_open_in_diff = false; // the left panel collapses while a file is open
         std::string diff_error;
         bool tree_view = true; // Path | Tree toggle
@@ -191,6 +194,12 @@ namespace imgit::app
         bool amend = false;
         bool push_after_commit = false;
         bool commit_options_open = false;
+        // Commit options read from the git configuration the first time the form is drawn: GPG signing defaults to
+        // commit.gpgsign, and the form starts from commit.template (again after each commit).
+        bool commit_form_ready = false;
+        bool commit_sign = false;
+        bool commit_skip_hooks = false;
+        std::string commit_template;
         // The composer's Stash tab (GitKraken's): its own message, stashing every change.
         bool composer_stash = false;
         std::string stash_summary;

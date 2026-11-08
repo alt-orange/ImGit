@@ -20,6 +20,23 @@ namespace imgit::git
         std::string message;
     };
 
+    // A changed line of a working-directory diff, as the diff view selects it: '+' with its new line number, '-'
+    // with its old one.
+    struct LineSelection
+    {
+        char origin = '+';
+        int lineno = 0;
+        [[nodiscard]] bool operator==(const LineSelection&) const = default;
+    };
+
+    // How `git commit` runs (Repository::commit_with_git).
+    struct CommitOptions
+    {
+        bool amend = false;
+        bool sign = false; // -S; off passes --no-gpg-sign, so commit.gpgsign is the form's default, not an override
+        bool skip_hooks = false; // --no-verify
+    };
+
     template<class T>
     using Result = std::expected<T, Error>;
 
@@ -95,6 +112,16 @@ namespace imgit::git
         [[nodiscard]] Result<void> discard(const std::vector<FileChange>& changes) const;
         [[nodiscard]] Result<void> discard_all() const;
         [[nodiscard]] Result<Sha> commit(const std::string& message, bool amend) const;
+        // The same through `git commit -F -`: hooks run (unless skipped) and the commit can be GPG-signed. The
+        // author is the one commit() would use (the profile's identity in repositories without their own).
+        [[nodiscard]] Result<Sha> commit_with_git(const std::string& message, const CommitOptions& options) const;
+        // Whether commit() would skip something `git commit` does: a pre-commit / prepare-commit-msg / commit-msg /
+        // post-commit hook in the hooks directory (core.hooksPath honoured).
+        [[nodiscard]] bool has_commit_hooks() const;
+        // Stages (or, `unstage`, unstages) only the given changed lines of `path`: a patch of them is applied to the
+        // index with `git apply --cached`. Unselected deletions stay, unselected additions are left out.
+        [[nodiscard]] Result<void> apply_lines(const std::string& path, const std::vector<LineSelection>& lines,
+                                               bool unstage) const;
         // Changes only HEAD's message, keeping its tree.
         [[nodiscard]] Result<Sha> reword_head(const std::string& message) const;
 
@@ -151,6 +178,16 @@ namespace imgit::git
         [[nodiscard]] Result<void> stash_apply(int index) const;
         [[nodiscard]] Result<void> stash_pop(int index) const;
         [[nodiscard]] Result<void> stash_drop(int index) const;
+        // Rewrites the message of the stash with that commit sha (its stash reflog entry; its place in the list
+        // stays). `message` is stored as git's "On <branch>: <message>".
+        [[nodiscard]] Result<void> stash_set_message(const Sha& sha, const std::string& message) const;
+
+        // Configuration (repository, global and system levels): empty / `fallback` when unset.
+        [[nodiscard]] std::string config_string(const std::string& key) const;
+        [[nodiscard]] bool config_bool(const std::string& key, bool fallback) const;
+        // The text of the file commit.template names (~ expanded, relative to the working directory), its comment
+        // lines left out; empty when there is none.
+        [[nodiscard]] std::string commit_template() const;
 
     private:
         struct Deleter

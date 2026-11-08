@@ -54,6 +54,12 @@ namespace imgit::ui
         bool blame_columns = false;
         std::function<ImVec4(const git::Sha&)> blame_color;
         bool syntax_highlighting = true; // colour the code by its language (Preferences → Editor)
+        // Line staging (a working-directory diff, inline or hunk view): clicking a changed line's number gutter
+        // toggles it in `selected_lines` (shift: the range from the last one clicked); with `hunk_action` set
+        // ("Stage Hunk" / "Unstage Hunk"), each hunk header carries that button and a click sets `*hunk_clicked`.
+        std::vector<git::LineSelection>* selected_lines = nullptr;
+        const char* hunk_action = nullptr;
+        int* hunk_clicked = nullptr;
         const char* id = "##diff_lines";
     };
     // Draws the editor over [min, max): `diff`'s lines, or `error` / "Loading..." (a null diff) / "Binary file" /
@@ -114,6 +120,8 @@ namespace imgit::ui
                                               const std::vector<std::string>& sections);
     [[nodiscard]] MenuItems remote_menu(app::Application& app, app::RepoState& state, const std::string& name,
                                         bool in_left_panel);
+    // A linked worktree's row in the left panel: open it, copy its path, remove it (git worktree remove).
+    [[nodiscard]] MenuItems worktree_menu(app::Application& app, app::RepoState& state, const git::Worktree& worktree);
     [[nodiscard]] MenuItems local_folder_menu(app::Application& app, app::RepoState& state, const std::string& folder);
     [[nodiscard]] MenuItems terminal_menu(app::Application& app);
     [[nodiscard]] MenuItems text_input_menu(bool read_only);

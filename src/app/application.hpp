@@ -70,6 +70,8 @@ namespace imgit::app
             DELETE_BRANCH,
             DELETE_TAG,
             DELETE_STASH,
+            EDIT_STASH_MESSAGE, // sha: the stash, text_a: its new message (the prompt bar)
+            CREATE_WORKTREE, // ref_name / ref_remote: the branch to check out (empty: sha, detached), text_a: path
             DISCARD_ALL,
             RESET,
             PUSH_NEW_BRANCH,
