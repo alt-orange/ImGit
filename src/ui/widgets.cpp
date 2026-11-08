@@ -1051,7 +1051,8 @@ namespace imgit::ui
         }
         if (delta < 3600)
         {
-            return std::to_string(delta / 60) + " minutes ago";
+            const auto minutes = delta / 60;
+            return minutes == 1 ? "1 minute ago" : std::to_string(minutes) + " minutes ago";
         }
         if (delta < 86400)
         {

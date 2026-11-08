@@ -195,6 +195,9 @@ namespace imgit::git
         // The text of the file commit.template names (~ expanded, relative to the working directory), its comment
         // lines left out; empty when there is none.
         [[nodiscard]] std::string commit_template() const;
+        // The message git prepared for the commit that concludes a merge, cherry-pick or revert (MERGE_MSG, its
+        // comment lines left out); empty when there is none.
+        [[nodiscard]] std::string prepared_message() const;
 
     private:
         struct Deleter

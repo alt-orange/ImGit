@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace imgit::ui
@@ -877,6 +878,37 @@ namespace imgit::ui
                 state.commit_sign = state.repo.config_bool("commit.gpgsign", false);
                 state.commit_template = state.repo.commit_template();
                 apply_commit_template(state);
+            }
+            // A merge, cherry-pick or revert stopped on conflicts: an empty form starts from the message git
+            // prepared for the commit that concludes it, as `git commit` would.
+            // Aborted, the message it left untouched goes with it.
+            if (state.operation_state != state.prepared_message_for)
+            {
+                if (!state.prepared_summary.empty() && state.commit_summary == state.prepared_summary
+                    && state.commit_description == state.prepared_description)
+                {
+                    state.commit_summary.clear();
+                    state.commit_description.clear();
+                    apply_commit_template(state);
+                }
+                state.prepared_summary.clear();
+                state.prepared_description.clear();
+                state.prepared_message_for = state.operation_state;
+                const bool prepared = state.operation_state == git::RepoState::MERGE
+                                      || state.operation_state == git::RepoState::CHERRYPICK
+                                      || state.operation_state == git::RepoState::REVERT;
+                const bool untouched = (state.commit_summary.empty() && state.commit_description.empty())
+                                       || state.commit_template.starts_with(state.commit_summary);
+                if (prepared && untouched)
+                {
+                    state.commit_summary.clear();
+                    state.commit_description.clear();
+                    const std::string saved = std::exchange(state.commit_template, state.repo.prepared_message());
+                    apply_commit_template(state);
+                    state.commit_template = saved;
+                    state.prepared_summary = state.commit_summary;
+                    state.prepared_description = state.commit_description;
+                }
             }
 
             // Header (36px, border-bottom): the danger trash button and "N file changes on [branch]" centred in
