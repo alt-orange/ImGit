@@ -1,7 +1,5 @@
 //! The CHANGES column: files modified / added / deleted per commit, counted on a worker thread for the rows on
 //! screen, and drawn as the coloured readout.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

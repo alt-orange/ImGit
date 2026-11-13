@@ -3,8 +3,6 @@
 //! select, the commit's node and streak in its lane colour, the message) and a footer with the shortcuts and
 //! Reset / Cancel Rebase / Start Rebase. Keys on the selected row: P / S / R / D set its action, Up / Down select,
 //! Ctrl + Up / Down move it. Positions are CSS px.
-//!
-//! Ports `src/ui/rebase_panel.cpp`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

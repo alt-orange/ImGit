@@ -5,8 +5,6 @@
 //! (libgit2 for the branch deletions, the git CLI for the gitflow merges, so a conflict leaves the repository in
 //! git's usual merge state). The pure logic (which branches qualify, which commands run) is in
 //! [`imgit_app::workflows`].
-//!
-//! Ports `src/ui/workflows.cpp`.
 
 use std::time::{Duration, Instant};
 

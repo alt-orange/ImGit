@@ -1,10 +1,6 @@
-//! The regions of the ImGit window, each drawn inside the application's root window (`src/ui/panels.hpp` and
-//! the `.cpp` files it declares).
-//!
-//! One module per C++ source file. **Each is a stub for now**: its functions have their final signature and
-//! draw nothing / return empty menus; porting a panel means filling in its file (and only its file). Everything
-//! a panel needs from the application (`Application`'s fields and methods, `Dialog`, `Settings`, the toasts,
-//! `MenuItems`...) is already public.
+//! The regions of the ImGit window, each drawn inside the application's root window: one module per view.
+//! Everything a panel needs from the application (`Application`'s fields and methods, `Dialog`, `Settings`, the
+//! toasts, `MenuItems`...) is public.
 //!
 //! # Conventions every panel follows
 //!
@@ -15,7 +11,7 @@
 //! * Functions that make menus or run operations take `cx` first too, so a signature never has to change when
 //!   a port finds it needs the frame. Pure queries (`can_reword`, `gitflow_branches`...) take only what they
 //!   read.
-//! * A panel's persistent state (what the C++ kept in function-local statics) is its module's `State`, held in
+//! * A panel's persistent state is its module's `State`, held in
 //!   [`PanelStates`] as `app.panels.<module>`: add fields there, never statics.
 //! * Deferred work (menu clicks, dialog confirmations) is an [`Action`](crate::app::action::Action) capturing
 //!   owned data only; it finds its repository again with `app.with_repo(&workdir, |app, state| ..)`.
@@ -65,7 +61,7 @@ pub struct PanelStates {
     pub workflows: workflows::State,
 }
 
-// The functions of `panels.hpp`, importable as `ui::panels::name` whichever file defines them.
+// The panels' functions, importable as `ui::panels::name` whichever module defines them.
 pub use detail_panel::{draw_detail_panel, stash_changes};
 pub use dialogs::{create_branch_at, create_tag_at, draw_dialogs, draw_slide_panel};
 pub use diff_view::{

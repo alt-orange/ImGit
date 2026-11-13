@@ -259,7 +259,7 @@ fn last_font(imgui: &Context) -> *mut sys::ImFont {
     }
 }
 
-/// Loads every font and sets the base font size and DPI scale, as `load_fonts()` of the C++ `main.cpp` does.
+/// Loads every font and sets the base font size and DPI scale, as the C++ build's `load_fonts()` did.
 ///
 /// `dpi_scale` is the layout scale of the window, `density` the framebuffer's pixels per window coordinate
 /// (above 1 on macOS only). Must run before the first frame, after the renderer is attached.

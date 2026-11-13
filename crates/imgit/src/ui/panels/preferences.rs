@@ -10,8 +10,6 @@
 //! Tools, Editor, In-App Terminal), [`appearance`] (UI Customization), [`signing`] and [`repo_pages`]; the
 //! shared layout and controls are [`page`], [`controls`] and [`form`], the git configuration and key handling
 //! [`store`].
-//!
-//! Ports `src/ui/preferences.cpp`.
 
 mod appearance;
 mod controls;

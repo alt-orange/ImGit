@@ -1,4 +1,4 @@
-//! macOS: the Cocoa side of the main window (`src/platform/window_mac.mm`). Not ported yet.
+//! macOS: the Cocoa side of the main window. Not ported yet.
 //!
 //! The C++ app hides the system title bar under the content (`titlebarAppearsTransparent`,
 //! `NSWindowStyleMaskFullSizeContentView`, an empty compact toolbar for the traffic lights' inset), keeps a
@@ -12,5 +12,5 @@ pub fn title_bar_inset() -> f32 {
     0.0
 }
 
-/// The part of the tabs bar that drags the window. TODO: the `ImGitDragView` of `window_mac.mm`.
+/// The part of the tabs bar that drags the window. TODO: an `NSView` over that part that starts a window drag.
 pub fn set_drag_region(_min: [f32; 2], _max: [f32; 2]) {}

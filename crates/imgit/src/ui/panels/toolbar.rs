@@ -1,6 +1,4 @@
 //! The toolbar: undo / redo, pull / push, branch, stash, pop, terminal, search...
-//!
-//! Ports `src/ui/toolbar.cpp`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

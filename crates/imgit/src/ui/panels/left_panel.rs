@@ -4,8 +4,6 @@
 //! WORKTREES, STASHES, TAGS, SUBMODULES and, once Gitflow is initialized, GITFLOW). Each has a 30px header and,
 //! when expanded, a scrolling body of 24px rows (folders of a `feature/x` name as a tree). The border between two
 //! sections can be dragged. Collapsed, the panel is a 36px strip of section icons and counts.
-//!
-//! Ports `src/ui/left_panel.cpp`.
 
 use std::cmp::Ordering;
 

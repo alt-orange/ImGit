@@ -1,7 +1,5 @@
 //! What the graph zone of a row draws: the lane edges (straight lines and rounded turns, solid or dashed), the
 //! commit node, the gutters' shadows and the fade towards the zone's edges.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use std::f32::consts::PI;
 

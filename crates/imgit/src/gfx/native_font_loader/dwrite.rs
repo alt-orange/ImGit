@@ -1,4 +1,4 @@
-//! DirectWrite ClearType as an `ImFontLoader` (`src/gfx/native_font_loader_dwrite.cpp`).
+//! DirectWrite ClearType as an `ImFontLoader`.
 
 use std::ffi::{c_int, c_void};
 use std::ptr;

@@ -1,6 +1,4 @@
 //! The commit search bar (Ctrl+F) over the graph.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use dear_imgui_rs::{
     Condition, InputTextFlags, Key, MouseCursor, StyleColor, StyleVar, WindowFlags, sys,

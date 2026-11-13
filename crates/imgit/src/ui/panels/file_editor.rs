@@ -1,6 +1,4 @@
 //! The file view's editor (Edit This File): Save / Cancel and the text.
-//!
-//! Ports `src/ui/file_editor.cpp`.
 //
 // The working directory's copy of a file as plain text in the code font, with Save and Cancel in place of the
 // toolbar. Line endings are edited as "\n" and written back as the file had them (a file without any gets the

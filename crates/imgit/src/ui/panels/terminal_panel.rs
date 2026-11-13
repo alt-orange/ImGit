@@ -3,8 +3,6 @@
 //! padding) running PowerShell on a pseudo console. The content dims to 60% while the terminal does not have
 //! focus. Preferences > In-App Terminal pick the face, size, line height, cursor, dimming and the shell new tabs
 //! run.
-//!
-//! Ports `src/ui/terminal_panel.cpp`.
 
 use dear_imgui_rs::{Key, MouseButton, MouseCursor, WindowFlags, WindowHoveredFlags, sys};
 use imgit_app::RepoState;

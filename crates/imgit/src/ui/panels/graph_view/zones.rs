@@ -1,7 +1,5 @@
 //! The graph's zones (columns): which are shown and in what order, their widths and how dragging one's edge
 //! moves the others, and the lanes of the graph zone itself (its sideways scroll and node offsets).
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use crate::app::settings::Settings;
 use crate::theme;

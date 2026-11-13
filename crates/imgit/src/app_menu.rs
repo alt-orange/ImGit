@@ -1,8 +1,8 @@
 //! The application menu (File / Edit / View / Help) where the platform shows it itself: the macOS menu bar.
 //! Elsewhere the app draws its own bar (`Application::draw_menu_bar`) and these do nothing.
 //!
-//! TODO(macOS): port `src/platform/app_menu_mac.mm` (an `NSMenu` built from [`AppMenu`], its clicks queued for
-//! the UI thread). Until then every platform draws the in-app bar and [`has_native_menu_bar`] is `false`.
+//! TODO(macOS): build an `NSMenu` from [`AppMenu`], with its clicks queued for the UI thread. Until then every
+//! platform draws the in-app bar and [`has_native_menu_bar`] is `false`.
 
 use std::fmt;
 

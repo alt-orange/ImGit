@@ -1,6 +1,4 @@
 //! The tabs bar's popovers: the tabs list, the profile menu and the notifications.
-//!
-//! Ports `src/ui/tab_popovers.cpp`.
 //
 // The tabs bar's popovers (toolbar-bg2 with a 0 6px 12px shadow, 5px under their button): the tabs list (a
 // react-select), the notifications and the profile menu.

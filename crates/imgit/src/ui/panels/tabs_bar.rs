@@ -1,6 +1,4 @@
 //! The tabs bar, the New Tab page and the tab naming entries.
-//!
-//! Ports `src/ui/tabs_bar.cpp`.
 
 use std::path::Path;
 

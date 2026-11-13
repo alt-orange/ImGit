@@ -1,6 +1,4 @@
 //! The file view (diff, hunks, split, blame gutter) and the diff editor shared with the File History view.
-//!
-//! Ports `src/ui/diff_view.cpp`.
 
 use std::collections::HashMap;
 

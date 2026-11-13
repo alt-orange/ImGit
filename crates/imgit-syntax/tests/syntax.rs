@@ -1,4 +1,4 @@
-//! The highlighter's behaviour, ported from the C++ suite (`test/syntax_test.cpp`).
+//! The highlighter's behaviour.
 
 use imgit_syntax::{
     Diff, DiffCache, DiffLine, DiffSpans, Language, LimitExceeded, LineKind, LineSpans,

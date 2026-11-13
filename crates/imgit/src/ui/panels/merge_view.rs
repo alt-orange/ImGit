@@ -6,8 +6,6 @@
 //! as text. Save writes the Output and marks the file resolved. A | B and the Output are split by drag handles,
 //! the split kept in the settings. Positions are CSS px; code is Consolas 12px on 16px lines (by default: the
 //! Editor preferences) with an 82px margin (glyphs, line numbers, decorations).
-//!
-//! Ports `src/ui/merge_view.cpp`.
 
 use std::ops::Range;
 use std::path::Path;

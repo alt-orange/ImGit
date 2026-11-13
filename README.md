@@ -5,13 +5,13 @@
 # ImGit Desktop
 
 **A fast, native Git client with a commit graph front and centre.**
-C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
+Rust on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 [![Release](https://img.shields.io/github/v/release/alt-orange/ImGit?sort=semver)](https://github.com/alt-orange/ImGit/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/alt-orange/ImGit/total)](https://github.com/alt-orange/ImGit/releases)
 ![Last commit](https://img.shields.io/github/last-commit/alt-orange/ImGit/github-main)
 [![CI](https://img.shields.io/github/actions/workflow/status/alt-orange/ImGit/ci.yml?branch=github-main&label=CI)](https://github.com/alt-orange/ImGit/actions/workflows/ci.yml)
-![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2024-DEA584?logo=rust&logoColor=white)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-555)
 [![discord badge](https://dcbadge.limes.pink/api/server/https://discord.gg/eDgdaWbqwZ?style=flat)](https://discord.gg/eDgdaWbqwZ)
 [![telegram badge](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/orangennotes)
@@ -22,7 +22,6 @@ C++23 on Dear ImGui and libgit2 · Windows, Linux and macOS
 
 **[<kbd> <br> &nbsp;Download&nbsp; <br> &nbsp;</kbd>][DOWNLOAD]** 
 **[<kbd> <br> &nbsp;Install&nbsp; <br> &nbsp;</kbd>][INSTALL]** 
-**[<kbd> <br> &nbsp;Porting&nbsp; <br> &nbsp;</kbd>][PORTING]** 
 **[<kbd> <br> &nbsp;Contribute&nbsp; <br> &nbsp;</kbd>][CONTRIBUTING]** 
 **[<kbd> <br> &nbsp;Donate&nbsp; <br> &nbsp;</kbd>][SPONSOR]** 
 
@@ -108,62 +107,30 @@ on your `PATH` in the background, so your credential helpers and SSH setup apply
 
 ## Building
 
-**Windows** — Visual Studio 2022 or later with the C++ workload, clang-cl, CMake and vcpkg (the ones bundled with
-Visual Studio work), and `git` on `PATH`:
+ImGit is a Cargo workspace. You need a stable Rust toolchain (1.90 or later), a C and C++ compiler for the two
+bundled C libraries (libgit2 and Dear ImGui are built from source by their crates), and `git` on `PATH`:
 
 ```bash
-cmake --preset x64-release
-cmake --build --preset x64-release
-build/x64-release/imgit.exe path/to/repository
+cargo build --release -p imgit
+target/release/imgit path/to/repository
 ```
 
-`CMakePresets.json` points `CMAKE_TOOLCHAIN_FILE` at the Visual Studio vcpkg bundle; change it (or use
-`$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`) for another install. Dependencies come from `vcpkg.json`: imgui
-with the GLFW / OpenGL 3 bindings, glfw3, libgit2, cpr, nativefiledialog-extended and stb. Use `x64-debug` for a build
-with a console for logs.
+A debug build (`cargo build -p imgit`) keeps a console for logs. `cargo test --workspace` runs the tests and
+`cargo clippy --workspace --all-targets` the lints; both are expected to stay clean.
 
-**Linux** — g++ 13+ or clang 17+, CMake, Ninja, a vcpkg checkout in `VCPKG_ROOT`, and GLFW's X11 packages
-(`libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config`):
+**Windows** — the MSVC toolchain (Visual Studio 2022 or later with the C++ workload). This is the platform the Rust
+build is developed and tested on.
 
-```bash
-cmake --preset linux-release
-cmake --build --preset linux-release
-build/linux-release/imgit path/to/repository
-```
+**Linux and macOS** — the Rust code type-checks for `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`, but these
+builds have not been linked or run yet. Linux needs the usual X11 / Wayland and OpenSSL development packages
+(`pkg-config libssl-dev`), and file dialogs need the xdg desktop portal. On macOS the app bundle, the native menu bar
+and the title-bar integration are not ported yet.
 
-File dialogs need the xdg desktop portal (`xdg-desktop-portal` and a backend such as `xdg-desktop-portal-gtk`).
-`vcpkg-overlays/dbus` is the stock dbus port without its systemd default. See `PORTING.md` for what each platform
-implements.
-
-**macOS** — Xcode (or the Command Line Tools) 15+, CMake, Ninja and a vcpkg checkout in `VCPKG_ROOT` (`brew install
-cmake ninja pkg-config autoconf automake libtool`):
-
-```bash
-cmake --preset macos-release
-cmake --build --preset macos-release
-build/macos-release/ImGit.app/Contents/MacOS/ImGit path/to/repository   # or open build/macos-release/ImGit.app
-```
-
-The build is an app bundle, `ImGit.app`, with the Dock icon (`res/imgit.icns`), the traffic lights in the tabs bar
-(no separate title bar; drag the bar's empty part to move the window) and the File / Edit / View / Help menus in
-the system menu bar. vcpkg picks
-`arm64-osx` on Apple silicon and `x64-osx` on Intel; `vcpkg-triplets/` holds both with the deployment target
-(macOS 12, the same as `CMAKE_OSX_DEPLOYMENT_TARGET` in `CMakeLists.txt`). Shortcuts use `Cmd` where the labels
-say `Ctrl`, and `Option` for `Alt`; in the terminal panel the Control key still sends control sequences. A
-downloaded `ImGit.app` is only ad-hoc signed, so the first launch needs a right-click → *Open* (or
-`xattr -d com.apple.quarantine ImGit.app`).
-
-**CI and releases** — `.github/workflows/ci.yml` builds Windows, Linux and macOS on every push to `github-main` and
-every pull request (the `ci-windows` / `ci-linux` / `ci-macos` presets, vcpkg at the manifest's baseline, its binary
-cache in the Actions cache) and takes a screenshot as a smoke test under Xvfb on Linux and, best effort, on the macOS
-runner. Publishing a GitHub release runs `release.yml`, which attaches `imgit-<tag>-windows-x64.zip`,
-`imgit-<tag>-linux-x64.tar.gz`, `imgit-<tag>-macos-arm64.zip` (the ad-hoc signed `ImGit.app`) and `SHA256SUMS.txt`
-to it; run it by hand with a tag to rebuild an existing release's packages. The release executables for Windows and
-Linux are compressed with UPX (macOS has no working UPX target); some antivirus scanners flag UPX-packed files, and
-`upx -d` restores the original binary.
-
-**Warnings** — the build treats every warning as an error on every platform (`/W4 /WX` on MSVC and clang-cl,
-`-Wall -Wextra -Wpedantic -Werror` elsewhere), so a new warning fails the build rather than piling up.
+**CI and releases** — `.github/workflows/ci.yml` builds and tests on Windows, Linux and macOS on every push to
+`github-main` and every pull request, and takes a screenshot as a smoke test under Xvfb on Linux. Publishing a GitHub
+release runs `release.yml`, which attaches the packages and `SHA256SUMS.txt` to it. The release executables for
+Windows and Linux are compressed with UPX; some antivirus scanners flag UPX-packed files, and `upx -d` restores the
+original binary.
 
 **Headless screenshots** — `imgit <repo> --screenshot out.bmp [--size WxH] [--select-row N]` renders a few frames and
 exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
@@ -173,29 +140,28 @@ made this way.
 
 | Path | What |
 |---|---|
-| `src/git/` | the libgit2 wrapper (history, refs, status, diffs, index, branches, tags, remotes, stashes, merge, history rewriting, conflict sides) and the `git` command runner with the sign-in prompt's askpass side |
-| `src/graph/` | lane and edge assignment for the commit graph |
-| `src/app/` | the application: settings, profiles, tabs, themes, repository state, undo, the merge model, toasts, the terminal's screen |
-| `src/ui/` | every view: graph, panels, diff, interactive rebase, merge tool, menus, dialogs, preferences, command palette, terminal |
-| `src/platform/` | everything that differs per OS: processes, pseudo console, shell actions and dialogs, system facts, the window (`window_mac.mm` for the Cocoa calls) |
-| `src/gfx/` | image decoding, the LCD text renderer and the platform font loader |
+| `crates/imgit-git/` | the libgit2 layer on `git2` (history, refs, status, diffs, index, branches, tags, remotes, stashes, merge, history rewriting, conflict sides), the `git` command runner with the sign-in prompt's askpass side, and lane and edge assignment for the commit graph |
+| `crates/imgit-app/` | the logic that needs no UI: preferences, profiles, theme files, workflows, connections, the merge model, each tab's repository state and undo |
+| `crates/imgit-syntax/` | the syntax highlighter |
+| `crates/imgit-vt/` | the terminal's screen model |
+| `crates/imgit-platform/` | everything that differs per OS outside the window: processes, pseudo console, shell actions and dialogs, system facts |
+| `crates/imgit/` | the application: the window and event loop, image decoding, the LCD text renderer and the platform font loader (`gfx/`), the theme, settings, tabs and toasts (`app/`), and every view (`ui/`): graph, panels, diff, interactive rebase, merge tool, menus, dialogs, preferences, command palette, terminal |
 | `assets/` | fonts, icons and images compiled into the executable |
-| `res/` | the Windows icon and resource script, the macOS `.icns` and `Info.plist` template |
+| `res/` | the Windows icon and the macOS `.icns` |
 | `tools/app_icon.py` | draws the app icon (`app_icon.png`, `imgit.ico`, `imgit.icns`) |
 
 ## Credits
 
-ImGit is built on [Dear ImGui](https://github.com/ocornut/imgui) (MIT), [libgit2](https://libgit2.org) (GPLv2 with
-linking exception), [GLFW](https://www.glfw.org) (zlib), [cpr](https://github.com/libcpr/cpr) (MIT),
-[nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) (zlib) and
-[stb](https://github.com/nothings/stb) (public domain). It ships the Open Sans font (SIL OFL,
-`assets/fonts/LICENSE.txt`), Font Awesome Free icons (CC BY 4.0, `assets/icons/NOTICE.txt`) and two of Chromium's
-cursors (BSD, `assets/cursors/NOTICE.txt`).
+ImGit is built on [Dear ImGui](https://github.com/ocornut/imgui) (MIT) through
+[dear-imgui-rs](https://github.com/Latias94/dear-imgui-rs), [libgit2](https://libgit2.org) (GPLv2 with linking
+exception) through [git2](https://github.com/rust-lang/git2-rs), [winit](https://github.com/rust-windowing/winit),
+[glutin](https://github.com/rust-windowing/glutin) and [glow](https://github.com/grovesNL/glow), and the other crates
+listed in `Cargo.lock`. It ships the Open Sans font (SIL OFL, `assets/fonts/LICENSE.txt`), Font Awesome Free icons
+(CC BY 4.0, `assets/icons/NOTICE.txt`) and two of Chromium's cursors (BSD, `assets/cursors/NOTICE.txt`).
 
 <!-- Link references -->
 
 [DOWNLOAD]: https://github.com/alt-orange/ImGit/releases
 [INSTALL]: INSTALL.md
-[PORTING]: PORTING.md
 [CONTRIBUTING]: CONTRIBUTING.md
 [SPONSOR]: https://boosty.to/orangecpp/purchase/3568644?ssource=DIRECT&share=subscription_link

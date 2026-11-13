@@ -39,33 +39,28 @@ credential helpers and SSH setup apply as usual. Everything else is built into t
 
 Settings and profiles live in `%APPDATA%\.imgit` on Windows and `~/.imgit` elsewhere.
 
-## <img width="28px" src="https://upload.wikimedia.org/wikipedia/commons/e/ef/CMake_logo.svg?" /> Build from source using CMake
+## Build from source using Cargo
 
 1. **Preparation**
 
-   Install the tools: a C++23 compiler, CMake 3.25+, Ninja, Git and vcpkg. The dependencies (imgui with the
-   GLFW / OpenGL 3 bindings, glfw3, libgit2, cpr, nativefiledialog-extended and stb) come from `vcpkg.json`.
+   Install a stable Rust toolchain (1.90 or later) with [rustup](https://rustup.rs), Git, and a C and C++ compiler:
+   the crates build their two C libraries (libgit2 and Dear ImGui) from source.
 
    1. **Windows:**
 
-      Install Visual Studio 2022 or later with the C++ workload, clang-cl, CMake and vcpkg from
+      Install Visual Studio 2022 or later with the C++ workload from
       [here](https://visualstudio.microsoft.com/downloads/) and Git from [here](https://git-scm.com/downloads).
-
-      Use the x64 Native Tools shell to execute the commands below. `CMakePresets.json` points
-      `CMAKE_TOOLCHAIN_FILE` at the Visual Studio vcpkg bundle; change it (or use
-      `$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`) for another install.
+      This is the platform the Rust build is developed and tested on.
    2. **Linux:**
       ```bash
-      sudo pacman -Sy cmake ninja clang git pkg-config
-      # GLFW's X11 packages, Debian / Ubuntu names:
-      sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev
+      # Debian / Ubuntu names
+      sudo apt install build-essential pkg-config libssl-dev
       ```
-      g++ 13+ or clang 17+ and a vcpkg checkout in `VCPKG_ROOT`.
+      The Rust code type-checks for Linux, but this build has not been linked or run yet.
    3. **macOS:**
-      ```bash
-      brew install cmake ninja pkg-config autoconf automake libtool
-      ```
-      Xcode (or the Command Line Tools) 15+ and a vcpkg checkout in `VCPKG_ROOT`.
+
+      Xcode (or the Command Line Tools) 15+. The Rust code type-checks for macOS, but this build has not been linked
+      or run yet, and the app bundle and native menu bar are not ported.
 
 2. **Clone the repository:**
    ```bash
@@ -75,27 +70,13 @@ Settings and profiles live in `%APPDATA%\.imgit` on Windows and `~/.imgit` elsew
    ```bash
    cd ImGit
    ```
-4. **Build the project using CMake:**
+4. **Build the project using Cargo:**
    ```bash
-   cmake --preset x64-release
-   cmake --build --preset x64-release
+   cargo build --release -p imgit
    ```
-   Use the **\<platform\>-\<build configuration\>** preset for your machine, like **x64-release** or
-   **linux-debug**; the debug presets keep a console for logs on Windows.
-
-   | Platform Name | Build Config  |
-   |---------------|---------------|
-   | x64 (Windows) | release/debug |
-   | linux         | release/debug |
-   | macos         | release/debug |
+   A debug build (`cargo build -p imgit`) keeps a console for logs on Windows.
 
 5. **Run it:**
    ```bash
-   build/x64-release/imgit.exe path/to/repository                        # Windows
-   build/linux-release/imgit path/to/repository                          # Linux
-   build/macos-release/ImGit.app/Contents/MacOS/ImGit path/to/repository # macOS, or open build/macos-release/ImGit.app
+   target/release/imgit path/to/repository
    ```
-
-   The macOS build is an app bundle; vcpkg picks `arm64-osx` on Apple silicon and `x64-osx` on Intel, both with the
-   macOS 12 deployment target from `vcpkg-triplets/`. `vcpkg-overlays/dbus` is the stock dbus port without its
-   systemd default, for Linux. See `PORTING.md` for what each platform implements.

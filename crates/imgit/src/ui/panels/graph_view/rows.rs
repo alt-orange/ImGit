@@ -1,6 +1,4 @@
 //! The rows of the graph: keyboard navigation, the ref zone's popover, timeline markers and every row's zones.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use std::collections::HashSet;
 

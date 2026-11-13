@@ -1,6 +1,4 @@
 //! The command palette (Ctrl+P, `app.fuzzy`).
-//!
-//! Ports `src/ui/fuzzy_finder.cpp`.
 //
 // The command palette (.fuzzy-finder): a modal 82px below the top, 600px wide, with a 38px react-select
 // control (2px #4D88FF border + 1px ring) over a 200px list of 40px rows. Its commands are in alphabetical

@@ -1,6 +1,4 @@
 //! The context menus (shown with `ui::menu::popup_menu`) and the shared actions with undo entries.
-//!
-//! Ports `src/ui/menus.cpp`.
 //
 // Every menu is a list of `MenuItem`s whose clicks are `Action`s capturing owned data (shas, names, the tab's
 // working directory) and finding their repository again when they run. The code is split by topic:

@@ -1,7 +1,5 @@
 //! The right panel: the selected commit's details, the working directory's staged / unstaged files, the commit
 //! form.
-//!
-//! Ports `src/ui/detail_panel.cpp`.
 
 mod commit;
 mod controls;

@@ -2,11 +2,9 @@
 
 ## Prerequisites
 
-- A C++23 compiler: clang-cl or MSVC from Visual Studio 2022+ on Windows, g++ 13+ or clang 17+ on Linux, Xcode (or
-  the Command Line Tools) 15+ on macOS
-- CMake 3.25+ and Ninja
-- [vcpkg](https://github.com/microsoft/vcpkg) (the Visual Studio bundle on Windows, a checkout in `VCPKG_ROOT`
-  elsewhere); the dependencies come from `vcpkg.json`
+- A stable Rust toolchain (1.90 or later) with `rustfmt` and `clippy`
+- A C and C++ compiler (MSVC from Visual Studio 2022+ on Windows, gcc or clang on Linux, Xcode or the Command Line
+  Tools on macOS): the crates build libgit2 and Dear ImGui from source
 - Git, on `PATH` (ImGit runs it for fetch, pull, push, clone and rebase)
 - Familiarity with the codebase (see `INSTALL.md` for setup and the *Source map* in `README.md` for where things live)
 
@@ -25,33 +23,26 @@ visible in the UI.
 
 ## Code Style
 
-Follow the project `.clang-format` (LLVM base, Stroustrup braces, 4-space indent, 120 columns). Run `clang-format`
-before committing.
+Format with `cargo fmt --all` and keep `cargo clippy --workspace --all-targets` free of warnings before committing.
 
-Anything that differs per OS goes behind a header in `src/platform/`, with one implementation per platform chosen in
-`CMakeLists.txt`; no `#ifdef _WIN32` or `__APPLE__` outside that directory. `PORTING.md` lists what each platform
-implements.
+Anything that differs per OS goes into `crates/imgit-platform` (or `crates/imgit/src/window/` for the window itself),
+behind `cfg` attributes; the rest of the code stays portable.
 
 ## Building
 
-Use one of the CMake presets defined in `CMakePresets.json`:
-
 ```bash
-cmake --preset <preset-name>
-cmake --build --preset <preset-name>
+cargo build -p imgit            # debug, with a console for logs
+cargo build --release -p imgit
 ```
-
-The presets are `x64-debug` / `x64-release` (Windows), `linux-debug` / `linux-release` and `macos-debug` /
-`macos-release`. Run `cmake --list-presets` to see the ones available on your machine; the `ci-*` presets are what the
-workflows use.
 
 ## Tests
 
-The build treats every warning as an error on every platform (`/W4 /WX` on MSVC and clang-cl,
-`-Wall -Wextra -Wpedantic -Werror` elsewhere), so a change must compile cleanly on all three before it can merge.
+```bash
+cargo test --workspace
+```
 
-ImGit has no unit test suite yet. Verify your change by running it against a real repository, and for the UI use the
-headless mode CI relies on:
+The library crates have unit and integration tests; the Git ones build scratch repositories in temporary folders.
+For the UI, also verify your change by running it against a real repository, with the headless mode CI relies on:
 
 ```bash
 imgit path/to/repository --screenshot out.bmp [--size WxH] [--select-row N]
@@ -59,5 +50,4 @@ imgit path/to/repository --script steps.txt --shots dir
 ```
 
 The first renders a few frames and exits; the second replays clicks and keys and saves a shot after each step. If you
-change what a platform implements, update `PORTING.md`; if you change how the app is built or packaged, update
-`INSTALL.md` and the *Building* section of `README.md`.
+change how the app is built or packaged, update `INSTALL.md` and the *Building* section of `README.md`.

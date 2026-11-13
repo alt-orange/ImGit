@@ -1,8 +1,6 @@
 //! The commit graph: the column header (drag to reorder / resize, the header menu), the rows with their ref
 //! pills, lanes and nodes, the commit search bar, selection, hover highlights, timeline markers and the
 //! sideways scroll of the graph zone.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 mod changes;
 mod lanes;

@@ -1,7 +1,5 @@
 //! The ref zone: the refs of a commit grouped into pills (one per short name), the pills' drawing, hover and
 //! drag, the "+N" overflow count, and which rows a hovered group keeps lit.
-//!
-//! Ports `src/ui/graph_view.cpp`.
 
 use std::path::PathBuf;
 

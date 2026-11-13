@@ -1,6 +1,4 @@
 //! The File History view.
-//!
-//! Ports `src/ui/file_history.cpp`.
 
 use dear_imgui_rs::{Key, ListClipper, MouseButton, StyleVar, WindowFlags};
 use imgit_app::RepoState;

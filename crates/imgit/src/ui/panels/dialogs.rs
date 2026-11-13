@@ -4,8 +4,6 @@
 //! * the **modals** (`modal`): clone, init, create branch / tag / worktree, remotes, reword, squash, upstream,
 //!   keyboard shortcuts, about, the branch clean-up;
 //! * the **slide panel** (`slide_panel`): Add / Edit Submodule.
-//!
-//! Ports `src/ui/dialogs.cpp`.
 
 mod modal;
 mod prompt_bar;

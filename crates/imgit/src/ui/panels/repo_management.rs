@@ -1,6 +1,4 @@
 //! The Repository Management view (the tabs bar folder), the favourites and the repository summaries.
-//!
-//! Ports `src/ui/repo_management.cpp`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
