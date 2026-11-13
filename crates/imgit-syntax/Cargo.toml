@@ -1,0 +1,12 @@
+[package]
+name = "imgit-syntax"
+description = "ImGit's syntax highlighter: language definitions and the tokenizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

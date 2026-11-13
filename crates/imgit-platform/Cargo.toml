@@ -1,0 +1,37 @@
+[package]
+name = "imgit-platform"
+description = "ImGit's OS services: processes, pseudo consoles, shell integration, system facts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = "0.2"
+raw-window-handle = "0.6"
+# Without the "wayland" feature (parenting dialogs to a Wayland window), which needs libwayland's development
+# files at build time; the C++ parented its dialogs on X11 only as well.
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(unix)'.dependencies]
+portable-pty = "0.9"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

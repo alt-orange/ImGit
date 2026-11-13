@@ -1,0 +1,34 @@
+# ImGit Desktop, the Rust port. The C++ sources under src/ stay as the reference until the port reaches parity.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+
+[workspace.dependencies]
+imgit-syntax = { path = "crates/imgit-syntax" }
+imgit-platform = { path = "crates/imgit-platform" }
+imgit-git = { path = "crates/imgit-git" }
+imgit-vt = { path = "crates/imgit-vt" }
+imgit-app = { path = "crates/imgit-app" }
+
+git2 = { version = "0.21", default-features = false }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bitflags = "2"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

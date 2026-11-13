@@ -1,0 +1,18 @@
+[package]
+name = "imgit-git"
+description = "ImGit's Git layer: the libgit2 repository, the git CLI for network operations, the graph layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+imgit-platform.workspace = true
+git2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

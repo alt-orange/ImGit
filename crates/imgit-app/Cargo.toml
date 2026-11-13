@@ -1,0 +1,24 @@
+[package]
+name = "imgit-app"
+description = "ImGit's application logic that needs no UI: preferences, profiles, themes, connections, workflows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+imgit-platform.workspace = true
+imgit-git.workspace = true
+imgit-syntax.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+md-5 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+git2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
