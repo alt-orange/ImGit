@@ -46,7 +46,7 @@ use crate::ui::{Cx, raw};
 use imgit_app::RepoState;
 
 /// The version the About dialog, the status bar and the menus show.
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "1.0.0";
 
 /// How many repositories the recent list keeps.
 pub const MAX_RECENT: usize = 12;
