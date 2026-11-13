@@ -1,0 +1,6 @@
+# The Rust release this workspace is built and linted with, locally and in CI: a new stable release can add
+# clippy lints that fail `-D warnings`, so it is adopted by changing this line, not by surprise.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

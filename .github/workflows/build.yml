@@ -52,28 +52,30 @@ jobs:
           sudo apt-get update
           # the C / C++ compiler for the bundled libgit2 and Dear ImGui, OpenSSL for HTTPS, and Xvfb + Mesa for the
           # smoke test
-          sudo apt-get install -y --no-install-recommends             build-essential pkg-config libssl-dev             xvfb xauth libgl1-mesa-dri
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            xvfb xauth libgl1-mesa-dri
 
+      # The release, components and profile named in rust-toolchain.toml.
       - name: Install the Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+        run: rustup toolchain install
 
       # The registry and the build directory, keyed by the lock file.
       - name: Restore the Cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: cargo-${{ matrix.platform }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ matrix.platform }}-
+          key: cargo-${{ matrix.platform }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.platform }}-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Lint
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
         run: cargo test --workspace --locked
@@ -86,12 +88,13 @@ jobs:
       - name: Smoke test (screenshot of this repository)
         if: runner.os == 'Linux'
         run: |
-          timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24"             target/release/imgit . --screenshot smoke.bmp
+          timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+            target/release/imgit . --screenshot smoke.bmp
           test -s smoke.bmp
 
       - name: Upload the smoke test screenshot
         if: runner.os == 'Linux' && !cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: smoke-screenshot-${{ matrix.platform }}
           path: smoke.bmp
@@ -150,7 +153,8 @@ jobs:
               upx --best --lzma "dist/$name/imgit"
               upx -t "dist/$name/imgit"
               # the smoke test above ran the unpacked build, so run the packed one too before it ships
-              timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24"                 "dist/$name/imgit" . --screenshot "$RUNNER_TEMP/smoke-upx.bmp"
+              timeout 120 xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" \
+                "dist/$name/imgit" . --screenshot "$RUNNER_TEMP/smoke-upx.bmp"
               test -s "$RUNNER_TEMP/smoke-upx.bmp"
             fi
           fi
@@ -172,7 +176,7 @@ jobs:
           fi
 
       - name: Upload the package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: imgit-${{ matrix.platform }}
           path: ${{ steps.package.outputs.file }}

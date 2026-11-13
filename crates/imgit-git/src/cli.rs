@@ -431,7 +431,6 @@ fn askpass_answer(prompt: &str, credentials: &[Credential]) -> Option<String> {
 }
 
 /// Prints the answer to `prompt` for git; the process exit code (failure: no answer).
-#[must_use]
 pub fn askpass_main(prompt: &str) -> ExitCode {
     let encoded = std::env::var(CREDENTIALS_VARIABLE).unwrap_or_default();
     let Some(answer) = askpass_answer(prompt, &decode(&encoded)) else {
