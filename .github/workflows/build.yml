@@ -50,11 +50,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # the C / C++ compiler for the bundled libgit2 and Dear ImGui, OpenSSL for HTTPS, and Xvfb + Mesa for the
-          # smoke test
+          # the C / C++ compiler for the bundled libgit2 and Dear ImGui, OpenSSL for HTTPS, and Xvfb, Mesa and the
+          # X11 keyboard library for the smoke test
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev \
-            xvfb xauth libgl1-mesa-dri
+            xvfb xauth libgl1-mesa-dri libxkbcommon-x11-0
 
       # The release, components and profile named in rust-toolchain.toml.
       - name: Install the Rust toolchain
