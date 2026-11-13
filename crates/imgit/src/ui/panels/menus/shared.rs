@@ -1175,8 +1175,10 @@ mod tests {
                 queued: Vec::new(),
             });
         });
-        // `repo_item` clicks run through `with_idle_repo`, `repo_view_item` ones through `with_repo`.
-        let workdir = dir.clone();
+        // `repo_item` clicks run through `with_idle_repo`, `repo_view_item` ones through `with_repo`. They name the
+        // repository by the folder libgit2 reports, which is not `dir` itself where the temporary folder sits
+        // behind a symbolic link (macOS's /var -> /private/var).
+        let workdir = app.active_workdir().unwrap().to_path_buf();
         let mut changed = false;
         app.with_idle_repo(&workdir, |_, _| changed = true);
         assert!(!changed);
