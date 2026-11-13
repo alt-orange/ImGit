@@ -17,9 +17,12 @@ on:
         description: Compress the Windows and Linux executables with UPX (macOS has no working UPX target)
         type: boolean
         default: false
+      release_tag:
+        description: Attach each package to this existing release as soon as it is built (empty for CI)
+        type: string
+        default: ''
 
-permissions:
-  contents: read
+# Inherit the caller's permissions: read-only for CI, contents: write for release uploads.
 
 jobs:
   build:
@@ -181,3 +184,22 @@ jobs:
           name: imgit-${{ matrix.platform }}
           path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
+
+      # Each matrix job publishes independently, so a queued macOS runner does not hold up Windows or Linux.
+      - name: Attach this platform to the release
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PACKAGE: ${{ steps.package.outputs.file }}
+        run: |
+          cd "$(dirname "$PACKAGE")"
+          package="$(basename "$PACKAGE")"
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 "$package" > "$package.sha256"
+          else
+            sha256sum "$package" > "$package.sha256"
+          fi
+          gh release upload "$RELEASE_TAG" "$package" "$package.sha256" --clobber --repo "$GH_REPO"

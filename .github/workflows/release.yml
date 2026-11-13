@@ -1,6 +1,6 @@
-# Publishing a GitHub release builds ImGit for Windows, Linux and macOS and attaches the packages and their
-# SHA256SUMS.txt to the release. Run it by hand (Actions → Release → Run workflow) to rebuild the
-# packages of an existing release; files with the same names are replaced.
+# Publishing a GitHub release builds ImGit for Windows, Linux and macOS. Each platform attaches its package
+# and checksum as soon as it finishes; SHA256SUMS.txt is added after all builds finish, even if some fail.
+# Run it by hand (Actions → Release → Run workflow) to rebuild an existing release; same-name files are replaced.
 name: Release
 
 on:
@@ -20,15 +20,19 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: write
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ github.event.release.tag_name || inputs.tag }}
       version: ${{ github.event.release.tag_name || inputs.tag }}
       upx: true
+      release_tag: ${{ github.event.release.tag_name || inputs.tag }}
 
   publish:
-    name: Attach to the release
+    name: Combined checksums
     needs: build
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -47,4 +51,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$TAG" dist/SHA256SUMS.txt --clobber --repo "${{ github.repository }}"
