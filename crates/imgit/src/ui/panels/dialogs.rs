@@ -1151,6 +1151,9 @@ mod tests {
         let folder = scratch.path().join("repo");
         std::fs::create_dir_all(&folder).unwrap();
         git(&folder, &["init", "-b", "main"]);
+        // Direct CLI calls, including tag creation, need an identity without a global Git config.
+        git(&folder, &["config", "user.name", "Test"]);
+        git(&folder, &["config", "user.email", "test@example.com"]);
         for name in ["one", "two"] {
             std::fs::write(folder.join(format!("{name}.txt")), name).unwrap();
             git(&folder, &["add", "-A"]);

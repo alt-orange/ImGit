@@ -1745,6 +1745,16 @@ fn commit_with_git_runs_git_commit() {
         ".git/hooks/pre-commit",
         "#!/bin/sh\necho refused by the hook\nexit 1\n",
     );
+    // Git only runs executable hooks on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            scratch.root().join(".git/hooks/pre-commit"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     assert!(repo.has_commit_hooks());
     let amend = CommitOptions {
         amend: true,
