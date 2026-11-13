@@ -115,6 +115,9 @@ cargo build --release -p imgit
 target/release/imgit path/to/repository
 ```
 
+The release profile is fully optimised, carries no debug info and aborts on a panic. `cargo xtask release` does the
+same build and then packs the executable in place with [UPX](https://upx.github.io) (which must be on `PATH`).
+
 A debug build (`cargo build -p imgit`) keeps a console for logs. `cargo test --workspace` runs the tests and
 `cargo clippy --workspace --all-targets` the lints; both are expected to stay clean.
 

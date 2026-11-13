@@ -29,6 +29,13 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
+# The shipped build: fully optimised, with no debug info and no symbols.
 [profile.release]
-lto = "thin"
+opt-level = 3
+lto = "fat"
 codegen-units = 1
+debug = false
+strip = "symbols"
+# A panic ends the process at once (no unwinding code or tables in the executable). A panicking worker thread
+# therefore takes the app down in a release build; debug builds and the tests still unwind.
+panic = "abort"

@@ -9,6 +9,7 @@ use std::{env, fs, io};
 
 fn main() -> io::Result<()> {
     embed_windows_resources()?;
+    omit_debug_info_from_release();
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let assets = manifest_dir.join("../../assets").canonicalize()?;
     println!("cargo:rerun-if-changed={}", assets.display());
@@ -71,4 +72,15 @@ fn embed_windows_resources() -> io::Result<()> {
 #[expect(clippy::unnecessary_wraps, reason = "the Windows build can fail")]
 fn embed_windows_resources() -> io::Result<()> {
     Ok(())
+}
+
+/// A release executable carries no debug info at all. `strip = "symbols"` in the release profile is enough for
+/// the GNU and Apple linkers; the MSVC linker still writes a `.pdb` and a debug directory pointing at it unless
+/// it is told `/DEBUG:NONE`.
+fn omit_debug_info_from_release() {
+    let release = env::var("PROFILE").is_ok_and(|profile| profile == "release");
+    let msvc = env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|target_env| target_env == "msvc");
+    if release && msvc {
+        println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
+    }
 }
