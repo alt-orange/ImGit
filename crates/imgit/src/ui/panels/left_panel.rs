@@ -1184,17 +1184,19 @@ fn draw_stashes(
     for &index in stashes {
         let row = {
             let stash = &state.history.refs[index];
+            // Every stash's `full_name` is "refs/stash": `name` ("stash@{N}") tells the rows apart.
             let options = RowOptions {
                 icon: Some("far:inbox"),
-                hidden: stash.hidden,
-                selected: state.left_selected.as_deref() == Some(stash.full_name.as_str())
+                // The graph shows every stash; there is nothing to hide.
+                can_hide: false,
+                selected: state.left_selected.as_deref() == Some(stash.name.as_str())
                     && state.is_selected(&stash.target),
                 ..RowOptions::default()
             };
             panel_row(
                 cx,
                 walk.row_width,
-                &stash.full_name,
+                &stash.name,
                 &RowLabel {
                     text: stash_summary(&stash.message),
                     stash_branch: stash_branch(&stash.message),
@@ -1202,15 +1204,12 @@ fn draw_stashes(
                 &options,
             )
         };
-        if row.eye_clicked {
-            let hidden = state.history.refs[index].hidden;
-            set_hidden(state, walk, &[index], !hidden);
-        } else if row.clicked {
-            let (full_name, target) = {
+        if row.clicked {
+            let (name, target) = {
                 let stash = &state.history.refs[index];
-                (stash.full_name.clone(), stash.target.clone())
+                (stash.name.clone(), stash.target.clone())
             };
-            state.left_selected = Some(full_name);
+            state.left_selected = Some(name);
             jump_to_commit(state, &target);
         }
         if row.context {

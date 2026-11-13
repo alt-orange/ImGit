@@ -15,6 +15,10 @@
 //!   [`PanelStates`] as `app.panels.<module>`: add fields there, never statics.
 //! * Deferred work (menu clicks, dialog confirmations) is an [`Action`](crate::app::action::Action) capturing
 //!   owned data only; it finds its repository again with `app.with_repo(&workdir, |app, state| ..)`.
+//! * An action that changes the repository through libgit2 does not run while a git command (fetch, pull, push,
+//!   rebase) is in flight on it: menu rows are `repo_item`s (`repo_view_item` for those that only look), deferred
+//!   actions use `app.with_idle_repo(..)`, and a panel's own button calls `app.refuse_while_busy(state)` first;
+//!   each only toasts "Wait for <title> to finish".
 
 #![allow(unused_imports)] // the re-exports are for the panels
 

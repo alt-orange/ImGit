@@ -772,7 +772,12 @@ impl Application {
         }
     }
 
+    /// Writes `tabs.txt`, unless this session started from a command-line repository (see
+    /// [`writes_tabs`]); `relaunch` starts a plain instance, which then restores the remembered set.
     pub(crate) fn save_tabs(&self) {
+        if !writes_tabs(self.started_with_repository) {
+            return;
+        }
         let _ = write_text_file(&self.config_path("tabs.txt"), &self.tabs_file().to_text());
     }
 
@@ -781,15 +786,20 @@ impl Application {
         let file = TabsFile::parse(&self.read_profile_file("tabs.txt"));
         self.tab_groups = file.groups;
         self.restoring_tabs = true;
+        // The tab each saved entry became (none for a missing folder or a repository open already).
+        let mut opened_as: Vec<Option<usize>> = Vec::with_capacity(file.tabs.len());
         for entry in file.tabs {
             if !Path::new(&entry.path).exists() {
+                opened_as.push(None);
                 continue;
             }
             let before = self.tabs.len();
             self.open_repository(&entry.path);
             if self.tabs.len() == before {
+                opened_as.push(None);
                 continue;
             }
+            opened_as.push(Some(before));
             if let Some(opened) = self.tabs.last_mut() {
                 opened.name = entry.name;
                 opened.group = entry.group;
@@ -798,12 +808,34 @@ impl Application {
         self.restoring_tabs = false;
         self.drop_empty_tab_groups();
         if let Some(wanted) = file.active
-            && wanted >= -1
-            && wanted < self.tabs.len() as i32
+            && let Some(active) = restored_active(&opened_as, wanted)
         {
-            self.active_tab = usize::try_from(wanted).ok();
+            self.active_tab = active;
         }
     }
+}
+
+/// Whether this session may overwrite the remembered tabs: not when it was started with a repository argument,
+/// since it then holds only that repository, not the remembered set.
+fn writes_tabs(started_with_repository: bool) -> bool {
+    !started_with_repository
+}
+
+/// The tab to select after a restore, from the saved `active` index (into the saved entries) and the tab each
+/// entry became. `Some(None)` for "no tab" (-1); an entry that was not opened gives the nearest one that was
+/// (the earlier one on a tie); `None` when the saved index is out of range or no entry was opened.
+fn restored_active(opened_as: &[Option<usize>], wanted: i32) -> Option<Option<usize>> {
+    if wanted == -1 {
+        return Some(None);
+    }
+    let wanted = usize::try_from(wanted)
+        .ok()
+        .filter(|&w| w < opened_as.len())?;
+    (0..opened_as.len())
+        .flat_map(|distance| [wanted.checked_sub(distance), wanted.checked_add(distance)])
+        .flatten()
+        .find_map(|index| opened_as.get(index).copied().flatten())
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -991,6 +1023,77 @@ mod tests {
         assert_eq!(again.active_tab, Some(1));
         assert_eq!(first.1, 3);
         assert_eq!(again.recent_repos.len(), 3);
+    }
+
+    #[test]
+    fn a_session_started_with_a_repository_keeps_the_remembered_tabs() {
+        assert!(writes_tabs(false));
+        assert!(!writes_tabs(true));
+        let scratch = tempfile::tempdir().unwrap();
+        let config = scratch.path().join("config");
+        for name in ["a", "b"] {
+            Repository::init(scratch.path().join(name)).unwrap();
+        }
+        {
+            let mut app = Application::with_config_directory(config.clone());
+            for name in ["a", "b"] {
+                app.open_repository(&scratch.path().join(name).to_string_lossy());
+            }
+            app.save_state();
+        }
+        {
+            // "imgit b": a second window with one repository.
+            let mut app = Application::with_config_directory(config.clone());
+            app.started_with_repository = true;
+            app.open_repository(&scratch.path().join("b").to_string_lossy());
+            app.rename_tab(0, "Renamed");
+            app.save_state();
+        }
+        let mut again = Application::with_config_directory(config);
+        again.restore_tabs();
+        assert_eq!(labels(&again), ["a", "b"]);
+    }
+
+    #[test]
+    fn the_saved_active_tab_follows_skipped_entries() {
+        // [gone, B, C]: entry 2 is C, which is tab 1.
+        assert_eq!(restored_active(&[None, Some(0), Some(1)], 2), Some(Some(1)));
+        // [gone, B, C, D] with active=2 is C (tab 1), not D.
+        assert_eq!(
+            restored_active(&[None, Some(0), Some(1), Some(2)], 2),
+            Some(Some(1))
+        );
+        // The active entry itself was skipped: the nearest opened one.
+        assert_eq!(
+            restored_active(&[Some(0), None, None, Some(1)], 2),
+            Some(Some(1))
+        );
+        assert_eq!(restored_active(&[Some(0), None, Some(1)], 1), Some(Some(0)));
+        assert_eq!(restored_active(&[Some(0)], -1), Some(None));
+        assert_eq!(restored_active(&[Some(0)], 5), None);
+        assert_eq!(restored_active(&[None], 0), None);
+    }
+
+    #[test]
+    fn a_restart_selects_the_saved_active_tab_when_folders_are_gone() {
+        let scratch = tempfile::tempdir().unwrap();
+        let config = scratch.path().join("config");
+        for name in ["a", "b", "c", "d"] {
+            Repository::init(scratch.path().join(name)).unwrap();
+        }
+        {
+            let mut app = Application::with_config_directory(config.clone());
+            for name in ["a", "b", "c", "d"] {
+                app.open_repository(&scratch.path().join(name).to_string_lossy());
+            }
+            app.active_tab = Some(2);
+            app.save_state();
+        }
+        fs::remove_dir_all(scratch.path().join("a")).unwrap();
+        let mut again = Application::with_config_directory(config);
+        again.restore_tabs();
+        assert_eq!(labels(&again), ["b", "c", "d"]);
+        assert_eq!(again.active_tab, Some(1));
     }
 
     #[test]

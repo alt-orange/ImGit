@@ -14,6 +14,7 @@ use super::controls::{
 use super::files::{FileList, ListKind, apply_events, build_tree, with_unchanged_files};
 use crate::app::application::Application;
 use crate::theme::{FONT_SIZE_NORMAL, FONT_SIZE_ROW};
+use crate::ui::panels::file_editor::navigate_from_editor;
 use crate::ui::panels::menus::{can_reword, jump_to_commit, reword_commit};
 use crate::ui::widgets::ResizeAxis;
 use crate::ui::{Cx, DrawList, Vec2, vec2};
@@ -176,8 +177,11 @@ fn commit_body(
         let bmax = vec2(bmin.x + button_w, bmin.y + cx.px(22.0));
         cx.set_cursor(bmin);
         if ui.invisible_button("##view_changes", bmax - bmin) {
-            state.select_only(wip_sha);
-            state.close_diff();
+            let wip_sha = wip_sha.clone();
+            navigate_from_editor(app, state, move |_app, state| {
+                state.select_only(&wip_sha);
+                let _ = state.close_diff();
+            });
         }
         if ui.is_item_hovered() {
             draw.add_rect_filled(bmin, bmax, p.ink(0.1), cx.px(2.0));
@@ -308,8 +312,18 @@ fn commit_body(
             umin,
             umax,
             p.green,
+            // A message needs a summary.
+            !state.amend_summary.trim().is_empty(),
         );
-        if tone_action_button(cx, "##cancel_amend", "Cancel Amend", cmin, cmax, p.red) {
+        if tone_action_button(
+            cx,
+            "##cancel_amend",
+            "Cancel Amend",
+            cmin,
+            cmax,
+            p.red,
+            true,
+        ) {
             state.amending_message = false;
         }
     } else {

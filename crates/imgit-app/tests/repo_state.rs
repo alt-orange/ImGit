@@ -194,9 +194,11 @@ fn refresh_status_keeps_the_rows_while_only_the_files_change() {
     scratch.write("a.txt", "changed\n");
     scratch.state.refresh();
     scratch.state.select_only(&shas[0]);
-    scratch
-        .state
-        .open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"));
+    assert!(
+        scratch
+            .state
+            .open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"))
+    );
     scratch.state.load_compare_files(&shas[0]);
     let first = scratch.state.diff.clone().unwrap();
 
@@ -216,10 +218,10 @@ fn refresh_status_keeps_the_rows_while_only_the_files_change() {
     assert_eq!(scratch.row_shas(), [WIP_SHA, &shas[1], &shas[0]]);
 
     // A change that leaves a commit's diff alone.
-    scratch.state.open_diff(DiffTarget::new(
+    assert!(scratch.state.open_diff(DiffTarget::new(
         DiffSource::Commit(shas[1].clone()),
         "a.txt",
-    ));
+    )));
     let commit_diff = scratch.state.diff.clone().unwrap();
     scratch.write("a.txt", "third\n");
     scratch.state.refresh_status();
@@ -667,46 +669,46 @@ fn open_diff_for_each_source() {
     };
 
     state.file_edit = Some(FileEdit::default());
-    state.open_diff(DiffTarget {
+    assert!(state.open_diff(DiffTarget {
         source: DiffSource::Commit(shas[1].clone()),
         path: "a.txt".to_owned(),
         status: FileStatus::Modified,
-    });
+    }));
     assert_eq!(state.file_edit, None);
     assert_eq!(state.diff_error, None);
     assert_eq!(added(state), ["line 2"]);
     assert_eq!(state.diff.as_ref().unwrap().path, "a.txt");
     assert!(state.diff.as_ref().unwrap().revision.is_some());
 
-    state.open_diff(DiffTarget::new(DiffSource::Staged, "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Staged, "a.txt")));
     assert_eq!(added(state), ["staged"]);
 
-    state.open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt")));
     assert_eq!(added(state), ["unstaged"]);
 
-    state.open_diff(DiffTarget::new(
+    assert!(state.open_diff(DiffTarget::new(
         DiffSource::Compare(shas[0].clone()),
         "a.txt",
-    ));
+    )));
     assert_eq!(added(state), ["line 2", "line 3", "staged", "unstaged"]);
 
     // A source that cannot be read: no diff, the reason instead.
-    state.open_diff(DiffTarget::new(
+    assert!(state.open_diff(DiffTarget::new(
         DiffSource::Commit("not a sha".to_owned()),
         "a.txt",
-    ));
+    )));
     assert_eq!(state.diff, None);
     assert!(state.diff_error.is_some());
     assert!(state.diff_target.is_some());
 
     // The next one that can clears it.
-    state.open_diff(DiffTarget::new(DiffSource::Staged, "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Staged, "a.txt")));
     assert_eq!(state.diff_error, None);
     assert!(state.diff.is_some());
 
     state.left_open_in_diff = true;
     state.file_edit = Some(FileEdit::default());
-    state.close_diff();
+    assert!(state.close_diff());
     assert_eq!(state.diff, None);
     assert_eq!(state.diff_target, None);
     assert_eq!(state.diff_error, None);
@@ -715,6 +717,49 @@ fn open_diff_for_each_source() {
     // Nothing open: nothing to reload.
     state.reload_diff();
     assert_eq!(state.diff, None);
+}
+
+#[test]
+fn unsaved_editor_text_blocks_leaving_the_file_view() {
+    let (mut scratch, _shas) = Scratch::with_commits(2);
+    let state = &mut scratch.state;
+    let target = || DiffTarget::new(DiffSource::Unstaged, "a.txt");
+    assert!(state.open_diff(target()));
+    state.file_edit = Some(FileEdit {
+        path: "a.txt".to_owned(),
+        saved: "old\n".to_owned(),
+        text: "new\n".to_owned(),
+        ..FileEdit::default()
+    });
+    assert!(state.has_unsaved_edit());
+
+    // Every way out refuses and leaves everything as it was.
+    assert!(!state.open_diff(DiffTarget::new(DiffSource::Staged, "a.txt")));
+    assert!(!state.close_diff());
+    assert!(!state.open_merge_tool("a.txt").unwrap());
+    assert_eq!(state.diff_target, Some(target()));
+    assert_eq!(
+        state.file_edit.as_ref().map(|edit| edit.text.as_str()),
+        Some("new\n")
+    );
+
+    // Text equal to the disk's is not unsaved.
+    state.file_edit.as_mut().unwrap().saved = "new\n".to_owned();
+    assert!(!state.has_unsaved_edit());
+    assert!(state.close_diff());
+    assert_eq!(state.file_edit, None);
+
+    // After the user confirmed the loss, the edit goes and navigation works again.
+    assert!(state.open_diff(target()));
+    state.file_edit = Some(FileEdit {
+        path: "a.txt".to_owned(),
+        saved: "old\n".to_owned(),
+        text: "new\n".to_owned(),
+        ..FileEdit::default()
+    });
+    state.discard_file_edit();
+    assert!(!state.has_unsaved_edit());
+    assert!(state.close_diff());
 }
 
 #[test]
@@ -734,7 +779,7 @@ fn diff_modes_pick_the_context() {
 
     assert_eq!(DiffMode::default(), DiffMode::Inline);
     assert_eq!(state.diff_mode, DiffMode::Inline);
-    state.open_diff(DiffTarget::new(DiffSource::Commit(second), "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Commit(second), "a.txt")));
     // Inline: the whole file, the changed line on both sides.
     assert_eq!(line_count(state), 41);
 
@@ -764,7 +809,7 @@ fn whitespace_only_changes_can_be_left_out() {
     scratch.write("a.txt", "line   1\n");
     scratch.state.refresh();
     let state = &mut scratch.state;
-    state.open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt")));
     assert!(state.diff_whitespace);
     assert_eq!(state.diff.as_ref().unwrap().stats.additions, 1);
 
@@ -779,9 +824,11 @@ fn a_refresh_reloads_the_open_diff() {
     let (mut scratch, _) = Scratch::with_commits(1);
     scratch.write("a.txt", "line 1\nmore\n");
     scratch.state.refresh();
-    scratch
-        .state
-        .open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"));
+    assert!(
+        scratch
+            .state
+            .open_diff(DiffTarget::new(DiffSource::Unstaged, "a.txt"))
+    );
     let before = scratch.state.diff.as_ref().unwrap().revision;
     scratch.state.refresh();
     let after = scratch.state.diff.as_ref().unwrap().revision;
@@ -811,12 +858,12 @@ fn the_merge_tool_opens_on_a_conflicted_file() {
     assert_eq!(state.history.commits[0].sha, WIP_SHA);
 
     // Not a conflicted file: nothing opens, the diff stays.
-    state.open_diff(DiffTarget::new(DiffSource::Commit(ours.clone()), "a.txt"));
+    assert!(state.open_diff(DiffTarget::new(DiffSource::Commit(ours.clone()), "a.txt")));
     assert!(state.open_merge_tool("missing.txt").is_err());
     assert!(state.merge_tool.is_none());
     assert!(state.diff_target.is_some());
 
-    state.open_merge_tool("a.txt").unwrap();
+    assert!(state.open_merge_tool("a.txt").unwrap());
     assert!(state.diff_target.is_none());
     assert!(state.diff.is_none());
     let tool = state.merge_tool.as_ref().unwrap();
@@ -1387,4 +1434,125 @@ fn an_undo_entry_acts_on_the_repository_it_is_given() {
     assert_eq!(calls.get(), 11);
     state.redo_stack.push(entry);
     assert!(format!("{:?}", state.redo_stack[0]).contains("commit"));
+}
+
+// Hard reset and its undo
+
+#[test]
+fn a_hard_reset_stashes_the_changes_it_wipes_and_its_undo_restores_everything() {
+    use imgit_app::repo_state::{hard_reset_keeping_changes, undo_hard_reset};
+
+    let (scratch, shas) = Scratch::with_commits(3);
+    let repo = &scratch.state.repo;
+    // A tracked change, a staged new file and an untracked one.
+    scratch.write("a.txt", "line 1\nline 2\nline 3\nedited\n");
+    scratch.write("new.txt", "staged\n");
+    repo.stage(&["new.txt"]).unwrap();
+    scratch.write("loose.txt", "untracked\n");
+
+    let saved = hard_reset_keeping_changes(repo, &shas[0]).unwrap();
+    let saved = saved.expect("the changes were stashed");
+    assert_eq!(
+        fs::read_to_string(scratch.root().join("a.txt")).unwrap(),
+        "line 1\n"
+    );
+    assert!(!scratch.root().join("new.txt").exists());
+    assert_eq!(repo.stash_index_of(&saved), Some(0));
+
+    undo_hard_reset(repo, &shas[2], Some(&saved)).unwrap();
+    assert_eq!(head_of(&scratch), shas[2]);
+    assert_eq!(
+        fs::read_to_string(scratch.root().join("a.txt")).unwrap(),
+        "line 1\nline 2\nline 3\nedited\n"
+    );
+    assert_eq!(
+        fs::read_to_string(scratch.root().join("new.txt")).unwrap(),
+        "staged\n"
+    );
+    assert_eq!(
+        fs::read_to_string(scratch.root().join("loose.txt")).unwrap(),
+        "untracked\n"
+    );
+    assert_eq!(repo.stash_index_of(&saved), None, "the stash was popped");
+}
+
+#[test]
+fn a_hard_reset_of_a_clean_tree_stashes_nothing_and_leaves_untracked_files() {
+    use imgit_app::repo_state::{hard_reset_keeping_changes, undo_hard_reset};
+
+    let (scratch, shas) = Scratch::with_commits(2);
+    let repo = &scratch.state.repo;
+    scratch.write("loose.txt", "untracked\n");
+    assert_eq!(hard_reset_keeping_changes(repo, &shas[0]).unwrap(), None);
+    assert!(scratch.root().join("loose.txt").exists());
+    assert_eq!(head_of(&scratch), shas[0]);
+    undo_hard_reset(repo, &shas[1], None).unwrap();
+    assert_eq!(head_of(&scratch), shas[1]);
+    assert!(scratch.root().join("loose.txt").exists());
+}
+
+#[test]
+fn an_undo_whose_pop_conflicts_says_so() {
+    use imgit_app::repo_state::{hard_reset_keeping_changes, undo_hard_reset};
+
+    let (mut scratch, shas) = Scratch::with_commits(3);
+    scratch.write("a.txt", "line 1\nline 2\nmine\n");
+    let saved = hard_reset_keeping_changes(&scratch.state.repo, &shas[0])
+        .unwrap()
+        .unwrap();
+    // The undo lands on a commit the stashed changes do not fit on: the pop cannot apply cleanly.
+    let other = scratch.commit_file("a.txt", "line 1\nother\nelse\n", "diverge");
+    let repo = &scratch.state.repo;
+    let result = undo_hard_reset(repo, &other, Some(&saved));
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("conflicts in 1 file"), "{error}");
+    assert!(
+        error.contains("ImGit: auto stash before hard reset"),
+        "{error}"
+    );
+    // The changes are in the conflicted file, between its markers.
+    let text = fs::read_to_string(scratch.root().join("a.txt")).unwrap();
+    assert!(text.contains("mine") && text.contains("<<<<<<<"), "{text}");
+}
+
+/// The sha HEAD points at, read behind the repository back.
+fn head_of(scratch: &Scratch) -> String {
+    let repo = git2::Repository::open(scratch.root()).unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+    head.to_string()
+}
+
+#[test]
+fn a_rebuild_drops_the_comparison_and_shifts_a_pending_scroll() {
+    let (mut scratch, shas) = Scratch::with_commits(2);
+    scratch.write("a.txt", "changed\n");
+    scratch.state.refresh();
+    assert_eq!(scratch.row_shas(), [WIP_SHA, &shas[1], &shas[0]]);
+    scratch.state.load_compare_files(&shas[0]);
+    assert_eq!(scratch.state.compare_sha.as_ref(), Some(&shas[0]));
+    scratch.state.scroll_to_row = Some(2); // the root commit
+
+    // The working directory is clean again: the WIP row goes and the rows move up.
+    scratch.write("a.txt", "line 1\nline 2\n");
+    scratch.state.refresh_status();
+    assert_eq!(scratch.row_shas(), [&shas[1], &shas[0]]);
+    assert_eq!(scratch.state.compare_sha, None);
+    assert!(scratch.state.compare_files.is_empty());
+    assert_eq!(scratch.state.scroll_to_row, Some(1));
+
+    // A request for the WIP row itself has no row left.
+    scratch.write("a.txt", "changed\n");
+    scratch.state.refresh_status();
+    scratch.state.scroll_to_row = Some(0);
+    scratch.write("a.txt", "line 1\nline 2\n");
+    scratch.state.refresh_status();
+    assert_eq!(scratch.state.scroll_to_row, None);
+
+    // And it comes back: the rows move down again, the old comparison does not.
+    scratch.state.scroll_to_row = Some(0);
+    scratch.write("a.txt", "changed\n");
+    scratch.state.refresh_status();
+    assert_eq!(scratch.row_shas(), [WIP_SHA, &shas[1], &shas[0]]);
+    assert_eq!(scratch.state.compare_sha, None);
+    assert_eq!(scratch.state.scroll_to_row, Some(1));
 }

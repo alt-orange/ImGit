@@ -287,6 +287,37 @@ pub(super) fn git_checkbox(
     }
 }
 
+/// How the AutoCRLF checkbox shows core.autocrlf's value and what a click writes: a boolean value is
+/// unchecked / checked (a click toggles to `true` / `input`); `input` and any other value show checked and a
+/// click goes round to `false`, so the click never overwrites a value the page cannot show with `true`.
+pub(super) fn autocrlf_state(value: &str) -> (bool, &'static str) {
+    match value.to_ascii_lowercase().as_str() {
+        "" | "false" | "no" | "off" | "0" => (false, "true"),
+        "true" | "yes" | "on" | "1" => (true, "input"),
+        _ => (true, "false"),
+    }
+}
+
+/// The AutoCRLF checkbox over core.autocrlf (true, false or `input`): a click cycles false, true, input, false.
+/// Returns the help line for the row, which names the value when it is not a plain true / false.
+pub(super) fn autocrlf_checkbox(page: &mut Page<'_, '_>, r: &mut Row, id: &str) -> String {
+    let key = "core.autocrlf";
+    let value = git_value(page.app, Scope::Global, key);
+    let (checked, next) = autocrlf_state(&value);
+    if row_checkbox(page, r, id, checked, "", false) {
+        set_git_value(page.app, Scope::Global, key, next);
+    }
+    autocrlf_help(&value)
+}
+
+fn autocrlf_help(value: &str) -> String {
+    let base = "Sets core.autocrlf in your global Git Config.";
+    match value.to_ascii_lowercase().as_str() {
+        "" | "false" | "no" | "off" | "0" | "true" | "yes" | "on" | "1" => base.to_owned(),
+        _ => format!("{base} It is '{value}' now; clicking cycles false, true, input."),
+    }
+}
+
 /// A checkbox row bound to a setting.
 pub(super) fn setting_checkbox(
     page: &mut Page<'_, '_>,
@@ -471,4 +502,21 @@ pub(super) fn group(
     form.contain();
     let y = form.y;
     form.advance(page, y, 0.0, 15.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{autocrlf_help, autocrlf_state};
+
+    #[test]
+    fn autocrlf_values_map_to_the_checkbox_and_never_lose_input() {
+        assert_eq!(autocrlf_state(""), (false, "true"));
+        assert_eq!(autocrlf_state("false"), (false, "true"));
+        assert_eq!(autocrlf_state("true"), (true, "input"));
+        assert_eq!(autocrlf_state("TRUE"), (true, "input"));
+        assert_eq!(autocrlf_state("input"), (true, "false"));
+        assert_eq!(autocrlf_state("weird"), (true, "false"));
+        assert!(autocrlf_help("input").contains("'input'"));
+        assert!(!autocrlf_help("true").contains("now"));
+    }
 }

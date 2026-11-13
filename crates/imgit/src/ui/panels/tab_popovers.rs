@@ -65,6 +65,8 @@ pub struct State {
     filter: Filter,
     filter_open: bool,
     notifications_were_open: bool,
+    /// How far the notifications list is scrolled (logical px).
+    notifications_scroll: f32,
 }
 
 /// Where a line of text sits in a popover: its CSS line box starts at `top` (logical, from the popover's
@@ -688,9 +690,47 @@ pub fn draw_notifications_popover(
     );
 }
 
-/// How tall the list may grow before it scrolls off (logical px).
+/// How tall the list may grow before it scrolls (logical px).
 const MAX_LIST_HEIGHT: f32 = 816.0;
 const BODY_WIDTH: f32 = 362.0;
+/// How far one notch of the mouse wheel scrolls the list (logical px): about one notification.
+const WHEEL_STEP: f32 = 48.0;
+/// The scrollbar: its width and its distance from the popover's right edge (logical px).
+const SCROLLBAR_WIDTH: f32 = 6.0;
+const SCROLLBAR_MARGIN: f32 = 3.0;
+const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
+/// How far a list `content` tall can scroll in a view `view` tall.
+fn max_scroll(content: f32, view: f32) -> f32 {
+    (content - view).max(0.0)
+}
+
+/// The scroll after the wheel turned by `wheel` notches (positive: up), kept within the list.
+fn scrolled_by_wheel(scroll: f32, wheel: f32, content: f32, view: f32) -> f32 {
+    (scroll - wheel * WHEEL_STEP).clamp(0.0, max_scroll(content, view))
+}
+
+/// The scrollbar's thumb in a track `track` tall: where it starts and how long it is, for a list `content`
+/// tall scrolled by `scroll` in a view `view` tall. `None` when everything fits.
+fn scrollbar_thumb(track: f32, scroll: f32, content: f32, view: f32) -> Option<(f32, f32)> {
+    let range = max_scroll(content, view);
+    if range <= 0.0 || track <= 0.0 {
+        return None;
+    }
+    let length = (track * view / content).clamp(SCROLLBAR_MIN_THUMB.min(track), track);
+    let start = (track - length) * (scroll / range).clamp(0.0, 1.0);
+    Some((start, length))
+}
+
+/// The scroll that puts the middle of a thumb `length` long at `pointer` (from the track's start): what
+/// pressing or dragging the track asks for.
+fn scroll_for_thumb(pointer: f32, track: f32, length: f32, content: f32, view: f32) -> f32 {
+    let free = track - length;
+    if free <= 0.0 {
+        return 0.0;
+    }
+    ((pointer - length / 2.0) / free).clamp(0.0, 1.0) * max_scroll(content, view)
+}
 
 fn notifications(
     cx: &mut Cx<'_>,
@@ -720,6 +760,11 @@ fn notifications(
     })
     .max(MAX_LIST_HEIGHT.min(content + empty_h));
     let height = 52.1 + list_h;
+    let list_content = content + empty_h;
+    // A removed notification (or another filter) may leave the list shorter than where it was scrolled to.
+    state.notifications_scroll = state
+        .notifications_scroll
+        .clamp(0.0, max_scroll(list_content, list_h));
     let pos = vec2(
         anchor_right_bottom.x - cx.px(450.0),
         anchor_right_bottom.y + cx.px(5.0),
@@ -857,13 +902,36 @@ fn notifications(
                 },
             );
         }
-        let mut y = 52.1;
+        // The list scrolls under the header: the wheel over it, and the scrollbar at its right edge.
+        let list_min = o + vec2(0.0, cx.px(52.1));
+        let list_max = o + vec2(cx.px(450.0), cx.px(height));
+        let over_menu =
+            state.filter_open && ui.is_mouse_hovering_rect(menu_min.into(), menu_max.into());
+        if !over_menu && ui.is_mouse_hovering_rect(list_min.into(), list_max.into()) {
+            state.notifications_scroll = scrolled_by_wheel(
+                state.notifications_scroll,
+                ui.io().mouse_wheel(),
+                list_content,
+                list_h,
+            );
+        }
+        let top = 52.1;
+        draw.push_clip_rect(list_min, list_max, true);
+        let mut y = top - state.notifications_scroll;
         let mut remove = None;
         let history = app.toasts.history_mut();
         for (n, &i) in shown.iter().enumerate() {
-            if y >= 52.1 + MAX_LIST_HEIGHT {
+            if y >= top + list_h {
                 break;
             }
+            // Rows above the view are only walked past.
+            if y + heights[n] <= top {
+                y += heights[n];
+                continue;
+            }
+            // The buttons of a row that is cut by the view's edge are not offered (they would reach out of the
+            // list, under the header or past the popover).
+            let buttons_shown = y + 10.0 >= top && y + 28.0 <= top + list_h;
             let entry = &mut history[i];
             let accent = match entry.kind {
                 ToastKind::Error => p.red,
@@ -897,7 +965,7 @@ fn notifications(
             // The eye marks the notification read; the eye-slash, unread again.
             let eye = o + vec2(cx.px(383.0), cx.px(y + 19.0));
             cx.set_cursor(eye - vec2(cx.px(9.0), cx.px(9.0)));
-            if ui.invisible_button("##read", vec2(cx.px(18.0), cx.px(18.0))) {
+            if buttons_shown && ui.invisible_button("##read", vec2(cx.px(18.0), cx.px(18.0))) {
                 entry.read = !entry.read;
             }
             cx.draw_fa_icon(
@@ -909,7 +977,7 @@ fn notifications(
                 },
                 eye,
                 cx.px(12.0),
-                if ui.is_item_hovered() {
+                if buttons_shown && ui.is_item_hovered() {
                     Ink(1.0).of(p)
                 } else {
                     DISABLED.of(p)
@@ -917,7 +985,7 @@ fn notifications(
             );
             let trash = o + vec2(cx.px(421.0), cx.px(y + 19.0));
             cx.set_cursor(trash - vec2(cx.px(9.0), cx.px(9.0)));
-            if ui.invisible_button("##delete", vec2(cx.px(18.0), cx.px(18.0))) {
+            if buttons_shown && ui.invisible_button("##delete", vec2(cx.px(18.0), cx.px(18.0))) {
                 remove = Some(i);
             }
             cx.draw_fa_icon(
@@ -925,7 +993,7 @@ fn notifications(
                 "far:trash",
                 trash,
                 cx.px(12.0),
-                if ui.is_item_hovered() {
+                if buttons_shown && ui.is_item_hovered() {
                     Ink(1.0).of(p)
                 } else {
                     DISABLED.of(p)
@@ -953,6 +1021,55 @@ fn notifications(
                 0.0,
             );
         }
+        draw.pop_clip_rect();
+        // The scrollbar: a thumb in a track along the list's right edge; pressing or dragging it scrolls.
+        let track = cx.px(list_h) - cx.px(2.0 * SCROLLBAR_MARGIN);
+        if let Some((start, length)) = scrollbar_thumb(
+            track,
+            cx.px(state.notifications_scroll),
+            cx.px(list_content),
+            cx.px(list_h),
+        ) {
+            let track_min = vec2(
+                o.x + cx.px(450.0 - SCROLLBAR_WIDTH - SCROLLBAR_MARGIN),
+                list_min.y + cx.px(SCROLLBAR_MARGIN),
+            );
+            cx.set_cursor(track_min);
+            ui.invisible_button(
+                "##notifications_scroll",
+                vec2(cx.px(SCROLLBAR_WIDTH), track),
+            );
+            let active = ui.is_item_active();
+            if active {
+                state.notifications_scroll = scroll_for_thumb(
+                    cx.mouse_pos().y - track_min.y,
+                    track,
+                    length,
+                    cx.px(list_content),
+                    cx.px(list_h),
+                ) / cx.scale;
+            }
+            let color = if active {
+                cx.style_color(StyleColor::ScrollbarGrabActive)
+            } else if ui.is_item_hovered() {
+                cx.style_color(StyleColor::ScrollbarGrabHovered)
+            } else {
+                cx.style_color(StyleColor::ScrollbarGrab)
+            };
+            let (start, length) = scrollbar_thumb(
+                track,
+                cx.px(state.notifications_scroll),
+                cx.px(list_content),
+                cx.px(list_h),
+            )
+            .unwrap_or((start, length));
+            draw.add_rect_filled(
+                track_min + vec2(0.0, start),
+                track_min + vec2(cx.px(SCROLLBAR_WIDTH), start + length),
+                color,
+                cx.px(SCROLLBAR_WIDTH / 2.0),
+            );
+        }
         // A click outside the open menu closes it.
         if state.filter_open
             && ui.is_mouse_clicked(dear_imgui_rs::MouseButton::Left)
@@ -970,6 +1087,7 @@ fn notifications(
                 app.toasts.mark_all_read();
                 state.notifications_were_open = false;
                 state.filter_open = false;
+                state.notifications_scroll = 0.0;
             }
         }
         Some(Some(index)) => app.toasts.remove_history(index),
@@ -1055,6 +1173,62 @@ mod tests {
         assert!((notification_height(3) - 95.4287).abs() < 1e-3);
         // Never shorter than one line.
         assert_eq!(notification_height(0), notification_height(1));
+    }
+
+    #[test]
+    fn a_long_list_scrolls_by_the_wheel_within_its_range() {
+        // 50 notifications of ~61px in an 816px view.
+        let (content, view) = (50.0 * 61.1429, MAX_LIST_HEIGHT);
+        assert!((max_scroll(content, view) - (content - view)).abs() < 1e-3);
+        // A short list does not scroll at all.
+        assert_eq!(max_scroll(300.0, view), 0.0);
+        assert_eq!(scrolled_by_wheel(0.0, -3.0, 300.0, view), 0.0);
+        // Wheel down (negative) scrolls on, up scrolls back, neither leaves the list.
+        let down = scrolled_by_wheel(0.0, -2.0, content, view);
+        assert_eq!(down, 2.0 * WHEEL_STEP);
+        assert_eq!(scrolled_by_wheel(down, 1.0, content, view), WHEEL_STEP);
+        assert_eq!(scrolled_by_wheel(0.0, 5.0, content, view), 0.0);
+        assert_eq!(
+            scrolled_by_wheel(content, -5.0, content, view),
+            max_scroll(content, view)
+        );
+    }
+
+    #[test]
+    fn every_notification_is_reachable_by_scrolling() {
+        // With the old fixed height only the notifications that fit in 816px were listed.
+        let heights = [61.1429_f32; 50];
+        let content: f32 = heights.iter().sum();
+        let last_top = content - heights[49];
+        let scroll = max_scroll(content, MAX_LIST_HEIGHT);
+        // Scrolled to the end, the last row's top is inside the view.
+        assert!(last_top - scroll < MAX_LIST_HEIGHT);
+        assert!(last_top - scroll >= 0.0);
+    }
+
+    #[test]
+    fn the_scrollbar_thumb_follows_the_scroll() {
+        let (track, content, view) = (800.0, 3000.0, 800.0);
+        assert_eq!(scrollbar_thumb(track, 0.0, 700.0, view), None);
+        let (start, length) = scrollbar_thumb(track, 0.0, content, view).unwrap();
+        assert_eq!(start, 0.0);
+        assert!((length - track * view / content).abs() < 1e-3);
+        let (end_start, end_length) =
+            scrollbar_thumb(track, max_scroll(content, view), content, view).unwrap();
+        assert!((end_start + end_length - track).abs() < 1e-3);
+        // Never shorter than the minimum, even for a very long list.
+        let (_, tiny) = scrollbar_thumb(track, 0.0, 1_000_000.0, view).unwrap();
+        assert_eq!(tiny, SCROLLBAR_MIN_THUMB);
+        // Dragging the thumb's middle to a place gives back the scroll that puts it there.
+        let range = max_scroll(content, view);
+        for scroll in [0.0, 500.0, range] {
+            let (start, length) = scrollbar_thumb(track, scroll, content, view).unwrap();
+            let back = scroll_for_thumb(start + length / 2.0, track, length, content, view);
+            assert!((back - scroll).abs() < 1e-2, "{scroll}: {back}");
+        }
+        // The pointer beyond either end stops at the end.
+        assert_eq!(scroll_for_thumb(-50.0, track, 100.0, content, view), 0.0);
+        assert_eq!(scroll_for_thumb(5000.0, track, 100.0, content, view), range);
     }
 
     #[test]

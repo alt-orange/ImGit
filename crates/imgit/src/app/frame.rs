@@ -110,8 +110,10 @@ impl Application {
         self.toasts.draw(cx, corner);
         // Desktop notifications: a toast that comes while ImGit is in the background makes the window ask for
         // attention (the taskbar button flashes, the Dock icon bounces).
-        let unread = self.toasts.unread();
-        if unread > self.unread_toasts
+        // Counted by pushes, not by the unread total: that one stays level when the history's cap drops an unread
+        // entry as the new one comes in.
+        let pushed = self.toasts.pushed();
+        if pushed > self.toasts_pushed_seen
             && preferences().flag(pref::DESKTOP_NOTIFICATIONS)
             && !cx.shell.window.has_focus()
         {
@@ -119,7 +121,7 @@ impl Application {
                 .window
                 .request_user_attention(Some(UserAttentionType::Informational));
         }
-        self.unread_toasts = unread;
+        self.toasts_pushed_seen = pushed;
     }
 
     /// The repository tab: the left panel, the graph (or diff, or rebase plan), the detail panel and the

@@ -154,10 +154,14 @@ impl UiState {
             self.theme_names = themes.theme_names().to_vec();
             self.theme_name = themes.current_theme().to_owned();
         }
+        // Before anything draws: the icons the cache has outgrown are freed now, none of this frame's.
+        self.icons.begin_frame(&mut *shell.textures);
         let scale = shell.dpi_scale() * self.zoom;
         if !self.restyle && scale == self.styled_scale {
             return;
         }
+        // ImGui laid this frame out (NewFrame) with the old style and font scale: draw once more with the new.
+        shell.request_animation();
         self.restyle = false;
         self.styled_scale = scale;
         let palette = themes.palette();

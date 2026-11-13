@@ -1,6 +1,6 @@
 //! The Repository Management view (the tabs bar folder), the favourites and the repository summaries.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
@@ -42,10 +42,168 @@ impl Section {
     }
 }
 
-/// A repository's summary: being read in the background, or read.
-enum SummaryEntry {
-    Reading(Job<Option<RepoSummary>>),
-    Ready(Option<RepoSummary>),
+/// How many repositories' summaries are read at the same time: each read opens the repository and walks its
+/// status, so a long list must not start one thread per row.
+const MAX_SUMMARY_READS: usize = 4;
+
+/// Which keys are read next, in the order they were asked for, at most `limit` at a time: the scheduling of the
+/// summaries as a plain structure.
+struct ReadQueue {
+    waiting: VecDeque<String>,
+    running: usize,
+    limit: usize,
+}
+
+impl ReadQueue {
+    fn new(limit: usize) -> Self {
+        Self {
+            waiting: VecDeque::new(),
+            running: 0,
+            limit: limit.max(1),
+        }
+    }
+
+    /// Asks for `key` to be read; a key that waits already keeps its place.
+    fn enqueue(&mut self, key: &str) {
+        if !self.waiting.iter().any(|waiting| waiting == key) {
+            self.waiting.push_back(key.to_owned());
+        }
+    }
+
+    /// The key whose read may start now, if a place is free: it counts as running until [`Self::finished`].
+    fn start_next(&mut self) -> Option<String> {
+        if self.running >= self.limit {
+            return None;
+        }
+        let key = self.waiting.pop_front()?;
+        self.running += 1;
+        Some(key)
+    }
+
+    /// A started read ended.
+    fn finished(&mut self) {
+        self.running = self.running.saturating_sub(1);
+    }
+
+    /// Whether anything waits or runs.
+    fn busy(&self) -> bool {
+        self.running > 0 || !self.waiting.is_empty()
+    }
+}
+
+/// Where a repository's summary is: current, to be read again, or on its way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Freshness {
+    Current,
+    /// Read, but something may have changed since: read again when next asked for.
+    Stale,
+    /// In the queue.
+    Waiting,
+    /// Being read; `changed`: it started before the last [`Summaries::invalidate`], so it is stale already.
+    Reading {
+        changed: bool,
+    },
+}
+
+struct Summary {
+    /// The last one read, shown while the next is read (`None` until the first, and for a path that is no
+    /// repository).
+    value: Option<RepoSummary>,
+    freshness: Freshness,
+}
+
+/// The repositories' branch / ahead-behind / WIP summaries: read in the background by at most
+/// [`MAX_SUMMARY_READS`] threads at a time, and read again once they may be out of date.
+struct Summaries {
+    entries: HashMap<String, Summary>,
+    queue: ReadQueue,
+    reading: Vec<(String, Job<Option<RepoSummary>>)>,
+}
+
+impl Summaries {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            queue: ReadQueue::new(MAX_SUMMARY_READS),
+            reading: Vec::new(),
+        }
+    }
+
+    /// Collects the reads that finished and starts the waiting ones in their place.
+    fn tick(&mut self) {
+        let mut finished = Vec::new();
+        self.reading.retain_mut(|(path, job)| match job.poll() {
+            Some(value) => {
+                finished.push((path.clone(), Some(value)));
+                false
+            }
+            // A worker that died without an answer.
+            None if !job.is_running() => {
+                finished.push((path.clone(), None));
+                false
+            }
+            None => true,
+        });
+        for (path, value) in finished {
+            self.queue.finished();
+            if let Some(entry) = self.entries.get_mut(&path) {
+                if let Some(value) = value {
+                    entry.value = value;
+                }
+                entry.freshness = match entry.freshness {
+                    Freshness::Reading { changed: true } => Freshness::Stale,
+                    _ => Freshness::Current,
+                };
+            }
+        }
+        while let Some(path) = self.queue.start_next() {
+            if let Some(entry) = self.entries.get_mut(&path) {
+                entry.freshness = Freshness::Reading { changed: false };
+            }
+            let work = path.clone();
+            self.reading.push((
+                path,
+                Job::spawn(move || Repository::open(&work).ok()?.summary().ok()),
+            ));
+        }
+    }
+
+    /// The summary of the repository at `path`: the first time (or once it is stale) it is queued to be read;
+    /// the one read last is returned meanwhile, `None` until there is one (and when it cannot be read).
+    fn summary(&mut self, path: &str) -> Option<&RepoSummary> {
+        let entry = self.entries.entry(path.to_owned()).or_insert(Summary {
+            value: None,
+            freshness: Freshness::Stale,
+        });
+        if entry.freshness == Freshness::Stale {
+            entry.freshness = Freshness::Waiting;
+            self.queue.enqueue(path);
+        }
+        self.tick();
+        self.entries.get(path)?.value.as_ref()
+    }
+
+    /// Whether a summary is waiting or being read.
+    fn loading(&self) -> bool {
+        self.queue.busy()
+    }
+
+    /// Everything read may be out of date (the view was opened, or a command ran in the repositories): each
+    /// summary is read again when next asked for, and keeps its old value until then.
+    fn invalidate(&mut self) {
+        for entry in self.entries.values_mut() {
+            entry.freshness = match entry.freshness {
+                Freshness::Current => Freshness::Stale,
+                Freshness::Reading { .. } => Freshness::Reading { changed: true },
+                other => other,
+            };
+        }
+    }
+}
+
+/// Whether the view was just opened: it did not draw on the frame before `frame`.
+fn just_opened(last_drawn: Option<i32>, frame: i32) -> bool {
+    last_drawn.is_none_or(|last| frame.wrapping_sub(last) != 1)
 }
 
 /// The view's state between frames (the C++ function-local statics) and the summaries cache.
@@ -56,8 +214,10 @@ pub struct State {
     favorites: BTreeSet<String>,
     /// The profile `favorites` was loaded from.
     favorites_for: String,
-    /// Branch / ahead-behind / WIP summaries, read in the background once per repository.
-    summaries: HashMap<String, SummaryEntry>,
+    /// Branch / ahead-behind / WIP summaries, read in the background and again whenever the view opens.
+    summaries: Summaries,
+    /// The frame the view drew last: when it was not the one before, the view was just opened.
+    last_drawn: Option<i32>,
 }
 
 impl Default for State {
@@ -68,43 +228,26 @@ impl Default for State {
             collapsed: HashSet::new(),
             favorites: BTreeSet::new(),
             favorites_for: String::new(),
-            summaries: HashMap::new(),
+            summaries: Summaries::new(),
+            last_drawn: None,
         }
     }
 }
 
 impl State {
-    /// The summary of the repository at `path`: starts reading it the first time it is asked for; `None` until
-    /// it is read (and when it cannot be).
+    /// The summary of the repository at `path`, see [`Summaries::summary`].
     fn summary(&mut self, path: &str) -> Option<&RepoSummary> {
-        let entry = self.summaries.entry(path.to_owned()).or_insert_with(|| {
-            let path = path.to_owned();
-            SummaryEntry::Reading(Job::spawn(move || {
-                Repository::open(&path).ok()?.summary().ok()
-            }))
-        });
-        if let SummaryEntry::Reading(job) = entry
-            && let Some(summary) = job.poll()
-        {
-            *entry = SummaryEntry::Ready(summary);
-        }
-        match entry {
-            SummaryEntry::Ready(summary) => summary.as_ref(),
-            SummaryEntry::Reading(_) => None,
-        }
+        self.summaries.summary(path)
     }
 
     /// Whether a summary is still being read.
     fn loading(&self) -> bool {
-        self.summaries
-            .values()
-            .any(|entry| matches!(entry, SummaryEntry::Reading(_)))
+        self.summaries.loading()
     }
 
-    /// Summaries still being read stay; the rest are read again when next drawn.
+    /// The summaries may be out of date: they are read again when next drawn.
     fn forget_finished(&mut self) {
-        self.summaries
-            .retain(|_, entry| matches!(entry, SummaryEntry::Reading(_)));
+        self.summaries.invalidate();
     }
 
     fn toggle_section(&mut self, section: Section) {
@@ -152,7 +295,8 @@ pub fn favorite_repositories(app: &Application) -> Vec<String> {
     load_favorites(app).into_iter().collect()
 }
 
-/// A repository's branch / ahead-behind / WIP summary, read once in the background; `None` until ready.
+/// A repository's branch / ahead-behind / WIP summary, read in the background (and again each time
+/// Repository Management opens); `None` until ready.
 #[must_use]
 pub fn repo_summary<'a>(app: &'a mut Application, path: &str) -> Option<&'a RepoSummary> {
     app.panels.repo_management.summary(path)
@@ -313,6 +457,12 @@ fn repo_management(
 ) -> Events {
     let ui = cx.ui;
     let mut events = Events::default();
+    // Opening the view reads every summary again: commits, fetches or checkouts since it was last open (or
+    // outside of ImGit) changed them.
+    if just_opened(state.last_drawn, cx.frame_count()) {
+        state.forget_finished();
+    }
+    state.last_drawn = Some(cx.frame_count());
     ui.child_window("##repo_management")
         .size(size.into())
         .build(ui, || {
@@ -1365,41 +1515,146 @@ mod tests {
         assert!(state.collapsed.is_empty());
     }
 
+    /// Polls until `path`'s summary is there or nothing is being read any more.
+    fn wait_for(state: &mut State, path: &str) -> Option<RepoSummary> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(summary) = state.summary(path) {
+                return Some(summary.clone());
+            }
+            if !state.loading() || std::time::Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Polls until nothing waits or runs.
+    fn settle(state: &mut State) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while state.loading() && std::time::Instant::now() < deadline {
+            state.summaries.tick();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
-    fn summaries_are_read_once_in_the_background() {
+    fn summaries_are_read_in_the_background_and_again_when_invalidated() {
         let scratch = tempfile::tempdir().unwrap();
         drop(Repository::init(scratch.path()).unwrap());
         let path = scratch.path().to_string_lossy().into_owned();
         let mut state = State::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let mut found = false;
-        while std::time::Instant::now() < deadline {
-            if state.summary(&path).is_some() {
-                found = true;
-                break;
-            }
-            if !state.loading() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        // An empty repository still has a summary; once read it is not read again.
-        assert!(found || !state.loading());
-        assert_eq!(state.summaries.len(), 1);
+        // An empty repository still has a summary.
+        let first = wait_for(&mut state, &path).expect("a summary");
+        assert_eq!(state.summaries.entries.len(), 1);
+        // Asked again, it is not read again: nothing is queued.
+        assert!(state.summary(&path).is_some());
+        assert!(!state.loading());
         // Not a repository: read, and nothing.
-        let mut other = State::default();
         let missing = scratch
             .path()
             .join("missing")
             .to_string_lossy()
             .into_owned();
-        while other.summary(&missing).is_none() && other.loading() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(wait_for(&mut state, &missing).is_none());
+        settle(&mut state);
+        // Something changed in the repository (a new file) and the summaries were invalidated: the old
+        // value stays until the new one is read, then it is the new one.
+        std::fs::write(scratch.path().join("new.txt"), "x\n").unwrap();
+        state.forget_finished();
+        assert_eq!(state.summary(&path).cloned().as_ref(), Some(&first));
+        settle(&mut state);
+        let again = state
+            .summary(&path)
+            .cloned()
+            .expect("the summary read again");
+        assert_ne!(again, first);
+    }
+
+    #[test]
+    fn a_summary_read_during_an_invalidation_is_read_once_more() {
+        let scratch = tempfile::tempdir().unwrap();
+        drop(Repository::init(scratch.path()).unwrap());
+        let path = scratch.path().to_string_lossy().into_owned();
+        let mut state = State::default();
+        // The read starts, then the summaries are invalidated: what it returns may predate the change.
+        let _ = state.summary(&path);
+        assert!(state.summaries.reading.len() == 1);
+        state.forget_finished();
+        settle(&mut state);
+        assert_eq!(state.summaries.entries[&path].freshness, Freshness::Stale);
+        let _ = state.summary(&path);
+        assert!(state.loading());
+        settle(&mut state);
+        assert_eq!(state.summaries.entries[&path].freshness, Freshness::Current);
+    }
+
+    #[test]
+    fn only_a_few_summaries_are_read_at_a_time() {
+        let mut queue = ReadQueue::new(2);
+        for key in ["a", "b", "c", "d", "a"] {
+            queue.enqueue(key);
         }
-        assert!(other.summary(&missing).is_none());
-        // Finished summaries are forgotten to be read again.
-        other.forget_finished();
-        assert!(other.summaries.is_empty());
+        // "a" was asked for twice and waits once.
+        assert_eq!(queue.waiting.len(), 4);
+        assert_eq!(queue.start_next().as_deref(), Some("a"));
+        assert_eq!(queue.start_next().as_deref(), Some("b"));
+        // The limit is reached: the rest waits, in order.
+        assert_eq!(queue.start_next(), None);
+        assert!(queue.busy());
+        queue.finished();
+        assert_eq!(queue.start_next().as_deref(), Some("c"));
+        assert_eq!(queue.start_next(), None);
+        queue.finished();
+        queue.finished();
+        assert_eq!(queue.start_next().as_deref(), Some("d"));
+        assert_eq!(queue.start_next(), None);
+        queue.finished();
+        assert!(!queue.busy());
+        // More finishes than starts do not make room beyond the limit.
+        queue.finished();
+        queue.enqueue("e");
+        queue.enqueue("f");
+        queue.enqueue("g");
+        assert_eq!(queue.start_next().as_deref(), Some("e"));
+        assert_eq!(queue.start_next().as_deref(), Some("f"));
+        assert_eq!(queue.start_next(), None);
+    }
+
+    #[test]
+    fn many_rows_start_no_more_reads_than_the_limit() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut state = State::default();
+        let paths: Vec<String> = (0..20)
+            .map(|i| {
+                scratch
+                    .path()
+                    .join(format!("repo{i}"))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        for path in &paths {
+            let _ = state.summary(path);
+            assert!(state.summaries.reading.len() <= MAX_SUMMARY_READS);
+        }
+        settle(&mut state);
+        for path in &paths {
+            let _ = state.summary(path);
+            assert!(state.summaries.reading.len() <= MAX_SUMMARY_READS);
+        }
+        settle(&mut state);
+        assert!(!state.loading());
+    }
+
+    #[test]
+    fn the_view_reads_again_when_it_opens() {
+        assert!(just_opened(None, 10));
+        // Drawn on the frame before: still open.
+        assert!(!just_opened(Some(9), 10));
+        // Frames passed without it: it was closed and opened again.
+        assert!(just_opened(Some(5), 10));
+        assert!(just_opened(Some(10), 10));
     }
 
     #[test]

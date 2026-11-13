@@ -185,7 +185,9 @@ fn selection_text(session: &TerminalSession) -> Option<String> {
     Some(session.screen.text_between(start, end))
 }
 
-/// xterm normalises line breaks to CR and brackets the paste when the program asked for it.
+/// xterm normalises line breaks to CR and brackets the paste when the program asked for it. Like terminals do,
+/// it drops the control characters (ESC, so that the text cannot end the bracket early with its own
+/// `ESC [ 201 ~` or start another sequence; DEL; the C1 range) except tab and the line breaks.
 fn paste_text(text: &str, bracketed: bool) -> String {
     let mut normalized = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -193,6 +195,8 @@ fn paste_text(text: &str, bracketed: bool) -> String {
         match ch {
             '\r' if chars.peek() == Some(&'\n') => {}
             '\n' => normalized.push('\r'),
+            '\r' | '\t' => normalized.push(ch),
+            ch if ch.is_control() => {}
             ch => normalized.push(ch),
         }
     }
@@ -1329,6 +1333,20 @@ mod tests {
         assert_eq!(paste_text("a\r\nb\nc\rd", false), "a\rb\rc\rd");
         assert_eq!(paste_text("x\ny", true), "\x1b[200~x\ry\x1b[201~");
         assert_eq!(paste_text("", false), "");
+    }
+
+    #[test]
+    fn paste_drops_escape_and_other_control_characters() {
+        // The end marker inside the text cannot close the bracket early.
+        assert_eq!(
+            paste_text("a\x1b[201~rm -rf /\n", true),
+            "\x1b[200~a[201~rm -rf /\r\x1b[201~"
+        );
+        assert_eq!(
+            paste_text("a\x1b[31mb\x07\x08\x7f\u{9b}c", false),
+            "a[31mbc"
+        );
+        assert_eq!(paste_text("a\tb\r\nc", true), "\x1b[200~a\tb\rc\x1b[201~");
     }
 
     #[test]

@@ -108,12 +108,22 @@ pub fn parse_remote_url(url: &str) -> Option<RemoteEndpoint> {
         };
         (Transport::Ssh, user, host.to_ascii_lowercase(), None)
     };
-    (!host.is_empty()).then_some(RemoteEndpoint {
+    let safe = !host.is_empty()
+        && is_safe_component(&host)
+        && user.as_deref().is_none_or(is_safe_component);
+    safe.then_some(RemoteEndpoint {
         transport,
         host,
         user,
         port,
     })
+}
+
+/// A user or host that can be handed to `ssh` / `git credential` as it is: it does not start with `-` (which
+/// ssh would read as an option) and holds no white space or control character (which would split the argument
+/// or add lines to the credential protocol).
+fn is_safe_component(text: &str) -> bool {
+    !text.starts_with('-') && !text.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// A hosting service ImGit always lists, whether or not a repository uses it.
@@ -652,6 +662,14 @@ mod tests {
             "https:///x.git",
             "x",
             "",
+            // Option injection into ssh, and extra lines for `git credential`.
+            "ssh://-oProxyCommand=cmd@host/x",
+            "-oProxyCommand=cmd@host:x",
+            "ssh://git@-oProxyCommand=cmd/x",
+            "-host:x",
+            "https://host\nusername=evil/x",
+            "ssh://a b@host/x",
+            "https://host\r/x",
         ] {
             assert_eq!(parse_remote_url(url), None, "{url}");
             assert_eq!(url.parse::<RemoteEndpoint>(), Err(NotARemoteUrl));

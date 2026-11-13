@@ -355,15 +355,15 @@ pub(super) fn lfs_page(page: &mut Page<'_, '_>) {
     form.advance(page, top, 31.140_625, 0.0);
 }
 
-/// The sparse-checkout paths as `git sparse-checkout set` arguments: one per non-empty line.
+/// The sparse-checkout paths as `git sparse-checkout set` arguments: one per non-empty line, after `--` so a
+/// line starting with `-` is a path, not an option.
 pub(super) fn sparse_set_arguments(paths: &str) -> Vec<String> {
     let mut args = vec!["sparse-checkout".to_owned(), "set".to_owned()];
-    args.extend(
-        paths
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned),
-    );
+    let lines: Vec<&str> = paths.lines().filter(|line| !line.is_empty()).collect();
+    if !lines.is_empty() {
+        args.push("--".to_owned());
+        args.extend(lines.into_iter().map(str::to_owned));
+    }
     args
 }
 
@@ -473,7 +473,11 @@ mod tests {
     fn sparse_arguments() {
         assert_eq!(
             sparse_set_arguments("src/\n\ndocs/\n"),
-            ["sparse-checkout", "set", "src/", "docs/"]
+            ["sparse-checkout", "set", "--", "src/", "docs/"]
+        );
+        assert_eq!(
+            sparse_set_arguments("-x\n--cone"),
+            ["sparse-checkout", "set", "--", "-x", "--cone"]
         );
         assert_eq!(sparse_set_arguments(""), ["sparse-checkout", "set"]);
     }

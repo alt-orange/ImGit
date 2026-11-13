@@ -21,6 +21,7 @@ use crate::theme::{Color, FONT_SIZE_ROW};
 use crate::ui::draw::DrawList;
 use crate::ui::geom::{Vec2, vec2};
 use crate::ui::menu::popup_menu;
+use crate::ui::panels::file_editor::navigate_from_editor;
 use crate::ui::panels::menus::{commit_menu, ref_drop_menu, ref_menu};
 use crate::ui::widgets::format_relative;
 use crate::ui::{Cx, panels};
@@ -244,14 +245,21 @@ impl State {
         for pick in std::mem::take(&mut f.picks) {
             match pick {
                 Pick::Only { sha, close_diff } => {
-                    state.select_only(&sha);
                     if close_diff {
-                        state.close_diff();
+                        // Unsaved text in the file editor is asked about before the commit changes.
+                        navigate_from_editor(app, state, move |_app, state| {
+                            state.select_only(&sha);
+                            let _ = state.close_diff();
+                        });
+                    } else {
+                        state.select_only(&sha);
                     }
                 }
                 Pick::Click { sha, toggle, range } => {
-                    state.select(&sha, toggle, range);
-                    state.close_diff();
+                    navigate_from_editor(app, state, move |_app, state| {
+                        state.select(&sha, toggle, range);
+                        let _ = state.close_diff();
+                    });
                 }
             }
         }
@@ -1224,7 +1232,22 @@ impl State {
             );
             cancelled = ui.is_item_deactivated() && !submitted;
         }
-        rows_draw.add_rect(min, max, p.accent, m.px(4.0), 1.0);
+        // A name git would read as an option on a command line is refused here, as in the dialogs: the input
+        // stays open with a red border and says why.
+        let error = panels::dialogs::leading_dash_error(
+            if inline_ref.tag { "tag" } else { "branch" },
+            &inline_ref.name,
+        );
+        if let Some(error) = &error {
+            cx.styled_tooltip(min, max, error, false);
+        }
+        rows_draw.add_rect(
+            min,
+            max,
+            if error.is_some() { p.red } else { p.accent },
+            m.px(4.0),
+            1.0,
+        );
         if inline_ref.name.is_empty() {
             rows_draw.push_clip_rect(min, vec2(max.x - m.px(13.0), max.y), true);
             cx.draw_text(
@@ -1241,7 +1264,9 @@ impl State {
             );
             rows_draw.pop_clip_rect();
         }
-        if submitted && !inline_ref.name.is_empty() {
+        if submitted && error.is_some() {
+            inline_ref.focus = true;
+        } else if submitted && !inline_ref.name.is_empty() {
             f.deferred.inline_done = Some(inline_ref.clone());
             *slot = None;
         } else if cancelled || submitted || ui.is_key_pressed(Key::Escape) {

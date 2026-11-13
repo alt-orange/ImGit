@@ -915,6 +915,7 @@ fn draw_bar(
             .tip(Some("Pop the most recent stash")),
     )
     .clicked
+        && !app.refuse_while_busy(state)
     {
         let result = state.repo.stash_pop(0);
         app.run(state, "Pop stash", result, Some("Stash popped"));
@@ -1015,7 +1016,7 @@ fn draw_lfs(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState, dropd
                 (
                     "Push all LFS files",
                     "LFS Push",
-                    vec!["lfs", "push", "--all", &remote],
+                    vec!["lfs", "push", "--all", "--", &remote],
                 ),
                 (
                     "Prune local LFS repository",
@@ -1077,7 +1078,8 @@ fn draw_operation_badge(
         "Abort",
         vec2(cx.px(52.0), badge_max.y - badge_min.y - cx.px(4.0)),
         true,
-    ) {
+    ) && !app.refuse_while_busy(state)
+    {
         let result = state.repo.abort_operation();
         app.run(state, "Abort", result, Some("Operation aborted"));
     }

@@ -190,6 +190,140 @@ impl fmt::Debug for UndoEntry {
     }
 }
 
+/// The message of the stash that keeps the uncommitted changes a hard reset would wipe.
+pub const AUTO_STASH_BEFORE_RESET: &str = "ImGit: auto stash before hard reset";
+/// The message of the stash that keeps the changes present while an undo moves HEAD.
+pub const AUTO_STASH_BEFORE_UNDO: &str = "ImGit: auto stash before undo";
+
+/// Whether the working directory holds changes a hard reset (or the checkout of another commit) would
+/// overwrite: tracked files' changes, staged or not. Untracked files stay where they are, and a stash cannot
+/// be made while files are conflicted.
+fn has_overwritable_changes(repo: &Repository) -> bool {
+    repo.load_status().is_ok_and(|status| {
+        status.conflicted.is_empty()
+            && status
+                .staged
+                .iter()
+                .chain(&status.unstaged)
+                .any(|change| change.status != FileStatus::Untracked)
+    })
+}
+
+/// Pops the stash with commit `sha` (`stash_index_of` finds it wherever it sits now; a stash that is gone is
+/// not an error: the user dropped it). A pop that fails keeps the stash, and the error names it. A pop that
+/// applies with conflicts uses the stash up but leaves the changes in the conflicted files: that is an error
+/// too, saying so.
+fn pop_stash(repo: &Repository, sha: &str, message: &str) -> imgit_git::Result<()> {
+    let Some(index) = repo.stash_index_of(sha) else {
+        return Ok(());
+    };
+    repo.stash_pop(index).map_err(|error| {
+        imgit_git::Error::Message(format!(
+            "Your uncommitted changes could not be applied again ({error}). They are still saved in              stash@{{{index}}} \"{message}\"."
+        ))
+    })?;
+    let conflicted = repo
+        .load_status()
+        .map_or(0, |status| status.conflicted.len());
+    if conflicted > 0 {
+        return Err(imgit_git::Error::Message(format!(
+            "Your uncommitted changes were applied again with conflicts in {conflicted} file(s):              resolve them in the working directory (the stash \"{message}\" is used up)."
+        )));
+    }
+    Ok(())
+}
+
+/// `action`'s result together with the result of putting the stash back: both failures are reported.
+fn both(action: imgit_git::Result<()>, restore: imgit_git::Result<()>) -> imgit_git::Result<()> {
+    match (action, restore) {
+        (Ok(()), restored) => restored,
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(restore)) => Err(imgit_git::Error::Message(format!("{error}. {restore}"))),
+    }
+}
+
+/// Runs `action` with the working directory's changes stashed (as `message`) and put back afterwards, so that
+/// an action that overwrites the working directory (a hard reset) keeps them. With `must_stash`, a stash that
+/// cannot be made stops everything before `action` runs; without, `action` runs on without one. A pop that
+/// fails (conflicts) is an error naming the stash that still holds the changes.
+///
+/// # Errors
+///
+/// `action`'s error, and the failure to put the changes back or to set them aside.
+pub fn with_changes_stashed(
+    repo: &Repository,
+    message: &str,
+    must_stash: bool,
+    action: impl FnOnce(&Repository) -> imgit_git::Result<()>,
+) -> imgit_git::Result<()> {
+    let stash = if has_overwritable_changes(repo) {
+        match repo.stash_push(message) {
+            Ok(sha) => Some(sha),
+            Err(error) if must_stash => {
+                return Err(imgit_git::Error::Message(format!(
+                    "Your uncommitted changes could not be set aside ({error}); nothing was changed."
+                )));
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let result = action(repo);
+    match stash {
+        Some(sha) => both(result, pop_stash(repo, &sha, message)),
+        None => result,
+    }
+}
+
+/// A hard reset to `target` that first stashes the uncommitted changes it would wipe. Returns the stash's
+/// sha when there was something to keep.
+///
+/// # Errors
+///
+/// When the changes cannot be stashed (nothing was changed) or the reset fails (the changes are put back).
+pub fn hard_reset_keeping_changes(
+    repo: &Repository,
+    target: &str,
+) -> imgit_git::Result<Option<Sha>> {
+    let stash = if has_overwritable_changes(repo) {
+        Some(repo.stash_push(AUTO_STASH_BEFORE_RESET).map_err(|error| {
+            imgit_git::Error::Message(format!(
+                "Your uncommitted changes could not be set aside ({error}); nothing was reset."
+            ))
+        })?)
+    } else {
+        None
+    };
+    if let Err(error) = repo.reset(target, ResetMode::Hard) {
+        if let Some(sha) = &stash {
+            return both(Err(error), pop_stash(repo, sha, AUTO_STASH_BEFORE_RESET)).map(|()| None);
+        }
+        return Err(error);
+    }
+    Ok(stash)
+}
+
+/// The undo of [`hard_reset_keeping_changes`]: a hard reset back to `previous`, then the stashed changes
+/// (`saved`) put back. Changes made since are stashed around it, so they survive too.
+///
+/// # Errors
+///
+/// As [`with_changes_stashed`]; a failed pop names the stash that still holds the changes.
+pub fn undo_hard_reset(
+    repo: &Repository,
+    previous: &str,
+    saved: Option<&str>,
+) -> imgit_git::Result<()> {
+    with_changes_stashed(repo, AUTO_STASH_BEFORE_UNDO, true, |repo| {
+        repo.reset(previous, ResetMode::Hard)?;
+        match saved {
+            Some(sha) => pop_stash(repo, sha, AUTO_STASH_BEFORE_RESET),
+            None => Ok(()),
+        }
+    })
+}
+
 /// The file view's editor (Edit This File): the working directory's copy of the diff target's file as text,
 /// "\n" line breaks (written back as "\r\n" when `crlf`); `saved` is the text on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +334,14 @@ pub struct FileEdit {
     pub crlf: bool,
     /// The editor takes the keyboard focus on its next frame.
     pub focus: bool,
+}
+
+impl FileEdit {
+    /// Whether the text differs from what is on the disk.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.text != self.saved
+    }
 }
 
 impl Default for FileEdit {
@@ -642,6 +784,12 @@ impl RepoState {
     /// `refresh`'s own does).
     fn rebuild(&mut self, snapshot: StatusSnapshot) {
         self.load_error = None;
+        // The comparison against the working directory belongs to the rows as they were: the WIP row going
+        // away and coming back must not bring the old file list back for the same commit.
+        self.compare_sha = None;
+        self.compare_files.clear();
+        self.compare_error = None;
+        let had_wip = self.history.row_by_sha.contains_key(WIP_SHA);
         self.refs_signature = snapshot.refs_signature;
         let options = HistoryOptions {
             max_commits: self.commit_limit,
@@ -670,6 +818,13 @@ impl RepoState {
         }
         self.operation_state = snapshot.operation_state;
         self.insert_wip_row();
+        // A pending scroll request still points at the old rows: the WIP row in front moved them by one.
+        let has_wip = self.history.row_by_sha.contains_key(WIP_SHA);
+        self.scroll_to_row = self.scroll_to_row.and_then(|row| match (had_wip, has_wip) {
+            (false, true) => Some(row + 1),
+            (true, false) => row.checked_sub(1),
+            _ => Some(row),
+        });
         self.rebuild_layout();
 
         // Drop stale selection, keep the WIP row selected when it still exists.
@@ -818,12 +973,16 @@ impl RepoState {
         }
     }
 
-    /// Opens the merge tool on a conflicted file (closing the diff).
+    /// Opens the merge tool on a conflicted file (closing the diff). `Ok(false)`: unsaved text in the file
+    /// editor blocked it and nothing changed (see [`Self::has_unsaved_edit`]).
     ///
     /// # Errors
     ///
     /// When the file's sides cannot be read; nothing changes then.
-    pub fn open_merge_tool(&mut self, path: &str) -> imgit_git::Result<()> {
+    pub fn open_merge_tool(&mut self, path: &str) -> imgit_git::Result<bool> {
+        if self.has_unsaved_edit() {
+            return Ok(false);
+        }
         let sides = self.repo.conflict_sides(path)?;
         let mut tool = MergeTool {
             path: path.to_owned(),
@@ -844,24 +1003,50 @@ impl RepoState {
             .find_map(|kind| incoming.iter().find(|r| r.ref_type == *kind))
             .map(|branch| branch.name.clone())
             .unwrap_or_default();
-        self.close_diff();
+        let closed = self.close_diff();
+        debug_assert!(closed, "an unsaved edit was refused above");
         self.merge_tool = Some(tool);
-        Ok(())
+        Ok(true)
     }
 
-    /// Opens the diff of `target` (closing the file editor).
-    pub fn open_diff(&mut self, target: DiffTarget) {
+    /// Whether the file editor holds text that is not on the disk yet: whatever closes the editor would lose
+    /// it, so [`Self::open_diff`], [`Self::close_diff`] and [`Self::open_merge_tool`] refuse while this is so.
+    #[must_use]
+    pub fn has_unsaved_edit(&self) -> bool {
+        self.file_edit.as_ref().is_some_and(FileEdit::is_dirty)
+    }
+
+    /// Drops the file editor and its unsaved text: only after the user confirmed the loss.
+    pub fn discard_file_edit(&mut self) {
+        self.file_edit = None;
+    }
+
+    /// Opens the diff of `target` (closing the file editor). Returns `false`, changing nothing, while the
+    /// editor holds unsaved text: the caller asks the user, calls [`Self::discard_file_edit`] and repeats.
+    #[must_use = "false: unsaved text in the file editor blocked the navigation"]
+    pub fn open_diff(&mut self, target: DiffTarget) -> bool {
+        if self.has_unsaved_edit() {
+            return false;
+        }
         self.file_edit = None;
         self.diff_target = Some(target);
         self.reload_diff();
+        true
     }
 
-    pub fn close_diff(&mut self) {
+    /// Closes the diff (and the file editor). Returns `false`, changing nothing, while the editor holds
+    /// unsaved text: the caller asks the user, calls [`Self::discard_file_edit`] and repeats.
+    #[must_use = "false: unsaved text in the file editor blocked the navigation"]
+    pub fn close_diff(&mut self) -> bool {
+        if self.has_unsaved_edit() {
+            return false;
+        }
         self.left_open_in_diff = false;
         self.file_edit = None;
         self.diff_target = None;
         self.diff = None;
         self.diff_error = None;
+        true
     }
 
     /// Loads the diff target's diff again (after a mode or whitespace change, or a change of the files).

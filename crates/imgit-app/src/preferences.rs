@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::{fs, io};
 
+use crate::profiles::write_text_file;
+
 /// A key and the value it has until the user sets one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Preference {
@@ -111,6 +113,9 @@ const LINE_BREAK: &str = if cfg!(windows) { "\r\n" } else { "\n" };
 struct Store {
     /// Where saves go; `None` until a file was loaded.
     path: Option<PathBuf>,
+    /// The file exists but could not be read: nothing is saved over it (it may be fine again, or hold what the
+    /// user has to recover), so changes live in memory only until the next [`Preferences::load`].
+    unreadable: bool,
     /// Sorted by key, the order the file is written in.
     values: BTreeMap<String, String>,
 }
@@ -128,6 +133,7 @@ impl Preferences {
         Self {
             store: Mutex::new(Store {
                 path: None,
+                unreadable: false,
                 values: BTreeMap::new(),
             }),
         }
@@ -142,17 +148,22 @@ impl Preferences {
     /// does not exist yet is an empty store.
     ///
     /// # Errors
-    /// The file exists and could not be read: the store is empty then, and still saves to `path`.
+    /// The file exists and could not be read: the store is empty then and does not save (it would replace the
+    /// file with a near-empty one): [`set`](Self::set) keeps its values in memory and reports the error.
     pub fn load(&self, path: impl Into<PathBuf>) -> io::Result<()> {
         let path = path.into();
         let read = fs::read(&path);
         let mut store = self.lock();
         store.path = Some(path);
         store.values.clear();
+        store.unreadable = false;
         let bytes = match read {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error),
+            Err(error) => {
+                store.unreadable = true;
+                return Err(error);
+            }
         };
         let text = String::from_utf8_lossy(&bytes);
         // A UTF-8 byte order mark (an editor's) is not part of the first key.
@@ -205,7 +216,8 @@ impl Preferences {
     /// split the line it is saved on).
     ///
     /// # Errors
-    /// The file could not be written; the store has the new value all the same.
+    /// The file could not be written, or could not be read by [`load`](Self::load) and is left alone; the store
+    /// has the new value all the same.
     pub fn set(&self, preference: Preference, value: &str) -> io::Result<()> {
         let value = value.replace(['\t', '\n', '\r'], " ");
         let mut store = self.lock();
@@ -249,12 +261,17 @@ impl Store {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        if self.unreadable {
+            return Err(io::Error::other(
+                "the preferences file could not be read, so it is not overwritten",
+            ));
+        }
         let text: String = self
             .values
             .iter()
             .flat_map(|(key, value)| [key.as_str(), "\t", value.as_str(), LINE_BREAK])
             .collect();
-        fs::write(path, text)
+        write_text_file(path, &text)
     }
 }
 
@@ -532,6 +549,29 @@ mod tests {
             "",
         ];
         assert_eq!(written, expected.join(LINE_BREAK));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_not_saved_over() {
+        let directory = tempfile::tempdir().unwrap();
+        // A folder where the file should be: reading fails with something other than "not found".
+        let path = directory.path().join("preferences.txt");
+        fs::create_dir(&path).unwrap();
+        let store = Preferences::new();
+        assert!(store.load(&path).is_err());
+        assert!(store.set(SIZE, "20").is_err());
+        assert_eq!(store.number(SIZE, 6..=40), 20); // kept in memory
+        assert!(path.is_dir());
+
+        // Loading a readable file again saves normally, and leaves no temporary file.
+        let file = directory.path().join("other.txt");
+        store.load(&file).unwrap();
+        store.set(SIZE, "21").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            format!("Test/Size	21{LINE_BREAK}")
+        );
+        assert!(!directory.path().join("other.txt.tmp").exists());
     }
 
     #[test]

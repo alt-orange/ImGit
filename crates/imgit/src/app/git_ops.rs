@@ -1,12 +1,12 @@
 //! Running repository operations and `git` commands for a tab: the result toasts, the commands in flight, the
 //! force-push offer, undo / redo, auto fetch and keeping submodules up to date.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use imgit_app::RepoState;
 use imgit_app::job::Job;
 use imgit_app::preferences::{pref, preferences, with_prune_preference};
-use imgit_app::repo_state::AsyncOperation;
+use imgit_app::repo_state::{AsyncOperation, with_changes_stashed};
 use imgit_git::{Repository, ResetMode, cli};
 
 use crate::app::application::Application;
@@ -39,12 +39,28 @@ fn lfs_toast(title: &str, success: bool) -> Option<&'static str> {
         .map(|toast| if success { toast[1] } else { toast[2] })
 }
 
-/// The session's credentials with `attempt` in place of its host's entry.
-fn credentials_with(
+/// The credentials a git command may be given: the session's credentials for the hosts of `urls` (the urls the
+/// command can connect to) and `attempt` (from the credentials prompt, tried first, in place of its host's
+/// entry). Every other host's credential stays out of git's environment, where hooks and helpers could read it.
+pub(crate) fn credentials_for<'a>(
     credentials: &[cli::Credential],
+    urls: impl IntoIterator<Item = &'a str>,
     attempt: Option<&cli::Credential>,
 ) -> Vec<cli::Credential> {
-    let mut result: Vec<cli::Credential> = credentials.to_vec();
+    let hosts: Vec<String> = urls
+        .into_iter()
+        .filter_map(cli::credential_host)
+        .map(|host| host.url)
+        .collect();
+    let mut result: Vec<cli::Credential> = credentials
+        .iter()
+        .filter(|credential| {
+            hosts
+                .iter()
+                .any(|host| host.eq_ignore_ascii_case(&credential.url))
+        })
+        .cloned()
+        .collect();
     if let Some(attempt) = attempt {
         result.retain(|credential| credential.url != attempt.url);
         result.insert(0, attempt.clone());
@@ -110,6 +126,38 @@ impl Application {
         }
     }
 
+    /// The busy guard of every action that changes the repository through libgit2 (checkout, reset, merge,
+    /// stash, history rewrites, commits, staging...): while a background git command (fetch, pull, push, rebase)
+    /// runs on the same repository it is refused with a toast "Wait for <title> to finish". Returns `true` when
+    /// the action must not run. Read-only actions never ask; the git commands started through
+    /// [`Self::run_git_cli`] have their own check.
+    ///
+    /// Menu clicks and confirmed dialogs get it from [`Self::with_idle_repo`]; the panels' own buttons call
+    /// this at the start of their action.
+    pub fn refuse_while_busy(&mut self, state: &RepoState) -> bool {
+        let Some(running) = &state.async_op else {
+            return false;
+        };
+        self.toasts.push(
+            ToastKind::Info,
+            format!("Wait for {} to finish", running.title),
+        );
+        true
+    }
+
+    /// [`Self::with_repo`] for an action that changes the repository: `f` does not run (and a toast says why)
+    /// while a git command is in flight on it, see [`Self::refuse_while_busy`].
+    pub fn with_idle_repo<R>(
+        &mut self,
+        workdir: &Path,
+        f: impl FnOnce(&mut Self, &mut RepoState) -> R,
+    ) -> Option<R> {
+        self.with_repo(workdir, |app, state| {
+            (!app.refuse_while_busy(state)).then(|| f(app, state))
+        })
+        .flatten()
+    }
+
     /// Starts `git <args>` for the tab in the background; the result is reported when it finishes.
     pub fn run_git_cli<A: Into<String>>(
         &mut self,
@@ -164,7 +212,19 @@ impl Application {
         }
         let workdir = state.repo.workdir().to_path_buf();
         let args = with_prune_preference(args, preferences().flag(pref::AUTO_PRUNE));
-        let credentials = credentials_with(&self.credentials, attempt.as_ref());
+        let urls = state
+            .history
+            .remotes
+            .iter()
+            .map(|remote| remote.url.as_str())
+            .chain(
+                state
+                    .history
+                    .submodules
+                    .iter()
+                    .map(|submodule| submodule.url.as_str()),
+            );
+        let credentials = credentials_for(&self.credentials, urls, attempt.as_ref());
         let command = args.clone();
         state.async_op = Some(AsyncOperation {
             title: title.to_owned(),
@@ -249,6 +309,9 @@ impl Application {
 
     /// Reverses the repository's last undoable action; a redo is kept for it.
     pub fn undo(&mut self, state: &mut RepoState) {
+        if state.undo_stack.is_empty() || self.refuse_while_busy(state) {
+            return;
+        }
         let Some(mut entry) = state.undo_stack.pop() else {
             return;
         };
@@ -279,17 +342,15 @@ impl Application {
             // still exists), keeping uncommitted changes aside like undo does.
             let mode = entry.redo_mode;
             entry.redo = Some(Box::new(move |repo: &Repository| {
-                let mut stashed = false;
-                if mode == ResetMode::Hard
-                    && repo.load_status().map(|status| status.count()).unwrap_or(0) > 0
-                {
-                    stashed = repo.stash_push("ImGit: auto stash before redo").is_ok();
+                if mode == ResetMode::Hard {
+                    // Changes that cannot be set aside stop the redo (a hard reset would wipe them); a pop that
+                    // fails or conflicts is reported, naming the stash that holds the changes.
+                    with_changes_stashed(repo, "ImGit: auto stash before redo", true, |repo| {
+                        repo.reset(&sha, mode)
+                    })
+                } else {
+                    repo.reset(&sha, mode)
                 }
-                let reset = repo.reset(&sha, mode);
-                if stashed {
-                    let _ = repo.stash_pop(0);
-                }
-                reset
             }));
         }
         if entry.redo.is_some() {
@@ -299,6 +360,9 @@ impl Application {
 
     /// Repeats the last undone action.
     pub fn redo(&mut self, state: &mut RepoState) {
+        if state.redo_stack.is_empty() || self.refuse_while_busy(state) {
+            return;
+        }
         let Some(mut entry) = state.redo_stack.pop() else {
             return;
         };
@@ -520,19 +584,37 @@ mod tests {
     }
 
     #[test]
-    fn a_credential_attempt_replaces_its_hosts_entry() {
+    fn credentials_go_only_to_the_hosts_a_command_talks_to() {
         let credential = |url: &str, user: &str| cli::Credential {
             url: url.to_owned(),
             username: user.to_owned(),
             password: String::new(),
             remember: false,
         };
-        let session = [credential("https://a", "old"), credential("https://b", "b")];
-        let merged = credentials_with(&session, Some(&credential("https://a", "new")));
+        let session = [
+            credential("https://a", "old"),
+            credential("https://b", "b"),
+            credential("https://c", "c"),
+        ];
+        let urls = [
+            "https://a/repo.git",
+            "https://b/x",
+            "git@scp:style",
+            "/local",
+        ];
+        // Only the hosts of the urls; the attempt replaces its host's entry and comes first.
+        let merged = credentials_for(&session, urls, Some(&credential("https://a", "new")));
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].username, "new");
         assert_eq!(merged[1].url, "https://b");
-        assert_eq!(credentials_with(&session, None), session);
+        let plain = credentials_for(&session, urls, None);
+        assert_eq!(plain, session[..2]);
+        // No matching remote: nothing, except an attempt for another host.
+        assert!(credentials_for(&session, ["https://z/x"], None).is_empty());
+        assert!(credentials_for(&session, [], None).is_empty());
+        let only_attempt = credentials_for(&session, [], Some(&credential("https://z", "z")));
+        assert_eq!(only_attempt.len(), 1);
+        assert_eq!(only_attempt[0].url, "https://z");
     }
 
     #[test]
@@ -555,6 +637,63 @@ mod tests {
         assert_eq!(failed, Some(None));
         assert_eq!(app.toasts.history()[0].title, "Checkout failed");
         assert_eq!(app.toasts.history()[0].kind, ToastKind::Error);
+    }
+
+    /// A git command "in flight" that never ends.
+    fn running(title: &str) -> AsyncOperation {
+        AsyncOperation {
+            title: title.to_owned(),
+            job: Job::idle(),
+            silent: false,
+            args: Vec::new(),
+            attempt: None,
+            queued: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn changes_wait_for_the_git_command_running_on_the_repository() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        let folder = scratch.path().join("repo");
+        Repository::init(&folder).unwrap();
+        app.open_repository(&folder.to_string_lossy());
+        let workdir = app.active_workdir().unwrap().to_path_buf();
+        app.with_active(|_, state| state.async_op = Some(running("Fetch")));
+        let mut ran = false;
+        let result = app.with_idle_repo(&workdir, |_, _| ran = true);
+        assert!(result.is_none() && !ran);
+        assert_eq!(app.toasts.history()[0].title, "Wait for Fetch to finish");
+        assert_eq!(app.toasts.history()[0].kind, ToastKind::Info);
+        // Looking is never refused.
+        assert_eq!(app.with_repo(&workdir, |_, state| state.busy()), Some(true));
+        // Once the command ended the action runs.
+        app.with_active(|_, state| state.async_op = None);
+        assert_eq!(app.with_idle_repo(&workdir, |_, _| 7), Some(7));
+    }
+
+    #[test]
+    fn undo_and_redo_are_refused_while_a_git_command_runs_and_keep_their_entries() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        let folder = scratch.path().join("repo");
+        Repository::init(&folder).unwrap();
+        app.open_repository(&folder.to_string_lossy());
+        app.with_active(|app, state| {
+            let undone = std::rc::Rc::new(std::cell::Cell::new(0));
+            let counter = std::rc::Rc::clone(&undone);
+            state.push_undo(imgit_app::repo_state::UndoEntry::new("test", move |_| {
+                counter.set(counter.get() + 1);
+                Ok(())
+            }));
+            state.async_op = Some(running("Pull"));
+            app.undo(state);
+            assert_eq!((undone.get(), state.undo_stack.len()), (0, 1));
+            assert_eq!(app.toasts.history()[0].title, "Wait for Pull to finish");
+            state.async_op = None;
+            app.undo(state);
+            assert_eq!((undone.get(), state.undo_stack.len()), (1, 0));
+        });
     }
 
     #[test]

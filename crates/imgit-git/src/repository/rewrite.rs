@@ -23,16 +23,28 @@ impl Repository {
         Ok(())
     }
 
-    /// Commits what a cherry-pick or revert left in the index, unless it left conflicts.
+    /// Commits what a cherry-pick or revert left in the index, unless it left conflicts. A result that is
+    /// HEAD's own tree (the change is already in the branch) is not committed, as `git` does not: the
+    /// operation's state is cleaned up and the error says so.
     fn finish_sequencer_commit(
         &self,
         message: &str,
         author: Option<&git2::Signature<'_>>,
     ) -> Result<Outcome> {
-        if self.repo.index()?.has_conflicts() {
+        let mut index = self.repo.index()?;
+        if index.has_conflicts() {
             return Ok(Outcome::Conflicts);
         }
-        let parents: Vec<git2::Oid> = self.head_commit()?.iter().map(git2::Commit::id).collect();
+        let head = self.head_commit()?;
+        if let Some(head) = &head
+            && index.write_tree()? == head.tree_id()
+        {
+            self.finish_operation_state();
+            return Err(Error::message(
+                "The change is already in the current branch",
+            ));
+        }
+        let parents: Vec<git2::Oid> = head.iter().map(git2::Commit::id).collect();
         self.commit_index(message, &parents, author)?;
         self.finish_operation_state();
         Ok(Outcome::Done)
@@ -170,14 +182,25 @@ impl Repository {
         Ok(())
     }
 
-    /// The three versions of a conflicted file the index holds; fails when the file has no conflict.
+    /// The three versions of a conflicted file the index holds; fails when the file has no conflict, or when
+    /// a version is not UTF-8 text (binary files go to an external merge tool).
     pub fn conflict_sides(&self, path: &str) -> Result<ConflictSides> {
         let conflict = self.repo.index()?.conflict_get(Path::new(path))?;
+        // Lossy text would make the merge tool write corrupted bytes: only UTF-8 text is handed out.
         let read = |entry: Option<git2::IndexEntry>| -> Result<Option<String>> {
-            Ok(match entry {
-                Some(entry) => Some(lossy(self.repo.find_blob(entry.id)?.content())),
-                None => None,
-            })
+            let Some(entry) = entry else {
+                return Ok(None);
+            };
+            let blob = self.repo.find_blob(entry.id)?;
+            let text = std::str::from_utf8(blob.content())
+                .ok()
+                .filter(|text| !text.contains('\0'))
+                .ok_or_else(|| {
+                    Error::message(format!(
+                        "{path} is not UTF-8 text: resolve it with an external merge tool"
+                    ))
+                })?;
+            Ok(Some(text.to_owned()))
         };
         Ok(ConflictSides {
             base: read(conflict.ancestor)?,

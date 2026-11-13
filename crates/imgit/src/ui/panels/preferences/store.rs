@@ -128,7 +128,7 @@ pub struct State {
     /// Default Branch Name's field.
     pub(super) default_branch: String,
     pub(super) git: GitValues,
-    context: Option<(Option<PathBuf>, Context)>,
+    context: Option<(ContextKey, Context)>,
     /// The Signing Key options: "<None>" then gpg's secret keys.
     pub(super) signing_keys: Vec<String>,
     pub(super) signing_keys_read: bool,
@@ -238,14 +238,28 @@ pub(super) fn save_settings(app: &Application) {
     app.settings.save(&app.config_path("settings.txt"));
 }
 
-/// The user and repository the pages describe, read again when the active repository changes.
-pub(super) fn context(app: &mut Application) -> Context {
-    let key = active_workdir(app);
-    if let Some((cached_for, context)) = &app.panels.preferences.context
-        && *cached_for == key
-    {
-        return context.clone();
+/// What [`context`] derives from: the active repository and the current profile's identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ContextKey {
+    workdir: Option<PathBuf>,
+    guid: String,
+    user_name: String,
+    user_email: String,
+}
+
+fn context_key(app: &Application) -> ContextKey {
+    let profile = app.profiles.current();
+    ContextKey {
+        workdir: active_workdir(app),
+        guid: profile.guid.clone(),
+        user_name: profile.user_name.clone(),
+        user_email: profile.user_email.clone(),
     }
+}
+
+/// The user and repository the pages describe, read now (the git configuration's user.name / user.email can
+/// change under the cache of [`context`]).
+fn read_context(app: &Application) -> Context {
     let mut context = Context::default();
     if let Some(state) = app.active() {
         context.author = state.repo.default_author().unwrap_or_default();
@@ -258,12 +272,29 @@ pub(super) fn context(app: &mut Application) -> Context {
             .to_string_lossy()
             .replace('/', std::path::MAIN_SEPARATOR_STR);
     }
+    let profile = app.profiles.current();
     if context.author.email.is_empty() {
-        context.author.email = app.profiles.current().user_email.clone();
+        context.author.email.clone_from(&profile.user_email);
+    }
+    if context.author.name.is_empty() {
+        context.author.name.clone_from(&profile.user_name);
     }
     context.home = imgit_platform::system::home_directory()
         .to_string_lossy()
         .into_owned();
+    context
+}
+
+/// The user and repository the pages describe, read again when the active repository or the current profile (or
+/// its name / email) changes. What an action uses to make a key (an identity) is read with [`read_context`].
+pub(super) fn context(app: &mut Application) -> Context {
+    let key = context_key(app);
+    if let Some((cached_for, context)) = &app.panels.preferences.context
+        && *cached_for == key
+    {
+        return context.clone();
+    }
+    let context = read_context(app);
     app.panels.preferences.context = Some((key, context.clone()));
     context
 }
@@ -409,9 +440,14 @@ pub(super) fn set_signing_key(app: &mut Application, option: &str) {
     let key = if ssh_signing(app) {
         option
     } else {
-        option.split(' ').next().unwrap_or(option)
+        gpg_key_id(option)
     };
     set_git_value(app, Scope::Global, "user.signingkey", key);
+}
+
+/// The key id of a GPG option ("<key id> <user id>").
+fn gpg_key_id(option: &str) -> &str {
+    option.split(' ').next().unwrap_or(option)
 }
 
 /// The option `key` (user.signingkey) names among `options`: by its key id (long, short or the fingerprint) or
@@ -442,7 +478,7 @@ pub(super) fn generate_ssh_key(app: &mut Application) {
             .push(ToastKind::Info, "An SSH key is already being generated");
         return;
     }
-    let context = context(app);
+    let context = read_context(app);
     app.run_in_background("ssh-generate", move || -> Completion {
         let folder = Path::new(&context.home).join(".ssh");
         let _ = fs::create_dir_all(&folder);
@@ -499,7 +535,15 @@ pub(super) fn generate_gpg_key(app: &mut Application, passphrase: &str) {
             .push(ToastKind::Info, "A GPG key is already being generated");
         return;
     }
-    let author = context(app).author;
+    if ssh_signing(app) {
+        app.toasts.push_with_detail(
+            ToastKind::Error,
+            "Could not generate a GPG key",
+            "Commits are signed with an SSH key (gpg.format is ssh); a GPG key could not sign them.",
+        );
+        return;
+    }
+    let author = read_context(app).author;
     if author.email.is_empty() {
         app.toasts.push_with_detail(
             ToastKind::Error,
@@ -570,7 +614,13 @@ pub(super) fn generate_gpg_key(app: &mut Application, passphrase: &str) {
             });
         };
         Box::new(move |app: &mut Application| {
-            set_signing_key(app, &newest.label);
+            // Only the key id is user.signingkey, whatever the label (or gpg.format) says.
+            set_git_value(
+                app,
+                Scope::Global,
+                "user.signingkey",
+                gpg_key_id(&newest.label),
+            );
             refresh_signing_keys(app);
             app.toasts.push_with_detail(
                 ToastKind::Success,
@@ -644,8 +694,16 @@ pub(super) fn initialize_gitflow(app: &mut Application) {
         app.toasts
             .push_with_detail(ToastKind::Error, "Could not initialize Gitflow", detail);
     };
-    if main_branch == develop {
-        fail(app, "The main and develop branches must differ.".to_owned());
+    // The version tag prefix may be empty; the others fall back to their defaults.
+    let prefixes: [String; 4] = [2, 3, 4, 5].map(|i| {
+        if i == 5 {
+            values[i].clone()
+        } else {
+            setting(i)
+        }
+    });
+    if let Err(detail) = check_gitflow_fields(&main_branch, &develop, &prefixes) {
+        fail(app, detail);
         return;
     }
     app.with_active(|app, state| {
@@ -657,30 +715,86 @@ pub(super) fn initialize_gitflow(app: &mut Application) {
             return;
         }
         let mut runs: Vec<Vec<String>> = Vec::new();
-        for (i, field) in GITFLOW_FIELDS.iter().enumerate() {
-            // The version tag prefix may be empty; the others fall back to their defaults.
-            let value = if i == 5 {
-                values[i].clone()
-            } else {
-                setting(i)
-            };
-            runs.push(vec!["config".to_owned(), field.key.to_owned(), value]);
-        }
-        runs.push(vec![
-            "config".to_owned(),
-            "gitflow.prefix.support".to_owned(),
-            "support/".to_owned(),
-        ]);
+        // The branch first: the sequence stops at a failure, so the configuration is only written once the
+        // develop branch exists.
         if state.find_ref(&format!("refs/heads/{develop}")).is_none() {
             runs.push(vec![
                 "branch".to_owned(),
+                "--".to_owned(),
                 develop.clone(),
                 main_branch.clone(),
             ]);
         }
+        let configured = [main_branch.as_str(), develop.as_str()]
+            .into_iter()
+            .chain(prefixes.iter().map(String::as_str));
+        for (field, value) in GITFLOW_FIELDS.iter().zip(configured) {
+            runs.push(vec![
+                "config".to_owned(),
+                "--".to_owned(),
+                field.key.to_owned(),
+                value.to_owned(),
+            ]);
+        }
+        runs.push(
+            ["config", "--", "gitflow.prefix.support", "support/"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
         app.run_git_cli_sequence(state, "Initialize Gitflow", runs);
     });
     app.panels.preferences.git.invalidate();
+}
+
+/// Whether `name` is a valid branch name by `git check-ref-format --branch`'s rules (and not an option).
+fn is_valid_branch_name(name: &str) -> bool {
+    if name.is_empty() || name.starts_with('-') || name == "@" {
+        return false;
+    }
+    if name.starts_with('/') || name.ends_with('/') || name.ends_with('.') || name.contains("//") {
+        return false;
+    }
+    if name.contains("..") || name.contains("@{") {
+        return false;
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
+    {
+        return false;
+    }
+    name.split('/')
+        .all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
+}
+
+/// The Gitflow page's values checked before anything runs: both branch names must be valid, distinct branch
+/// names (they are passed to `git branch`), and each prefix (feature, release, hotfix, version tag; empty
+/// allowed) must not look like an option, hold whitespace or control characters, and keep names valid.
+pub(super) fn check_gitflow_fields(
+    main_branch: &str,
+    develop: &str,
+    prefixes: &[String; 4],
+) -> Result<(), String> {
+    for (label, name) in [("main", main_branch), ("develop", develop)] {
+        if !is_valid_branch_name(name) {
+            return Err(format!("'{name}' is not a valid {label} branch name."));
+        }
+    }
+    if main_branch == develop {
+        return Err("The main and develop branches must differ.".to_owned());
+    }
+    for (label, prefix) in ["feature", "release", "hotfix", "version tag"]
+        .into_iter()
+        .zip(prefixes)
+    {
+        let bad = prefix.starts_with('-')
+            || prefix.chars().any(|c| c.is_control() || c.is_whitespace())
+            || (!prefix.is_empty() && !is_valid_branch_name(&format!("{prefix}x")));
+        if bad {
+            return Err(format!("'{prefix}' is not a valid {label} prefix."));
+        }
+    }
+    Ok(())
 }
 
 /// A commit template's text as the summary line and the description (the blank lines between them dropped).
@@ -775,6 +889,32 @@ mod tests {
             ]
         );
         assert!(parse_secret_keys("").is_empty());
+    }
+
+    #[test]
+    fn gitflow_fields_are_checked() {
+        let ok = ["feature/", "release/", "hotfix/", ""].map(str::to_owned);
+        assert!(check_gitflow_fields("main", "develop", &ok).is_ok());
+        for bad in [
+            "-D", "", "a b", "a..b", "x.lock", "/a", "a/", "@", "a~1", "a:b",
+        ] {
+            assert!(check_gitflow_fields(bad, "develop", &ok).is_err(), "{bad}");
+            assert!(check_gitflow_fields("main", bad, &ok).is_err(), "{bad}");
+        }
+        assert!(check_gitflow_fields("main", "main", &ok).is_err());
+        for bad in ["-f", "a b", "a\tb", "x..", ".hid/"] {
+            let prefixes = [bad, "r/", "h/", ""].map(str::to_owned);
+            assert!(
+                check_gitflow_fields("main", "develop", &prefixes).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gpg_option_stores_only_its_key_id() {
+        assert_eq!(gpg_key_id("ABCD1234EF Name <a@b.c>"), "ABCD1234EF");
+        assert_eq!(gpg_key_id("ABCD1234EF"), "ABCD1234EF");
     }
 
     #[test]

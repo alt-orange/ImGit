@@ -7,6 +7,7 @@ use crate::app::application::Application;
 use crate::app::dialog::DialogKind;
 use crate::ui::Cx;
 use crate::ui::menu::menu_open;
+use crate::ui::panels::file_editor::navigate_from_editor;
 use crate::ui::panels::repo_management::favorite_repositories;
 
 const CTRL: KeyMods = KeyMods::CTRL;
@@ -144,7 +145,8 @@ impl Application {
                 self.active_tab = Some(i);
             }
         }
-        if workdir.is_some() {
+        // Preferences and Repository Management cover the tab: its shortcuts would act on a hidden repository.
+        if workdir.is_some() && !self.preferences_open && !self.repo_management_open {
             self.with_active(|app, state| app.handle_repo_shortcuts(cx, state));
         }
     }
@@ -172,8 +174,10 @@ impl Application {
             self.run_git_cli(state, "Fetch", ["fetch", "--all", "--prune"]);
         }
         if chord(cx, CTRL, Key::F) {
+            // Leftover text searches again: the match list was cleared when the bar closed.
             state.search_open = true;
             state.search_focus_requested = true;
+            state.run_search();
         }
         if chord(cx, CTRL, Key::Z) {
             self.undo(state);
@@ -181,11 +185,11 @@ impl Application {
         if chord(cx, CTRL, Key::Y) || chord(cx, CTRL | SHIFT, Key::Z) {
             self.redo(state);
         }
-        if chord(cx, CTRL | SHIFT, Key::S) {
+        if chord(cx, CTRL | SHIFT, Key::S) && !self.refuse_while_busy(state) {
             let result = state.repo.stage_all();
             self.run(state, "Stage all", result, None);
         }
-        if chord(cx, CTRL | SHIFT, Key::U) {
+        if chord(cx, CTRL | SHIFT, Key::U) && !self.refuse_while_busy(state) {
             let result = state.repo.unstage_all();
             self.run(state, "Unstage all", result, None);
         }
@@ -209,14 +213,10 @@ impl Application {
             } else if state.file_history.is_some() {
                 state.close_file_history();
             } else if state.diff_target.is_some() {
-                // Unsaved edits close with the editor's Cancel only.
-                if state
-                    .file_edit
-                    .as_ref()
-                    .is_none_or(|edit| edit.text == edit.saved)
-                {
-                    state.close_diff();
-                }
+                // Unsaved edits in the file editor are asked about first (Discard Changes).
+                navigate_from_editor(self, state, |_app, state| {
+                    let _ = state.close_diff();
+                });
             } else if state.rebase.active && state.rebase.editing.is_some() {
                 state.rebase.editing = None; // closes the reword editor only
             } else if state.rebase.active {

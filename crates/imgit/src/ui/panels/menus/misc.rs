@@ -7,7 +7,9 @@ use dear_imgui_rs::Key;
 use imgit_app::RepoState;
 use imgit_git::{Ref, RefType, Worktree};
 
-use super::shared::{confirm, repo_item, toggle_hide_item, toggle_solo_item, workdir_of};
+use super::shared::{
+    confirm, fetch_args, repo_item, repo_view_item, toggle_hide_item, toggle_solo_item, workdir_of,
+};
 use crate::app::application::Application;
 use crate::app::dialog::DialogKind;
 use crate::app::settings::Settings;
@@ -156,7 +158,7 @@ pub fn worktree_menu(
     let (path, name) = (worktree.path.clone(), worktree.name.clone());
     let remove = |label: &str, force: bool| {
         let (path, name) = (path.clone(), name.clone());
-        repo_item(label, &workdir, move |_cx, app, state| {
+        repo_view_item(label, &workdir, move |_cx, app, state| {
             app.dialog.open(DialogKind::Confirm);
             let workdir = state.repo.workdir().to_path_buf();
             app.dialog.workdir = Some(workdir.clone());
@@ -171,11 +173,13 @@ pub fn worktree_menu(
             app.dialog.confirm_label = "Remove".to_owned();
             app.dialog.danger = true;
             app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
-                app.with_repo(&workdir, |app, tab| {
+                app.with_idle_repo(&workdir, |app, tab| {
                     let mut args = vec!["worktree".to_owned(), "remove".to_owned()];
                     if force {
                         args.push("--force".to_owned());
                     }
+                    // `--`: a folder that starts with '-' is not an option.
+                    args.push("--".to_owned());
                     args.push(path);
                     app.run_git_cli(tab, "Remove worktree", args);
                 });
@@ -224,7 +228,9 @@ pub fn remote_menu(
             format!("Fetch {name}"),
             &workdir,
             move |_cx, app, state| {
-                app.run_git_cli(state, "Fetch", ["fetch", fetch_name.as_str(), "--prune"]);
+                let mut args = fetch_args(&fetch_name);
+                args.insert(1, "--prune".to_owned());
+                app.run_git_cli(state, "Fetch", args);
             },
         )],
         vec![
@@ -243,7 +249,7 @@ pub fn remote_menu(
                     "Remove",
                     true,
                     move |_cx, app| {
-                        app.with_repo(&remove_workdir, |app, state| {
+                        app.with_idle_repo(&remove_workdir, |app, state| {
                             let result = state.repo.remove_remote(&remote);
                             app.run(
                                 state,
@@ -291,7 +297,7 @@ pub fn local_folder_menu(
         format!("Delete {} branches in folder \"{folder}\"", branches.len())
     };
     let folder = folder.to_owned();
-    vec![repo_item(
+    vec![repo_view_item(
         label,
         state.repo.workdir(),
         move |_cx, app, state| {
@@ -304,7 +310,7 @@ pub fn local_folder_menu(
                 "Delete",
                 true,
                 move |_cx, app| {
-                    app.with_repo(&workdir, |app, state| {
+                    app.with_idle_repo(&workdir, |app, state| {
                         for branch in &branches {
                             if let Err(error) = state.repo.delete_branch(branch) {
                                 app.toasts.push_with_detail(
@@ -359,7 +365,7 @@ pub fn left_section_menu(
     // The section's workflows: Clean Up Branches under LOCAL, Start Feature / Release / Hotfix under GITFLOW.
     let mut workflows = MenuItems::new();
     if section == "Local" {
-        workflows.push(repo_item(
+        workflows.push(repo_view_item(
             "Clean Up Branches...",
             &workdir,
             |cx, app, state| {
@@ -384,7 +390,7 @@ pub fn left_section_menu(
             .any(|r| in_section(section, r) && state.hidden_refs.contains(&r.full_name));
         let set_all = |label: &str, hide: bool, enabled: bool| {
             let section = section.to_owned();
-            repo_item(label, &workdir, move |_cx, _app, state| {
+            repo_view_item(label, &workdir, move |_cx, _app, state| {
                 for reference in &state.history.refs {
                     if !in_section(&section, reference) {
                         continue;
@@ -404,7 +410,7 @@ pub fn left_section_menu(
         visibility.push(set_all(show, false, any_hidden));
     }
     let section_name = section.to_owned();
-    let maximize = vec![repo_item(
+    let maximize = vec![repo_view_item(
         "Maximize this section",
         &workdir,
         move |_cx, _app, state| {

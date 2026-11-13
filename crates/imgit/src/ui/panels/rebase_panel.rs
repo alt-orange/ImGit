@@ -11,7 +11,7 @@ use dear_imgui_rs::{
     Condition, InputTextFlags, Key, MouseButton, StyleColor, StyleVar, WindowFlags,
 };
 use imgit_app::RepoState;
-use imgit_app::repo_state::{RebasePlan, UndoEntry};
+use imgit_app::repo_state::{AUTO_STASH_BEFORE_UNDO, RebasePlan, UndoEntry, with_changes_stashed};
 use imgit_git::{RebaseAction, RebaseStep, ResetMode};
 
 use crate::app::application::Application;
@@ -432,8 +432,22 @@ fn draw_panel(
     }
 }
 
+/// The undo of a rebase: a hard reset to where HEAD was. Uncommitted changes made since are stashed around
+/// it and put back, so the reset does not wipe them; when they cannot be set aside the undo stops with a
+/// message and changes nothing (a pop that conflicts is an error naming the stash that holds them).
+fn rebase_undo_entry(previous: String) -> UndoEntry {
+    UndoEntry::new("interactive rebase", move |repo| {
+        with_changes_stashed(repo, AUTO_STASH_BEFORE_UNDO, true, |repo| {
+            repo.reset(&previous, ResetMode::Hard)
+        })
+    })
+}
+
 /// Start Rebase: rewrites the history, with an undo entry that resets to where HEAD was.
 fn start_rebase(app: &mut Application, ui_state: &mut State, state: &mut RepoState) {
+    if app.refuse_while_busy(state) {
+        return;
+    }
     let base = state.rebase.base.clone();
     let steps: Vec<RebaseStep> = state
         .rebase
@@ -452,9 +466,7 @@ fn start_rebase(app: &mut Application, ui_state: &mut State, state: &mut RepoSta
         }
         Ok(()) => {
             if let Some(previous) = previous {
-                state.push_undo(UndoEntry::new("interactive rebase", move |repo| {
-                    repo.reset(&previous, ResetMode::Hard)
-                }));
+                state.push_undo(rebase_undo_entry(previous));
             }
             app.toasts.push(ToastKind::Success, "Rebase complete");
             state.rebase = RebasePlan::default();
@@ -1004,6 +1016,70 @@ fn draw_footer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undoing_a_rebase_keeps_the_changes_made_since() {
+        let scratch = tempfile::tempdir().unwrap();
+        let repo = imgit_git::Repository::init(scratch.path()).unwrap();
+        repo.set_local_config("user.name", Some("Test")).unwrap();
+        repo.set_local_config("user.email", Some("test@example.com"))
+            .unwrap();
+        repo.set_local_config("core.autocrlf", Some("false"))
+            .unwrap();
+        let write =
+            |name: &str, text: &str| std::fs::write(scratch.path().join(name), text).unwrap();
+        let read = |name: &str| std::fs::read_to_string(scratch.path().join(name)).unwrap();
+        write(
+            "file.txt", "one
+",
+        );
+        write(
+            "other.txt",
+            "o
+",
+        );
+        repo.stage(&["file.txt", "other.txt"]).unwrap();
+        repo.commit("first", false).unwrap();
+        let first = RepoState::new(imgit_git::Repository::open(scratch.path()).unwrap())
+            .history
+            .head_sha
+            .unwrap();
+        write(
+            "file.txt", "two
+",
+        );
+        repo.stage(&["file.txt"]).unwrap();
+        repo.commit("second", false).unwrap();
+        let second = RepoState::new(imgit_git::Repository::open(scratch.path()).unwrap())
+            .history
+            .head_sha
+            .unwrap();
+        // The "rebase" moved HEAD (here: back to the first commit) and work went on: a tracked file changed.
+        repo.reset(&first, ResetMode::Hard).unwrap();
+        write(
+            "other.txt",
+            "edited since
+",
+        );
+        let mut entry = rebase_undo_entry(second.clone());
+        (entry.undo)(&repo).unwrap();
+        let head = RepoState::new(imgit_git::Repository::open(scratch.path()).unwrap())
+            .history
+            .head_sha
+            .unwrap();
+        assert_eq!(head, second);
+        assert_eq!(
+            read("file.txt"),
+            "two
+"
+        );
+        // A hard reset alone would have given "o" back.
+        assert_eq!(
+            read("other.txt"),
+            "edited since
+"
+        );
+    }
 
     #[test]
     fn splits_and_joins_messages() {

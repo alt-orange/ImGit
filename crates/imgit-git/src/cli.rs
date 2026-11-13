@@ -46,6 +46,9 @@ pub struct Credential {
 pub struct RunOptions<'a> {
     /// Written to git's stdin (closed after it).
     pub input: &'a str,
+    /// Raw bytes written to git's stdin instead of `input` (which they take precedence over): for data that
+    /// is not necessarily UTF-8, such as a patch of a binary-ish file.
+    pub input_bytes: Option<&'a [u8]>,
     /// Answers to git's username / password prompts.
     pub credentials: &'a [Credential],
     /// Called from the running thread with each chunk of git's output as it arrives.
@@ -145,7 +148,7 @@ where
         workdir,
         &command,
         process::RunOptions {
-            input: options.input.as_bytes(),
+            input: options.input_bytes.unwrap_or(options.input.as_bytes()),
             environment: &environment,
             on_output,
         },

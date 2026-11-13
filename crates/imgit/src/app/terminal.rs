@@ -16,6 +16,27 @@ const DEFAULT_COLUMNS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 const SCROLLBACK: usize = 5000;
 
+/// The most input kept for a shell that has not started yet.
+const MAX_PENDING_INPUT: usize = 64 * 1024;
+
+/// Appends `text` to `pending` without letting it pass [`MAX_PENDING_INPUT`]; what does not fit is dropped.
+fn push_pending(pending: &mut String, text: &str) {
+    let room = MAX_PENDING_INPUT.saturating_sub(pending.len());
+    let mut end = text.len().min(room);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    pending.push_str(&text[..end]);
+}
+
+/// The active tab after the session at `removed` was taken out of `remaining` ones: a tab before the active one
+/// shifts it left, so the same shell stays selected; the active shell itself exiting selects the one that took
+/// its place (the last when it was the last).
+fn active_after_removal(active: usize, removed: usize, remaining: usize) -> usize {
+    let active = if removed < active { active - 1 } else { active };
+    active.min(remaining.saturating_sub(1))
+}
+
 /// A selection in line ids (`Screen::first_line_id()` based) and columns: anchor then head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
@@ -68,14 +89,16 @@ impl TerminalSession {
         self.console.is_some()
     }
 
-    /// Types `text` into the shell; before it has started the keystrokes wait in `pending_input`.
+    /// Types `text` into the shell; before it has started the keystrokes wait in `pending_input` (up to
+    /// [`MAX_PENDING_INPUT`]). A shell that could not start takes none.
     pub fn write(&mut self, text: &str) {
         match &mut self.console {
             // A shell that has ended takes no input; the poll closes its tab.
             Some(console) => {
                 let _ = console.write(text.as_bytes());
             }
-            None => self.pending_input.push_str(text),
+            None if self.failed => {}
+            None => push_pending(&mut self.pending_input, text),
         }
     }
 
@@ -218,7 +241,7 @@ impl Application {
             while i < tabs.sessions.len() {
                 if tabs.sessions[i].pump() {
                     tabs.sessions.remove(i);
-                    tabs.active = tabs.active.min(tabs.sessions.len().saturating_sub(1));
+                    tabs.active = active_after_removal(tabs.active, i, tabs.sessions.len());
                     hide |= tabs.sessions.is_empty()
                         && active_workdir
                             .as_deref()
@@ -231,5 +254,40 @@ impl Application {
         if hide {
             self.show_terminal_panel = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_selected_shell_stays_selected_when_an_earlier_one_exits() {
+        // Three shells, the third selected; the first exits: the same shell is now the second.
+        assert_eq!(active_after_removal(2, 0, 2), 1);
+        // A later one exits: nothing moves.
+        assert_eq!(active_after_removal(0, 2, 2), 0);
+        // The selected one exits: the one that took its place, or the last.
+        assert_eq!(active_after_removal(1, 1, 2), 1);
+        assert_eq!(active_after_removal(2, 2, 2), 1);
+        // The only shell.
+        assert_eq!(active_after_removal(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn a_failed_shell_takes_no_input_and_a_waiting_one_a_bounded_amount() {
+        let mut failed = TerminalSession::new(PathBuf::new());
+        failed.failed = true;
+        failed.write("ls\r");
+        assert!(failed.pending_input.is_empty());
+
+        let mut waiting = TerminalSession::new(PathBuf::new());
+        waiting.write("ls\r");
+        assert_eq!(waiting.pending_input, "ls\r");
+        for _ in 0..100 {
+            waiting.write(&"é".repeat(1000));
+        }
+        assert!(waiting.pending_input.len() <= MAX_PENDING_INPUT);
+        assert!(waiting.pending_input.len() >= MAX_PENDING_INPUT - 1);
     }
 }

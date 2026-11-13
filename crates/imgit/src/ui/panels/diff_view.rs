@@ -7,7 +7,7 @@ use imgit_app::RepoState;
 use imgit_app::repo_state::{DiffMode, DiffSource, DiffTarget, WIP_SHA};
 use imgit_app::syntax::SyntaxDiff;
 use imgit_git::repository::{LineSelection, short_sha};
-use imgit_git::{Blame, BlameHunk, DiffLine, FileDiff, FileStatus, LineOrigin, Sha};
+use imgit_git::{Blame, BlameHunk, DiffLine, FileDiff, FileStatus, LineOrigin, Revision, Sha};
 use imgit_syntax::{DiffCache, DiffSpans};
 
 use crate::app::application::Application;
@@ -16,7 +16,7 @@ use crate::app::toasts::ToastKind;
 use crate::fonts::Font;
 use crate::theme::{Color, FONT_SIZE_ROW, GRAPH_COLOR_COUNT, Ink};
 use crate::ui::draw::DrawList;
-use crate::ui::panels::file_editor::open_file_editor;
+use crate::ui::panels::file_editor::{navigate_from_editor, open_file_editor};
 use crate::ui::widgets::file_name;
 use crate::ui::{Cx, Vec2, vec2};
 
@@ -64,6 +64,19 @@ struct EditorMemory {
     syntax: DiffCache,
     /// The row the last line-staging click was on.
     anchor: Option<usize>,
+    /// The diff `anchor` was clicked in.
+    anchor_revision: Option<Revision>,
+}
+
+impl EditorMemory {
+    /// Forgets the anchor when the editor shows another load of the diff than the one it was clicked in: the
+    /// picked lines are cleared then (`draw_contents`), and a shift-click must not extend from a stale row.
+    fn follow_revision(&mut self, revision: Option<Revision>) {
+        if self.anchor_revision != revision {
+            self.anchor_revision = revision;
+            self.anchor = None;
+        }
+    }
 }
 
 impl DiffEditors {
@@ -1125,6 +1138,7 @@ pub fn draw_diff_editor<'a>(
         return None;
     };
     let mut memory = cx.state.diff_editors.take(options.id);
+    memory.follow_revision(diff.revision);
     let clicked = draw_lines(cx, diff, min, max, options, &mut memory);
     cx.state.diff_editors.put(options.id, memory);
     clicked
@@ -1367,6 +1381,9 @@ fn apply_lines(
     lines: &[LineSelection],
     unstaging: bool,
 ) {
+    if app.refuse_while_busy(state) {
+        return;
+    }
     let result = state.repo.apply_lines(path, lines, unstaging);
     app.run(
         state,
@@ -1660,20 +1677,10 @@ fn draw_contents(
     // shortcuts, with their guards.
     let cross = vec2(origin.x + size.x - cx.px(30.0), origin.y + cx.px(7.5));
     if close_cross(cx, draw, "##close_diff", cross) {
-        match &state.file_edit {
-            Some(edit) if edit.text != edit.saved => {
-                let workdir = state.repo.workdir().to_path_buf();
-                app.dialog.open(DialogKind::Confirm);
-                app.dialog.title = "Discard Changes".to_owned();
-                app.dialog.message = format!("Discard your unsaved changes to {}?", edit.path);
-                app.dialog.confirm_label = "Discard".to_owned();
-                app.dialog.danger = true;
-                app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
-                    app.with_repo(&workdir, |_app, state| state.close_diff());
-                }));
-            }
-            _ => state.close_diff(),
-        }
+        // Unsaved text in the file editor is asked about first.
+        navigate_from_editor(app, state, |_app, state| {
+            let _ = state.close_diff();
+        });
         return;
     }
     let mut encoding_right = cross.x - cx.px(10.0);
@@ -1689,24 +1696,31 @@ fn draw_contents(
             stage_button(cx, "##stage_file", label, tone, origin.y, encoding_right);
         if clicked {
             let path = target.path.clone();
-            let (result, what, next) = if unstaging {
-                (
-                    state.repo.unstage(&[path.as_str()]),
-                    "Unstage",
-                    DiffSource::Unstaged,
-                )
-            } else {
-                (
-                    state.repo.stage(&[path.as_str()]),
-                    "Stage",
-                    DiffSource::Staged,
-                )
-            };
-            app.run(state, what, result, None);
-            state.open_diff(DiffTarget {
-                source: next,
-                path,
-                status: target.status,
+            let status = target.status;
+            // Unsaved text in the file editor is asked about first: the diff changes sides below it.
+            navigate_from_editor(app, state, move |app, state| {
+                if app.refuse_while_busy(state) {
+                    return;
+                }
+                let (result, what, next) = if unstaging {
+                    (
+                        state.repo.unstage(&[path.as_str()]),
+                        "Unstage",
+                        DiffSource::Unstaged,
+                    )
+                } else {
+                    (
+                        state.repo.stage(&[path.as_str()]),
+                        "Stage",
+                        DiffSource::Staged,
+                    )
+                };
+                app.run(state, what, result, None);
+                let _ = state.open_diff(DiffTarget {
+                    source: next,
+                    path,
+                    status,
+                });
             });
             return;
         }
@@ -2071,5 +2085,19 @@ mod tests {
         staging.click(&rows, 2, false);
         assert_eq!(staging.picked.len(), 2);
         assert_eq!(*staging.anchor, Some(2));
+    }
+
+    #[test]
+    fn the_anchor_does_not_survive_a_reload_of_the_diff() {
+        let (first, second) = (Revision::next(), Revision::next());
+        let mut memory = EditorMemory::default();
+        memory.follow_revision(Some(first));
+        memory.anchor = Some(4);
+        // Drawn again, same load: kept.
+        memory.follow_revision(Some(first));
+        assert_eq!(memory.anchor, Some(4));
+        // Another load: forgotten, with the selection `draw_contents` clears.
+        memory.follow_revision(Some(second));
+        assert_eq!(memory.anchor, None);
     }
 }

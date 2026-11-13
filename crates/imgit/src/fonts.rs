@@ -208,6 +208,51 @@ fn em_scale_from_file(data: &[u8], font_no: usize) -> Option<f32> {
     (units_per_em != 0 && line_height != 0).then(|| line_height as f32 / units_per_em as f32)
 }
 
+/// Whether the first face of the TrueType / OpenType file `data` is complete enough to be loaded: every table
+/// of its directory lies inside the file, and the tables a rasteriser needs are there (`head` with its magic
+/// number, `maxp`, `cmap`, `hhea`, `hmtx`, and TrueType outlines or CFF ones). What a loader rejects (and
+/// dear-imgui-rs turns into a panic) is a truncated or damaged file; this finds it first. Applied to the files
+/// the user chose, not to the ones that ship with the app or the system.
+fn is_loadable_font(data: &[u8]) -> bool {
+    let u16_at = |at: usize| Some(u16::from_be_bytes(data.get(at..at + 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?));
+    let check = || -> Option<bool> {
+        if !is_sfnt(data) {
+            return Some(false);
+        }
+        let base = if u32_at(0)? == 0x7474_6366 {
+            u32_at(12)? as usize
+        } else {
+            0
+        };
+        let mut tags = Vec::new();
+        let mut head = None;
+        for index in 0..usize::from(u16_at(base.checked_add(4)?)?) {
+            let record = base.checked_add(12 + 16 * index)?;
+            let tag = u32_at(record)?.to_be_bytes();
+            let offset = u32_at(record + 8)? as usize;
+            let length = u32_at(record + 12)? as usize;
+            if offset.checked_add(length)? > data.len() {
+                return Some(false);
+            }
+            if &tag == b"head" {
+                head = Some((offset, length));
+            }
+            tags.push(tag);
+        }
+        let has = |tag: &[u8; 4]| tags.contains(tag);
+        let (head, head_length) = head?;
+        let outlines = (has(b"glyf") && has(b"loca")) || has(b"CFF ") || has(b"CFF2");
+        Some(
+            head_length >= 54
+                && u32_at(head + 12)? == 0x5F0F_3CF5
+                && outlines
+                && [b"maxp", b"cmap", b"hhea", b"hmtx"].into_iter().all(has),
+        )
+    };
+    check().unwrap_or(false)
+}
+
 /// Whether `data` starts like a font file a loader may be handed: TrueType, OpenType (CFF) or a collection.
 fn is_sfnt(data: &[u8]) -> bool {
     matches!(
@@ -335,11 +380,23 @@ pub fn load_fonts(
     let mono = system(imgui, SystemFont::Monospace, FONT_SIZE_SMALL).unwrap_or(regular);
     let ui_font = system(imgui, SystemFont::Ui, FONT_SIZE_SMALL).unwrap_or(regular);
     let arial = system(imgui, SystemFont::Arial, FONT_SIZE_SMALL).unwrap_or(regular);
+    // The user's file when it is a font the loader accepts (a damaged one would make `add_font` panic), else
+    // the system's monospace face, in an ImFont of its own.
     let preferred_mono = |imgui: &Context, preference: Option<&PathBuf>| {
-        preference
-            .cloned()
-            .or_else(|| system_font_file(SystemFont::Monospace))
-            .and_then(|path| from_file(imgui, &path, FONT_SIZE_SMALL))
+        let chosen = preference.and_then(|path| {
+            let data = fs::read(path).ok()?;
+            if !is_loadable_font(&data) {
+                eprintln!(
+                    "imgit: {} is not a usable font; using the system monospace face",
+                    path.display()
+                );
+                return None;
+            }
+            let name = path.file_stem()?.to_string_lossy().into_owned();
+            add_font(imgui, &name, &data, FONT_SIZE_SMALL, grayscale)
+        });
+        chosen
+            .or_else(|| system(imgui, SystemFont::Monospace, FONT_SIZE_SMALL))
             .unwrap_or(mono)
     };
     let editor = preferred_mono(imgui, request.editor.as_ref());
@@ -410,6 +467,38 @@ mod tests {
         }
         assert_eq!(em_scale_from_file(b"not a font", 0), None);
         assert!(!is_sfnt(b"PNG"));
+    }
+
+    #[test]
+    fn rejects_truncated_and_damaged_font_files() {
+        let data = assets::data("fonts/OpenSans-Regular.ttf").expect("embedded");
+        assert!(is_loadable_font(data));
+        // Cut anywhere past the header, the table directory or a table runs off the end.
+        for length in [0, 3, 4, 12, 100, data.len() / 2, data.len() - 1] {
+            assert!(!is_loadable_font(&data[..length]), "{length} bytes");
+        }
+        // Wrong head magic, and a table count that promises more than the file has.
+        let mut damaged = data.to_vec();
+        let head = (0..usize::from(u16::from_be_bytes([damaged[4], damaged[5]])))
+            .map(|index| 12 + 16 * index)
+            .find(|&record| &damaged[record..record + 4] == b"head")
+            .expect("head table");
+        let offset = u32::from_be_bytes(damaged[head + 8..head + 12].try_into().unwrap()) as usize;
+        damaged[offset + 12] ^= 0xFF;
+        assert!(!is_loadable_font(&damaged));
+        let mut many = data.to_vec();
+        many[4..6].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert!(!is_loadable_font(&many));
+        assert!(!is_loadable_font(b"not a font"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn accepts_the_system_faces() {
+        for font in [SystemFont::Ui, SystemFont::Monospace, SystemFont::Arial] {
+            let data = fs::read(system_font_file(font).expect("installed")).expect("readable");
+            assert!(is_loadable_font(&data));
+        }
     }
 
     #[cfg(windows)]

@@ -30,7 +30,11 @@ pub fn contains_ci(haystack: &str, needle: &str) -> bool {
             .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
-/// Subsequence fuzzy match score, higher is better; below 0 when `needle` does not match.
+/// The lowest score of a haystack that matches.
+const MIN_MATCH_SCORE: i32 = 1;
+
+/// Subsequence fuzzy match score, higher is better; below 0 when `needle` does not match, and at least 1 when it
+/// does (the length penalties stop there, so a match in a very long haystack still counts as one).
 ///
 /// A haystack containing the needle outright scores highest (shorter haystacks first); otherwise each needle
 /// character (spaces skipped) must appear in order, runs of consecutive hits scoring more.
@@ -41,7 +45,7 @@ pub fn fuzzy_score(haystack: &str, needle: &str) -> i32 {
     }
     let length = i32::try_from(haystack.len()).unwrap_or(i32::MAX);
     if contains_ci(haystack, needle) {
-        return 1000 - length;
+        return (1000 - length).max(MIN_MATCH_SCORE);
     }
     let mut score = 0;
     let mut streak = 0;
@@ -64,7 +68,7 @@ pub fn fuzzy_score(haystack: &str, needle: &str) -> i32 {
             return -1;
         }
     }
-    score - length / 4
+    (score - length / 4).max(MIN_MATCH_SCORE)
 }
 
 #[cfg(test)]
@@ -110,5 +114,18 @@ mod tests {
         assert_eq!(fuzzy_score("src/main.rs", "ma r"), 10 + 15 + 10 - 2);
         assert!(fuzzy_score("src/main.rs", "xyz") < 0);
         assert!(fuzzy_score("abc", "cba") < 0);
+    }
+
+    #[test]
+    fn a_match_never_scores_below_one() {
+        // A long path: the length penalty would pass the hits (and 1000 for a contained needle).
+        let long = format!("{}/target.rs", "dir/".repeat(400));
+        assert!(long.len() > 1000);
+        assert_eq!(fuzzy_score(&long, "target"), 1);
+        assert!(fuzzy_score(&long, "ddt") >= 1);
+        assert_eq!(fuzzy_score(&"x".repeat(5000), "xx"), 1);
+        assert!(fuzzy_score(&long, "zzz") < 0);
+        // Shorter haystacks keep their order.
+        assert!(fuzzy_score("a/target.rs", "target") > fuzzy_score("a/b/c/target.rs", "target"));
     }
 }

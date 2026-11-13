@@ -1,15 +1,19 @@
 //! Author avatars from `https://www.gravatar.com/avatar/<md5(lowercase email)>?d=404&s=N`.
 //!
 //! Images download on a background thread into a disk cache next to the settings; until one is ready (or when
-//! the download fails) callers draw the initials fallback.
+//! the download fails) callers draw the initials fallback. A failed download (offline, a server error, a
+//! timeout) is tried again after a back-off; an address without a Gravatar is remembered on disk for a week.
+//!
+//! The worker touches only [`Shared`] and the cache folder (never a texture), so it can be left running when the
+//! application exits: stopping it does not wait for a download under way.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use dear_imgui_rs::TextureId;
 use imgit_git::Author;
@@ -26,17 +30,47 @@ struct Request {
     key: String,
     email: String,
     size: u32,
+    /// How many earlier tries failed.
+    attempts: u32,
 }
 
 #[derive(Debug)]
 enum Entry {
-    /// Waiting for the worker.
-    Queued,
+    /// Waiting for the worker (after `attempts` failed tries).
+    Queued {
+        attempts: u32,
+    },
     /// Decoded by the worker, waiting for its texture upload on the next frame that asks for it.
     Decoded(Image),
     Ready(TextureId),
-    /// No Gravatar, no network, or not an image: the initials stay.
-    Failed,
+    /// No Gravatar for the address, or no cache folder: the initials stay.
+    Missing,
+    /// No network, a server error, a timeout or not an image: the initials stay until `retry_due`.
+    Failed {
+        since: Instant,
+        attempts: u32,
+    },
+}
+
+/// How long after its `attempts`-th failure a download is tried again: a minute, doubling up to a quarter hour.
+fn retry_delay(attempts: u32) -> Duration {
+    const FIRST: u64 = 60;
+    const CAP: u64 = 15 * 60;
+    let doublings = attempts.saturating_sub(1).min(16);
+    Duration::from_secs((FIRST << doublings).min(CAP))
+}
+
+/// Whether a download that failed `attempts` times, `elapsed` ago, is tried again now.
+fn retry_due(elapsed: Duration, attempts: u32) -> bool {
+    elapsed >= retry_delay(attempts)
+}
+
+/// How long the "no Gravatar" marker file is believed: a newly created Gravatar shows up after that.
+const NONE_MARKER_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Whether a `.none` marker of this age no longer holds.
+fn none_marker_expired(age: Duration) -> bool {
+    age >= NONE_MARKER_LIFETIME
 }
 
 #[derive(Debug, Default)]
@@ -44,7 +78,8 @@ struct State {
     queue: VecDeque<Request>,
     entries: HashMap<String, Entry>,
     cache_dir: Option<PathBuf>,
-    stop: bool,
+    /// Counts the workers stopped so far: a worker started under an older number ends and leaves no trace.
+    generation: u64,
 }
 
 #[derive(Debug, Default)]
@@ -66,7 +101,8 @@ impl Shared {
 #[derive(Debug)]
 pub struct Avatars {
     shared: Arc<Shared>,
-    worker: Option<JoinHandle<()>>,
+    /// Whether a worker of the current generation runs.
+    worker: bool,
     enabled: bool,
 }
 
@@ -115,60 +151,94 @@ fn http_agent() -> ureq::Agent {
         .new_agent()
 }
 
+/// What a download came to.
+enum Download {
+    Done,
+    /// The server has no Gravatar for the address.
+    Missing,
+    Failed,
+}
+
 /// GETs `url` into `file` (through a temporary name, so a cut-off download is never taken for an image).
-fn download(agent: &ureq::Agent, url: &str, file: &Path) -> bool {
+fn download(agent: &ureq::Agent, url: &str, file: &Path) -> Download {
     let Ok(mut response) = agent.get(url).call() else {
-        return false;
+        return Download::Failed;
     };
     match response.status().as_u16() {
         // No Gravatar for the address: remember it, so the initials are drawn without asking again.
         404 => {
             let _ = fs::File::create(with_suffix(file, ".none"));
-            return false;
+            return Download::Missing;
         }
         200 => {}
-        _ => return false,
+        _ => return Download::Failed,
     }
     let Ok(body) = response.body_mut().read_to_vec() else {
-        return false;
+        return Download::Failed;
     };
     if body.is_empty() {
-        return false;
+        return Download::Failed;
     }
     let partial = with_suffix(file, ".part");
-    fs::write(&partial, body).is_ok() && fs::rename(&partial, file).is_ok()
+    if fs::write(&partial, body).is_ok() && fs::rename(&partial, file).is_ok() {
+        Download::Done
+    } else {
+        Download::Failed
+    }
+}
+
+/// Whether the `.none` marker of an address is there and still believed; an expired one is removed.
+fn has_none_marker(marker: &Path) -> bool {
+    let Ok(modified) = fs::metadata(marker).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    let age = modified.elapsed().unwrap_or(Duration::ZERO);
+    if none_marker_expired(age) {
+        let _ = fs::remove_file(marker);
+        return false;
+    }
+    true
 }
 
 fn process(agent: &ureq::Agent, cache_dir: Option<&Path>, request: &Request) -> Entry {
+    let failed = || Entry::Failed {
+        since: Instant::now(),
+        attempts: request.attempts + 1,
+    };
     let Some(cache_dir) = cache_dir else {
-        return Entry::Failed;
+        return Entry::Missing;
     };
     let hash = gravatar_hash(&request.email);
     let _ = fs::create_dir_all(cache_dir);
     let file = cache_dir.join(format!("{hash}-{}.png", request.size));
-    let have = file.exists()
-        || (!with_suffix(&file, ".none").exists()
-            && download(agent, &gravatar_url(&hash, request.size), &file));
-    if !have {
-        return Entry::Failed;
+    if !file.exists() {
+        if has_none_marker(&with_suffix(&file, ".none")) {
+            return Entry::Missing;
+        }
+        match download(agent, &gravatar_url(&hash, request.size), &file) {
+            Download::Done => {}
+            Download::Missing => return Entry::Missing,
+            Download::Failed => return failed(),
+        }
     }
     match load_image(&file, None) {
         Some(image) => Entry::Decoded(image),
         None => {
-            // A file that does not decode (a bad download) goes: the next request downloads it again.
+            // A file that does not decode (a bad download) goes: the retry downloads it again.
             let _ = fs::remove_file(&file);
-            Entry::Failed
+            failed()
         }
     }
 }
 
-fn worker(shared: &Shared) {
+/// The worker of `generation`: ends when `stop_worker` has moved the count on, whatever it is doing by then.
+fn worker(shared: &Shared, generation: u64) {
     let agent = http_agent();
     loop {
         let (request, cache_dir) = {
             let mut state = shared.lock();
             loop {
-                if state.stop {
+                if state.generation != generation {
                     return;
                 }
                 if let Some(request) = state.queue.pop_front() {
@@ -181,7 +251,12 @@ fn worker(shared: &Shared) {
             }
         };
         let entry = process(&agent, cache_dir.as_deref(), &request);
-        shared.lock().entries.insert(request.key, entry);
+        let mut state = shared.lock();
+        if state.generation != generation {
+            // Stopped meanwhile: `shutdown` has reset the entries and the count.
+            return;
+        }
+        state.entries.insert(request.key, entry);
         shared.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -192,7 +267,7 @@ impl Avatars {
     pub fn new() -> Self {
         Self {
             shared: Arc::default(),
-            worker: None,
+            worker: false,
             enabled: true,
         }
     }
@@ -221,35 +296,49 @@ impl Avatars {
         }
         let key = format!("{}#{size}", email.to_ascii_lowercase());
         let mut state = self.shared.lock();
-        let Some(entry) = state.entries.get_mut(&key) else {
-            state.entries.insert(key.clone(), Entry::Queued);
-            state.queue.push_back(Request {
-                key,
-                email: email.to_owned(),
-                size,
-            });
-            self.shared.in_flight.fetch_add(1, Ordering::SeqCst);
-            drop(state);
-            if self.worker.is_none() {
-                let shared = Arc::clone(&self.shared);
-                self.worker = thread::Builder::new()
-                    .name("avatars".to_owned())
-                    .spawn(move || worker(&shared))
-                    .ok();
+        // A first request, or a failed download whose back-off is over, goes to the worker.
+        let attempts = match state.entries.get_mut(&key) {
+            None => 0,
+            Some(Entry::Failed { since, attempts }) if retry_due(since.elapsed(), *attempts) => {
+                *attempts
             }
-            self.shared.wake.notify_one();
-            return None;
+            Some(entry) => {
+                if let Entry::Decoded(image) = entry {
+                    *entry = match textures.create_texture(image.width, image.height, &image.rgba) {
+                        Ok(texture) => Entry::Ready(texture),
+                        Err(_) => Entry::Failed {
+                            since: Instant::now(),
+                            attempts: 1,
+                        },
+                    };
+                }
+                return match entry {
+                    Entry::Ready(texture) => Some(*texture),
+                    _ => None,
+                };
+            }
         };
-        if let Entry::Decoded(image) = entry {
-            *entry = match textures.create_texture(image.width, image.height, &image.rgba) {
-                Ok(texture) => Entry::Ready(texture),
-                Err(_) => Entry::Failed,
-            };
+        state
+            .entries
+            .insert(key.clone(), Entry::Queued { attempts });
+        state.queue.push_back(Request {
+            key,
+            email: email.to_owned(),
+            size,
+            attempts,
+        });
+        self.shared.in_flight.fetch_add(1, Ordering::SeqCst);
+        let generation = state.generation;
+        drop(state);
+        if !self.worker {
+            let shared = Arc::clone(&self.shared);
+            self.worker = thread::Builder::new()
+                .name("avatars".to_owned())
+                .spawn(move || worker(&shared, generation))
+                .is_ok();
         }
-        match entry {
-            Entry::Ready(texture) => Some(*texture),
-            _ => None,
-        }
+        self.shared.wake.notify_one();
+        None
     }
 
     /// Whether downloads are queued or running, or an image waits for its upload (the headless screenshot
@@ -257,7 +346,7 @@ impl Avatars {
     #[must_use]
     pub fn pending(&self) -> bool {
         // Without a worker nothing moves: the queue only drains while one runs.
-        if self.worker.is_none() {
+        if !self.worker {
             return false;
         }
         self.shared.in_flight.load(Ordering::SeqCst) > 0
@@ -269,16 +358,20 @@ impl Avatars {
                 .any(|entry| matches!(entry, Entry::Decoded(_)))
     }
 
+    /// Tells the worker to end and lets go of it: a download under way (up to the client's 30 s timeout) is
+    /// not waited for, and its result is dropped. Safe, as the worker uses no texture or window.
     fn stop_worker(&mut self) {
-        self.shared.lock().stop = true;
-        self.shared.wake.notify_all();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        {
+            let mut state = self.shared.lock();
+            state.generation += 1;
+            state.queue.clear();
         }
+        self.shared.wake.notify_all();
+        self.worker = false;
     }
 
-    /// Stops the worker (waiting for a download under way) and frees the textures. The cache can be used
-    /// again afterwards.
+    /// Stops the worker (without waiting for a download under way) and frees the textures. The cache can be
+    /// used again afterwards.
     pub fn shutdown(&mut self, textures: &mut dyn Textures) {
         self.stop_worker();
         let mut state = self.shared.lock();
@@ -288,7 +381,6 @@ impl Avatars {
             }
         }
         state.queue.clear();
-        state.stop = false;
         self.shared.in_flight.store(0, Ordering::SeqCst);
     }
 }
@@ -465,6 +557,41 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("the avatar worker did not finish");
+    }
+
+    #[test]
+    fn failed_downloads_retry_with_a_growing_back_off() {
+        let secs = Duration::from_secs;
+        assert_eq!(retry_delay(1), secs(60));
+        assert_eq!(retry_delay(2), secs(120));
+        assert_eq!(retry_delay(3), secs(240));
+        assert_eq!(retry_delay(5), secs(900));
+        assert_eq!(retry_delay(6), secs(900));
+        assert_eq!(retry_delay(u32::MAX), secs(900));
+        assert!(!retry_due(secs(59), 1));
+        assert!(retry_due(secs(60), 1));
+        assert!(!retry_due(secs(100), 2));
+        assert!(retry_due(secs(120), 2));
+    }
+
+    #[test]
+    fn the_no_gravatar_marker_expires_after_a_week() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        assert!(!none_marker_expired(day * 6));
+        assert!(none_marker_expired(day * 7));
+        let folder = tempfile::tempdir().expect("a temporary folder");
+        let marker = folder.path().join("a.png.none");
+        assert!(!has_none_marker(&marker));
+        fs::write(&marker, "").expect("writable");
+        assert!(has_none_marker(&marker));
+        let old = std::time::SystemTime::now() - day * 8;
+        fs::File::options()
+            .write(true)
+            .open(&marker)
+            .and_then(|file| file.set_modified(old))
+            .expect("an old marker");
+        assert!(!has_none_marker(&marker));
+        assert!(!marker.exists(), "an expired marker is removed");
     }
 
     #[test]

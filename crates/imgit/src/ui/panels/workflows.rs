@@ -13,7 +13,7 @@ use imgit_app::RepoState;
 use imgit_app::repo_state::UndoEntry;
 use imgit_app::workflows::cleanup::{self, BranchFacts};
 use imgit_app::workflows::gitflow::{self, Branch, Kind};
-use imgit_git::{FileStatus, Ref, RefType, Repository, Sha};
+use imgit_git::{FileStatus, Ref, RefType, Repository};
 
 use crate::app::application::Application;
 use crate::app::dialog::{Check, DialogKind};
@@ -21,6 +21,7 @@ use crate::app::toasts::ToastKind;
 use crate::ui::Cx;
 use crate::ui::geom::vec2;
 use crate::ui::menu::{MenuItems, menu_item};
+use crate::ui::panels::dialogs::{DeletedBranch, leading_dash_error, restore_branches};
 use crate::ui::panels::tabs_bar::open_text_prompt;
 
 #[derive(Default)]
@@ -89,6 +90,13 @@ fn working_directory_clean(app: &mut Application, state: &RepoState, what: &str)
     !dirty
 }
 
+/// Why the branch `full` (prefix and name) cannot be started, `None` when it can: git would read a name that
+/// starts with '-' as an option. Only the branch is checked here: `gitflow::Config::check_name` also looks at the
+/// tag a release or hotfix would get, which starting a branch does not need.
+fn start_name_error(full: &str) -> Option<String> {
+    leading_dash_error("branch", full)
+}
+
 /// Asks for the name of the new branch of `kind`, then starts it.
 fn start(app: &mut Application, state: &mut RepoState, kind: Kind) {
     let config = gitflow_config(state);
@@ -115,6 +123,13 @@ fn start(app: &mut Application, state: &mut RepoState, kind: Kind) {
             }
             app.with_repo(&workdir, |app, tab| {
                 let branch = config.branch_name(kind, name);
+                // `start_runs` has no commands for a name git would read as an option: say why, instead of
+                // doing nothing. (The same check is in `imgit_app::workflows::gitflow`, which only refuses.)
+                if let Some(error) = start_name_error(&branch) {
+                    app.toasts
+                        .push_with_detail(ToastKind::Error, format!("{title} failed"), error);
+                    return;
+                }
                 if has_branch(tab, &branch) {
                     app.toasts.push_with_detail(
                         ToastKind::Error,
@@ -126,11 +141,17 @@ fn start(app: &mut Application, state: &mut RepoState, kind: Kind) {
                 if !working_directory_clean(app, tab, &title) {
                     return;
                 }
-                app.run_git_cli_sequence(
-                    tab,
-                    &format!("{title} {name}"),
-                    config.start_runs(kind, name),
-                );
+                let runs = config.start_runs(kind, name);
+                if runs.is_empty() {
+                    // A configured main / develop / prefix that starts with '-' (the name's own was checked).
+                    app.toasts.push_with_detail(
+                        ToastKind::Error,
+                        format!("{title} failed"),
+                        "A branch name cannot start with '-'",
+                    );
+                    return;
+                }
+                app.run_git_cli_sequence(tab, &format!("{title} {name}"), runs);
             });
         },
     );
@@ -195,11 +216,18 @@ fn finish(app: &mut Application, state: &mut RepoState, branch: &Branch) {
     let branch = branch.clone();
     app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
         app.with_repo(&workdir, |app, tab| {
-            app.run_git_cli_sequence(
-                tab,
-                &title,
-                config.finish_runs(branch.kind, &branch.name, tag_exists),
-            );
+            let runs = config.finish_runs(branch.kind, &branch.name, tag_exists);
+            if runs.is_empty() {
+                // `finish_runs` has no commands for a branch, tag or configured branch name that starts with
+                // '-' (git would read it as an option).
+                app.toasts.push_with_detail(
+                    ToastKind::Error,
+                    format!("{title} failed"),
+                    "A branch or tag name cannot start with '-'",
+                );
+                return;
+            }
+            app.run_git_cli_sequence(tab, &title, runs);
         });
     }));
 }
@@ -357,17 +385,11 @@ fn intro(default_branch: &str) -> String {
     format!("{reason} Untick the ones to keep.")
 }
 
-/// Puts the deleted branches back at their tips (undo), or deletes them again (redo).
-fn restore_branches(repo: &Repository, deleted: &[(String, Sha)]) -> imgit_git::Result<()> {
+/// Deletes the branches again (redo).
+fn delete_branches(repo: &Repository, deleted: &[DeletedBranch]) -> imgit_git::Result<()> {
     deleted
         .iter()
-        .try_for_each(|(name, sha)| repo.set_branch_target(name, sha))
-}
-
-fn delete_branches(repo: &Repository, deleted: &[(String, Sha)]) -> imgit_git::Result<()> {
-    deleted
-        .iter()
-        .try_for_each(|(name, _)| repo.delete_branch(name))
+        .try_for_each(|branch| repo.delete_branch(&branch.name))
 }
 
 /// The `BranchCleanup` dialog's contents (`app.dialog`), inside its modal. The C++ also took the dialog; here
@@ -430,33 +452,32 @@ pub fn draw_branch_cleanup(cx: &mut Cx<'_>, app: &mut Application, state: &mut R
         ui.close_current_popup();
         return;
     }
-    if !confirm {
+    if !confirm || app.refuse_while_busy(state) {
         return;
     }
 
-    // Each branch deleted with its tip remembered: one undo entry puts them all back.
-    let mut deleted: Vec<(String, Sha)> = Vec::new();
+    // Each branch deleted with its tip and its upstream remembered: one undo entry puts them all back.
+    let mut deleted: Vec<DeletedBranch> = Vec::new();
     let mut error = None;
     for check in app.dialog.checks.iter().filter(|c| c.checked) {
-        let Some(target) = state
-            .find_ref(&format!("refs/heads/{}", check.label))
-            .map(|r| r.target.clone())
-        else {
+        let Some(branch) = DeletedBranch::of(state, &check.label) else {
             continue;
         };
         if let Err(e) = state.repo.delete_branch(&check.label) {
             error = Some(format!("{}: {e}", check.label));
             break;
         }
-        deleted.push((check.label.clone(), target));
+        deleted.push(branch);
     }
     let count = deleted.len();
     if !deleted.is_empty() {
         let label = match deleted.as_slice() {
-            [(name, _)] => format!("delete branch {name}"),
+            [branch] => format!("delete branch {}", branch.name),
             all => format!("delete {} branches", all.len()),
         };
         let for_redo = deleted.clone();
+        // A branch the user made under one of these names since is not moved onto the old tip: undo skips it
+        // and says so.
         state.push_undo(
             UndoEntry::new(label, move |repo| restore_branches(repo, &deleted))
                 .with_redo(move |repo| delete_branches(repo, &for_redo)),
@@ -484,6 +505,24 @@ mod tests {
         assert_eq!(delete_label(4), "Delete 4 Branches");
         assert_eq!(deleted_message(1), "Deleted 1 branch");
         assert_eq!(deleted_message(2), "Deleted 2 branches");
+    }
+
+    #[test]
+    fn a_start_name_that_git_would_read_as_an_option_says_why() {
+        let mut config = config();
+        config.feature_prefix = "feature/".to_owned();
+        // Behind the prefix a dash is harmless: the runs exist.
+        let behind_prefix = config.branch_name(Kind::Feature, "-x");
+        assert_eq!(start_name_error(&behind_prefix), None);
+        assert!(!config.start_runs(Kind::Feature, "-x").is_empty());
+        // With no prefix the name starts with it: nothing would run, and the user is told why.
+        config.feature_prefix = String::new();
+        let bare = config.branch_name(Kind::Feature, "-x");
+        assert_eq!(
+            start_name_error(&bare).as_deref(),
+            Some("A branch name cannot start with '-'")
+        );
+        assert!(config.start_runs(Kind::Feature, "-x").is_empty());
     }
 
     #[test]

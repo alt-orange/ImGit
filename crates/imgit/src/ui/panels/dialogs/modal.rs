@@ -16,7 +16,10 @@ use crate::app::toasts::ToastKind;
 use crate::theme::FONT_SIZE_ROW;
 use crate::ui::{Cx, vec2};
 
-use super::{create_branch_at, create_tag_at, tip_restore_entry};
+use super::{
+    create_branch_at, create_tag_at, is_reserved_device_name, leading_dash_error, tip_restore_entry,
+};
+use crate::ui::panels::menus::fetch_args;
 
 /// The title of the modal for `kind`.
 pub fn title(kind: DialogKind) -> &'static str {
@@ -162,6 +165,34 @@ pub fn clone_name(url: &str) -> String {
     super::slide_panel::name_from_url(url)
 }
 
+/// The folder a clone of `url` creates below the folder the user picked: the repository's name, when that is a
+/// single normal path component. A url that gives none ("", "git@host:", "https://") would clone into the
+/// picked folder itself, and one ending in ".." into its parent; a name that is no folder name (a device name
+/// on Windows) cannot be created.
+///
+/// # Errors
+///
+/// What the Clone dialog shows when the name is none of that.
+pub fn clone_folder_name(url: &str) -> Result<String, String> {
+    let name = clone_name(url.trim());
+    let mut components = Path::new(&name).components();
+    let normal = matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    );
+    if name.is_empty() {
+        Err("The URL does not name a repository folder to clone into.".to_owned())
+    } else if !normal || name.contains(['/', '\\', ':']) {
+        Err(format!(
+            "'{name}' is not a folder name: the URL must end with the name of the repository."
+        ))
+    } else if is_reserved_device_name(&name) {
+        Err(format!("'{name}' cannot be used as a folder name."))
+    } else {
+        Ok(name)
+    }
+}
+
 /// The rebase steps that give the commit `target` the message `message`: the commits of `chain` (oldest first)
 /// are picked, `target` reworded.
 pub fn reword_plan(chain: &[Sha], target: &str, message: &str) -> Vec<RebaseStep> {
@@ -211,16 +242,23 @@ pub fn default_worktree_folder(workdir: &Path, leaf: &str) -> Option<PathBuf> {
 /// The `git worktree add` arguments for the dialog `d`: the branch checked out in a new folder (a remote one
 /// through a local branch tracking it unless `local_exists`), or the commit detached.
 pub fn worktree_args(d: &Dialog, local_exists: bool) -> Vec<String> {
+    // `--` ends the options: a folder (or a branch) that starts with '-' is not one.
     let mut args: Vec<String> = vec!["worktree".into(), "add".into()];
     if d.ref_name.is_empty() {
-        args.extend(["--detach".into(), d.text_a.clone(), d.sha.clone()]);
+        args.extend([
+            "--detach".into(),
+            "--".into(),
+            d.text_a.clone(),
+            d.sha.clone(),
+        ]);
     } else if d.ref_remote.is_empty() || local_exists {
-        args.extend([d.text_a.clone(), d.ref_name.clone()]);
+        args.extend(["--".into(), d.text_a.clone(), d.ref_name.clone()]);
     } else {
         args.extend([
             "--track".into(),
             "-b".into(),
             d.ref_name.clone(),
+            "--".into(),
             d.text_a.clone(),
             format!("{}/{}", d.ref_remote, d.ref_name),
         ]);
@@ -298,7 +336,14 @@ fn clone(cx: &mut Cx<'_>, app: &mut Application) {
     if buttons(cx, "Clone", ready, false, true, true) {
         let url = app.dialog.text_a.clone();
         let parent = app.dialog.text_b.clone();
-        let name = clone_name(&url);
+        let name = match clone_folder_name(&url) {
+            Ok(name) => name,
+            Err(error) => {
+                app.dialog.error = Some(error);
+                return;
+            }
+        };
+        app.dialog.error = None;
         let destination = Path::new(&parent)
             .join(&name)
             .to_string_lossy()
@@ -456,9 +501,12 @@ fn create_branch(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) 
         -1.0,
     );
     cx.checkbox("Checkout after create", &mut app.dialog.flag);
-    error_text(cx, app.dialog.error.as_deref());
-    let enabled = !app.dialog.text_a.is_empty();
-    if buttons(cx, "Create Branch", enabled, false, false, true) || submitted {
+    let invalid = leading_dash_error("branch", &app.dialog.text_a);
+    error_text(cx, invalid.as_deref().or(app.dialog.error.as_deref()));
+    let enabled = !app.dialog.text_a.is_empty() && invalid.is_none();
+    if (buttons(cx, "Create Branch", enabled, false, false, true) || (submitted && enabled))
+        && !app.refuse_while_busy(state)
+    {
         let (name, sha, checkout) = (
             app.dialog.text_a.clone(),
             app.dialog.sha.clone(),
@@ -492,9 +540,13 @@ fn create_tag(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
             false,
         );
     }
+    let invalid = leading_dash_error("tag", &app.dialog.text_a);
+    error_text(cx, invalid.as_deref().or(app.dialog.error.as_deref()));
     let d = &app.dialog;
-    let enabled = !d.text_a.is_empty() && (!d.flag || !d.text_b.is_empty());
-    if buttons(cx, "Create Tag", enabled, false, false, true) || submitted {
+    let enabled = !d.text_a.is_empty() && (!d.flag || !d.text_b.is_empty()) && invalid.is_none();
+    if (buttons(cx, "Create Tag", enabled, false, false, true) || (submitted && enabled))
+        && !app.refuse_while_busy(state)
+    {
         let d = &app.dialog;
         let message = if d.flag {
             d.text_b.clone()
@@ -582,7 +634,7 @@ fn add_remote(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
     );
     error_text(cx, app.dialog.error.as_deref());
     let enabled = !app.dialog.text_a.is_empty() && !app.dialog.text_b.is_empty();
-    if buttons(cx, "Add Remote", enabled, false, true, true) {
+    if buttons(cx, "Add Remote", enabled, false, true, true) && !app.refuse_while_busy(state) {
         let (name, url) = (app.dialog.text_a.clone(), app.dialog.text_b.clone());
         let result = state.repo.add_remote(&name, &url);
         if app
@@ -594,7 +646,7 @@ fn add_remote(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
             )
             .is_some()
         {
-            app.run_git_cli(state, "Fetch", ["fetch", name.as_str()]);
+            app.run_git_cli(state, "Fetch", fetch_args(&name));
             ui.close_current_popup();
         }
     }
@@ -622,7 +674,9 @@ fn edit_remote(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
         -1.0,
     );
     ui.dummy([0.0, cx.px(6.0)]);
-    if cx.danger_button("Remove remote", vec2(cx.px(140.0), cx.px(28.0)), true) {
+    if cx.danger_button("Remove remote", vec2(cx.px(140.0), cx.px(28.0)), true)
+        && !app.refuse_while_busy(state)
+    {
         let name = app.dialog.ref_name.clone();
         let result = state.repo.remove_remote(&name);
         app.run(
@@ -634,7 +688,7 @@ fn edit_remote(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
         ui.close_current_popup();
     }
     let enabled = !app.dialog.text_b.is_empty();
-    if buttons(cx, "Save", enabled, false, true, true) {
+    if buttons(cx, "Save", enabled, false, true, true) && !app.refuse_while_busy(state) {
         let (name, url) = (app.dialog.ref_name.clone(), app.dialog.text_b.clone());
         let result = state.repo.set_remote_url(&name, &url);
         app.run(
@@ -662,7 +716,7 @@ fn reword(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
         appearing,
     );
     let enabled = !app.dialog.text_a.is_empty();
-    if buttons(cx, "Update Message", enabled, false, false, true) {
+    if buttons(cx, "Update Message", enabled, false, false, true) && !app.refuse_while_busy(state) {
         let (sha, message) = (app.dialog.sha.clone(), app.dialog.text_a.clone());
         let undo = tip_restore_entry(state, "edit commit message");
         let ok = if state.history.head_sha.as_deref() == Some(sha.as_str()) {
@@ -716,7 +770,7 @@ fn squash(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
         false,
     );
     let enabled = !app.dialog.text_a.is_empty() && !app.dialog.shas.is_empty();
-    if buttons(cx, "Squash", enabled, false, false, true) {
+    if buttons(cx, "Squash", enabled, false, false, true) && !app.refuse_while_busy(state) {
         let shas = app.dialog.shas.clone();
         let message = app.dialog.text_a.clone();
         let base = shas
@@ -773,7 +827,7 @@ fn set_upstream(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
             }
         }
     }
-    if buttons(cx, "Set Upstream", true, false, true, true) {
+    if buttons(cx, "Set Upstream", true, false, true, true) && !app.refuse_while_busy(state) {
         let (name, upstream) = (app.dialog.ref_name.clone(), app.dialog.text_a.clone());
         let result = state
             .repo
@@ -800,6 +854,47 @@ mod tests {
     fn the_clone_folder_is_named_after_the_repository() {
         assert_eq!(clone_name("https://github.com/owner/repo.git"), "repo");
         assert_eq!(clone_name("git@host:team/tool.git/"), "tool");
+    }
+
+    #[test]
+    fn a_clone_needs_a_single_normal_folder_name() {
+        assert_eq!(
+            clone_folder_name("https://github.com/owner/repo.git"),
+            Ok("repo".to_owned())
+        );
+        assert_eq!(
+            clone_folder_name("  git@host:team/tool.git/ "),
+            Ok("tool".to_owned())
+        );
+        assert_eq!(clone_folder_name("C:\\src\\lib"), Ok("lib".to_owned()));
+        // Nothing to name the folder after: git would clone into the picked folder itself.
+        for url in [
+            "",
+            "   ",
+            "https://",
+            "git@host:",
+            "/",
+            "C:\\",
+            "https://host/.git",
+        ] {
+            assert!(clone_folder_name(url).is_err(), "{url:?}");
+        }
+        // Dots are not names: ".." is the folder above the picked one.
+        for url in [
+            "https://host/..",
+            "../..",
+            "https://host/repo/..",
+            "https://host/.",
+        ] {
+            assert!(clone_folder_name(url).is_err(), "{url:?}");
+        }
+        // A name Windows reserves for a device.
+        assert!(clone_folder_name("https://host/nul.git").is_err());
+        assert!(clone_folder_name("https://host/CON").is_err());
+        assert_eq!(
+            clone_folder_name("https://host/console.git"),
+            Ok("console".to_owned())
+        );
     }
 
     #[test]
@@ -849,12 +944,12 @@ mod tests {
         d.sha = "abc".to_owned();
         assert_eq!(
             worktree_args(&d, false),
-            ["worktree", "add", "--detach", "../wt", "abc"]
+            ["worktree", "add", "--detach", "--", "../wt", "abc"]
         );
         d.ref_name = "topic".to_owned();
         assert_eq!(
             worktree_args(&d, false),
-            ["worktree", "add", "../wt", "topic"]
+            ["worktree", "add", "--", "../wt", "topic"]
         );
         d.ref_remote = "origin".to_owned();
         assert_eq!(
@@ -865,13 +960,20 @@ mod tests {
                 "--track",
                 "-b",
                 "topic",
+                "--",
                 "../wt",
                 "origin/topic"
             ]
         );
         assert_eq!(
             worktree_args(&d, true),
-            ["worktree", "add", "../wt", "topic"]
+            ["worktree", "add", "--", "../wt", "topic"]
+        );
+        // A folder that starts with '-' comes after `--`, so git does not read it as an option.
+        d.text_a = "-folder".to_owned();
+        assert_eq!(
+            worktree_args(&d, true),
+            ["worktree", "add", "--", "-folder", "topic"]
         );
     }
 }

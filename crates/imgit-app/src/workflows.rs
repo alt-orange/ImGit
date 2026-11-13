@@ -95,6 +95,47 @@ pub mod gitflow {
         }
     }
 
+    /// Which of the names a gitflow operation hands to git is unusable: see [`Config::check_name`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NameKind {
+        /// The branch (prefix and name).
+        Branch,
+        /// The tag a release or hotfix gets (version tag prefix and name).
+        Tag,
+        /// A long-lived branch of the configuration (main or develop).
+        Configured,
+    }
+
+    /// A name that starts with `-`, which git would read as an option.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct NameError {
+        pub kind: NameKind,
+        pub name: String,
+    }
+
+    impl std::fmt::Display for NameError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{} cannot start with '-': {}",
+                self.kind.noun(),
+                self.name
+            )
+        }
+    }
+
+    impl std::error::Error for NameError {}
+
+    impl NameKind {
+        const fn noun(self) -> &'static str {
+            match self {
+                Self::Branch => "A branch name",
+                Self::Tag => "A tag name",
+                Self::Configured => "A configured branch name",
+            }
+        }
+    }
+
     /// A gitflow branch: its kind and its name without the prefix.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct Branch {
@@ -155,24 +196,56 @@ pub mod gitflow {
             format!("{}{name}", self.prefix(kind))
         }
 
-        /// `git checkout -b <prefix><name> <base>`.
+        /// `git checkout -b <prefix><name> <base>`. Empty when a name starts with `-` (git would read it as an
+        /// option): see [`Self::check_name`].
         #[must_use]
         pub fn start_runs(&self, kind: Kind, name: &str) -> Vec<Run> {
             let branch = self.branch_name(kind, name);
+            if self.check_name(kind, name).is_err() {
+                return Vec::new();
+            }
             vec![run(["checkout", "-b", &branch, self.base_branch(kind)])]
+        }
+
+        /// Whether the runs of a `kind` branch `name` can be built: none of the names they hand to git as a
+        /// revision (the branch, the tag, the long-lived branches they start from or merge into) may start with
+        /// `-`, or git would read it as an option (`git checkout` has no `--` to protect them with).
+        /// [`Self::start_runs`] and [`Self::finish_runs`] build no runs for such a name; this tells which one it
+        /// is, for the message to the user, before they are asked for.
+        ///
+        /// # Errors
+        /// The first name that starts with `-`.
+        pub fn check_name(&self, kind: Kind, name: &str) -> Result<(), NameError> {
+            let candidates = [
+                (NameKind::Branch, self.branch_name(kind, name)),
+                (NameKind::Tag, self.tag_name(name)),
+                (NameKind::Configured, self.master.clone()),
+                (NameKind::Configured, self.develop.clone()),
+            ];
+            match candidates
+                .into_iter()
+                .find(|(_, candidate)| candidate.starts_with('-'))
+            {
+                Some((kind, name)) => Err(NameError { kind, name }),
+                None => Ok(()),
+            }
         }
 
         /// `git flow <kind> finish`: a feature merges into develop (`--no-ff`); a release or hotfix merges into
         /// main, is tagged `<versiontag><name>` (unless `tag_exists`: a finish run again after resolving
         /// conflicts), and merges into develop. Then the branch is deleted. Merges already done are no-ops, so
-        /// after a conflict is resolved and committed the same runs finish the job.
+        /// after a conflict is resolved and committed the same runs finish the job. Empty when a name starts
+        /// with `-` (git would read it as an option): see [`Self::check_name`].
         #[must_use]
         pub fn finish_runs(&self, kind: Kind, name: &str, tag_exists: bool) -> Vec<Run> {
             let branch = self.branch_name(kind, name);
+            if self.check_name(kind, name).is_err() {
+                return Vec::new();
+            }
             let merge_into = |target: &str| {
                 [
                     run(["checkout", target]),
-                    run(["merge", "--no-ff", "--no-edit", &branch]),
+                    run(["merge", "--no-ff", "--no-edit", "--", &branch]),
                 ]
             };
             let mut runs = Vec::new();
@@ -182,11 +255,11 @@ pub mod gitflow {
                 runs.extend(merge_into(&self.master));
                 if !tag_exists {
                     let tag = self.tag_name(name);
-                    runs.push(run(["tag", "-a", &tag, "-m", &tag]));
+                    runs.push(run(["tag", "-a", "-m", &tag, "--", &tag]));
                 }
                 runs.extend(merge_into(&self.develop));
             }
-            runs.push(run(["branch", "-d", &branch]));
+            runs.push(run(["branch", "-d", "--", &branch]));
             runs
         }
     }
@@ -320,10 +393,62 @@ mod tests {
             config().finish_runs(Kind::Feature, "x", false),
             runs([
                 &["checkout", "develop"],
-                &["merge", "--no-ff", "--no-edit", "feature/x"],
-                &["branch", "-d", "feature/x"],
+                &["merge", "--no-ff", "--no-edit", "--", "feature/x"],
+                &["branch", "-d", "--", "feature/x"],
             ])
         );
+    }
+
+    #[test]
+    fn gitflow_names_that_look_like_options_run_nothing() {
+        // With an empty prefix the name is the branch.
+        let bare = gitflow::Config {
+            feature_prefix: String::new(),
+            ..config()
+        };
+        assert!(bare.start_runs(Kind::Feature, "-x").is_empty());
+        assert!(bare.finish_runs(Kind::Feature, "-x", false).is_empty());
+        assert!(!bare.start_runs(Kind::Feature, "x").is_empty());
+        // The tag of a release is the version tag plus the name.
+        let untagged = gitflow::Config {
+            version_tag: String::new(),
+            ..config()
+        };
+        assert!(untagged.finish_runs(Kind::Release, "-1", false).is_empty());
+        let hostile_base = gitflow::Config {
+            develop: "--detach".to_owned(),
+            ..config()
+        };
+        assert!(hostile_base.start_runs(Kind::Feature, "x").is_empty());
+    }
+
+    #[test]
+    fn gitflow_check_name_says_which_name_is_unusable() {
+        let ok = config();
+        assert_eq!(ok.check_name(Kind::Feature, "x"), Ok(()));
+
+        let bare = gitflow::Config {
+            feature_prefix: String::new(),
+            ..config()
+        };
+        let error = bare.check_name(Kind::Feature, "-x").unwrap_err();
+        assert_eq!(error.kind, gitflow::NameKind::Branch);
+        assert_eq!(error.to_string(), "A branch name cannot start with '-': -x");
+
+        let untagged = gitflow::Config {
+            version_tag: String::new(),
+            ..config()
+        };
+        let error = untagged.check_name(Kind::Release, "-1").unwrap_err();
+        assert_eq!(error.kind, gitflow::NameKind::Tag);
+        assert_eq!(error.to_string(), "A tag name cannot start with '-': -1");
+
+        let hostile_base = gitflow::Config {
+            develop: "--detach".to_owned(),
+            ..config()
+        };
+        let error = hostile_base.check_name(Kind::Feature, "x").unwrap_err();
+        assert_eq!(error.kind, gitflow::NameKind::Configured);
     }
 
     #[test]
@@ -332,11 +457,11 @@ mod tests {
             config().finish_runs(Kind::Release, "1.0", false),
             runs([
                 &["checkout", "main"],
-                &["merge", "--no-ff", "--no-edit", "release/1.0"],
-                &["tag", "-a", "v1.0", "-m", "v1.0"],
+                &["merge", "--no-ff", "--no-edit", "--", "release/1.0"],
+                &["tag", "-a", "-m", "v1.0", "--", "v1.0"],
                 &["checkout", "develop"],
-                &["merge", "--no-ff", "--no-edit", "release/1.0"],
-                &["branch", "-d", "release/1.0"],
+                &["merge", "--no-ff", "--no-edit", "--", "release/1.0"],
+                &["branch", "-d", "--", "release/1.0"],
             ])
         );
         // Finished again after a conflict: the tag is there already.
@@ -344,10 +469,10 @@ mod tests {
             config().finish_runs(Kind::Hotfix, "1.0.1", true),
             runs([
                 &["checkout", "main"],
-                &["merge", "--no-ff", "--no-edit", "hotfix/1.0.1"],
+                &["merge", "--no-ff", "--no-edit", "--", "hotfix/1.0.1"],
                 &["checkout", "develop"],
-                &["merge", "--no-ff", "--no-edit", "hotfix/1.0.1"],
-                &["branch", "-d", "hotfix/1.0.1"],
+                &["merge", "--no-ff", "--no-edit", "--", "hotfix/1.0.1"],
+                &["branch", "-d", "--", "hotfix/1.0.1"],
             ])
         );
     }

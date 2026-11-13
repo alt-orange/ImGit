@@ -228,9 +228,23 @@ where
         }
     }
 
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         // The idle timeout ran out: draw a frame.
-        if let (StartCause::ResumeTimeReached { .. }, Some(state)) = (cause, &self.state) {
+        let StartCause::ResumeTimeReached { .. } = cause else {
+            return;
+        };
+        let Some(state) = &mut self.state else {
+            return;
+        };
+        if state.minimized() {
+            // A minimised window may get no redraw requests from the system; the frame runs from here so the
+            // application keeps polling (terminal output, git operations, background jobs).
+            match state.redraw(&self.config.options) {
+                Ok(true) => {}
+                Ok(false) => event_loop.exit(),
+                Err(error) => self.fail(event_loop, error),
+            }
+        } else {
             state.window.request_redraw();
         }
     }
@@ -303,6 +317,9 @@ struct State<F> {
     screenshot_wait: u32,
     /// Whether the last frame asked for another one right away.
     animating: bool,
+    /// `io.DisplaySize` of the last frame drawn with a visible window: the size the UI is laid out for while
+    /// the window is minimised (its own size is 0x0).
+    display_size: [f32; 2],
     /// Whether the window is in (borderless) full screen; winit restores its rectangle on the way out.
     full_screen: bool,
     /// What the framebuffer is cleared to: the theme's `app_bg0`.
@@ -398,6 +415,7 @@ impl<F: Frame> State<F> {
             frame_index: 0,
             screenshot_wait: 0,
             animating: false,
+            display_size: display_metrics(&window).0,
             full_screen: false,
             background: palette.app_bg0.into(),
             fonts,
@@ -445,17 +463,22 @@ impl<F: Frame> State<F> {
         }
     }
 
-    /// Draws one frame. `Ok(false)` when the window should close.
+    /// Runs one frame. `Ok(false)` when the window should close. A minimised window (0x0, no framebuffer)
+    /// still runs the UI's frame, laid out for the size it had, so that the application keeps polling; the
+    /// result is rendered but neither cleared, captured nor presented.
     fn redraw(&mut self, options: &DevOptions) -> anyhow::Result<bool> {
         let size = self.window.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return Ok(true); // minimised: nothing to draw into
-        }
+        let minimized = self.minimized();
         let mut keep_running = true;
 
         if let Some(script) = &mut self.script {
             // Scripted input replaces the platform input so the real mouse cannot interfere.
             let (display_size, framebuffer_scale) = display_metrics(&self.window);
+            let display_size = if minimized {
+                self.display_size
+            } else {
+                display_size
+            };
             let io = self.imgui.io_mut();
             io.set_display_size(display_size);
             io.set_display_framebuffer_scale(framebuffer_scale);
@@ -468,6 +491,13 @@ impl<F: Frame> State<F> {
             }
         } else {
             self.platform.prepare_frame(&mut self.imgui, &self.window)?;
+            if minimized {
+                // The platform backend took the window's 0x0 size.
+                self.imgui.io_mut().set_display_size(self.display_size);
+            }
+        }
+        if !minimized {
+            self.display_size = display_metrics(&self.window).0;
         }
         if options.screenshot.is_some() && self.frame_index == DEV_COMMAND_FRAME {
             self.commands
@@ -512,6 +542,14 @@ impl<F: Frame> State<F> {
             if self.script.is_none() {
                 self.platform.prepare_render(ui, &self.window)?;
             }
+        }
+
+        if minimized {
+            // The frame must still be closed (and its texture requests served); nothing is shown.
+            self.renderer.render(&mut self.imgui)?;
+            self.animating = false;
+            self.apply_window_requests(&requests);
+            return Ok(keep_running && !requests.quit);
         }
 
         // SAFETY: the GL context is current on this thread for the whole life of `State`.

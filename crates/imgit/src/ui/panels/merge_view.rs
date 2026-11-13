@@ -18,6 +18,7 @@ use imgit_git::Error;
 use imgit_syntax::TextCache;
 
 use crate::app::application::Application;
+use crate::app::dialog::DialogKind;
 use crate::fonts::Font;
 use crate::theme::Color;
 use crate::ui::widgets::resize::ResizeAxis;
@@ -912,32 +913,87 @@ pub fn draw_merge_view(cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoS
         |panels| &mut panels.merge_view,
         |app, ui_state| draw_view(cx, app, ui_state, &mut tool, size),
     );
-    let Some(outcome) = outcome else {
-        state.merge_tool = Some(tool);
+    // The tool stays open (with the user's picks) unless the outcome closes it for good.
+    state.merge_tool = Some(tool);
+    match outcome {
+        None => {}
+        Some(Outcome::Save) => request_save(app, state),
+        Some(Outcome::External) => launch_external_tool(app, state),
+        Some(Outcome::Close) => state.merge_tool = None,
+    }
+}
+
+/// Runs the configured external merge tool on the file in the background and closes the merge tool; one that
+/// could not be started (another operation is running) leaves the merge tool open.
+fn launch_external_tool(app: &mut Application, state: &mut RepoState) {
+    let Some(path) = state.merge_tool.as_ref().map(|tool| tool.path.clone()) else {
+        return;
+    };
+    // `run_git_cli` refuses (with a toast) while another operation runs.
+    let busy = state.async_op.is_some();
+    app.run_git_cli(
+        state,
+        "External merge tool",
+        ["mergetool", "--no-prompt", "--", path.as_str()],
+    );
+    if !busy && state.async_op.is_some() {
+        state.merge_tool = None;
+    }
+}
+
+/// Save was asked for: conflicts nothing is picked for would be written as the base version's lines and the
+/// file staged as resolved, so that is confirmed first.
+fn request_save(app: &mut Application, state: &mut RepoState) {
+    let Some(tool) = &state.merge_tool else {
+        return;
+    };
+    // Text the user edited by hand is written as it is, whatever the picks say.
+    let unresolved = if tool.edited.is_some() {
+        0
+    } else {
+        tool.unresolved_count()
+    };
+    if unresolved == 0 {
+        save_resolution(app, state);
+        return;
+    }
+    let workdir = state.repo.workdir().to_path_buf();
+    let conflicts = if unresolved == 1 {
+        "1 conflict is still unresolved".to_owned()
+    } else {
+        format!("{unresolved} conflicts are still unresolved")
+    };
+    app.dialog.open(DialogKind::Confirm);
+    app.dialog.title = "Save with unresolved conflicts".to_owned();
+    app.dialog.message = format!(
+        "{conflicts}. Saving writes the base version's lines for them and stages the file as resolved."
+    );
+    app.dialog.confirm_label = "Save Anyway".to_owned();
+    app.dialog.danger = true;
+    app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
+        app.with_repo(&workdir, save_resolution);
+    }));
+}
+
+/// Writes the merged text and stages the file (staging clears its conflict). The merge tool closes when both
+/// worked; otherwise it stays open with the user's picks.
+fn save_resolution(app: &mut Application, state: &mut RepoState) {
+    if state.merge_tool.is_none() || app.refuse_while_busy(state) {
+        return;
+    }
+    let Some(tool) = state.merge_tool.take() else {
         return;
     };
     let path = tool.path.clone();
-    match outcome {
-        Outcome::Save => {
-            let text = tool.output_text();
-            let file = state.repo.workdir().join(&path);
-            // Staging the file clears its conflict.
-            let result = std::fs::write(&file, text)
-                .map_err(|source| Error::Io {
-                    path: path.clone(),
-                    source,
-                })
-                .and_then(|()| state.repo.stage(&[path.as_str()]));
-            app.run(state, "Save resolution", result, None);
-        }
-        Outcome::External => {
-            app.run_git_cli(
-                state,
-                "External merge tool",
-                ["mergetool", "--no-prompt", "--", path.as_str()],
-            );
-        }
-        Outcome::Close => {}
+    let file = state.repo.workdir().join(&path);
+    let result = std::fs::write(&file, tool.output_text())
+        .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })
+        .and_then(|()| state.repo.stage(&[path.as_str()]));
+    if app.run(state, "Save resolution", result, None).is_none() {
+        state.merge_tool = Some(tool);
     }
 }
 

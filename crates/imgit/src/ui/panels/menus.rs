@@ -26,6 +26,7 @@ pub use misc::{
     graph_header_menu, left_section_menu, local_folder_menu, remote_menu, tab_menu, terminal_menu,
     text_input_menu, worktree_menu,
 };
+pub use shared::{fetch_args, push_delete_args, repo_view_item};
 pub use text_field::{PendingTextEdit, text_field_menu};
 
 /// The menus keep their state in `UiState` (a text field's pending command must outlive the menu).

@@ -34,16 +34,15 @@ fn split_template(text: &str) -> (&str, &str) {
     }
 }
 
-/// A message's first line and the rest without its surrounding line breaks.
+/// A message's first line and the rest without its surrounding line breaks (CRLF read as LF: the fields hold
+/// "\n" breaks).
 fn split_amend_message(message: &str) -> (String, String) {
+    let message = message.replace("\r\n", "\n");
     let (summary, rest) = match message.find('\n') {
-        None => (message, ""),
+        None => (message.as_str(), ""),
         Some(newline) => (&message[..newline], &message[newline + 1..]),
     };
-    (
-        summary.to_owned(),
-        rest.trim_matches(['\n', '\r']).to_owned(),
-    )
+    (summary.to_owned(), rest.trim_matches('\n').to_owned())
 }
 
 /// The commit message of a summary and a description: separated by a blank line.
@@ -71,7 +70,13 @@ fn apply_commit_template(state: &mut RepoState) {
     {
         return;
     }
-    let (summary, body) = split_template(template);
+    let template = template.to_owned();
+    fill_form(state, &template);
+}
+
+/// Puts `text` in the (empty) commit form: its first line the summary, the rest the description.
+fn fill_form(state: &mut RepoState, text: &str) {
+    let (summary, body) = split_template(text);
     let (summary, body) = (summary.to_owned(), body.to_owned());
     state.commit_summary = summary;
     state.commit_description = body;
@@ -118,10 +123,14 @@ fn prepare_form(state: &mut RepoState) {
     if prepared && untouched {
         state.commit_summary.clear();
         state.commit_description.clear();
-        let message = state.repo.prepared_message();
-        let saved = std::mem::replace(&mut state.commit_template, message);
-        apply_commit_template(state);
-        state.commit_template = saved;
+        // The prepared message is the commit's own: it does not depend on the template switch.
+        if let Some(message) = state
+            .repo
+            .prepared_message()
+            .filter(|text| !text.is_empty())
+        {
+            fill_form(state, &message);
+        }
         state.prepared_summary = state.commit_summary.clone();
         state.prepared_description = state.commit_description.clone();
     }
@@ -492,7 +501,11 @@ pub fn draw_wip_panel(
             }
         }
     }
-    if stage_all {
+    let staging =
+        stage_all || unstage_all || !stage_requests.is_empty() || !unstage_requests.is_empty();
+    if staging && app.refuse_while_busy(state) {
+        // A git command is running on the repository: nothing is staged meanwhile.
+    } else if stage_all {
         let result = state.repo.stage_all();
         app.run(state, "Stage all", result, None);
     } else if unstage_all {
@@ -754,15 +767,30 @@ fn draw_composer(
         width - cx.px(22.0),
         enabled,
     );
-    if pressed
-        || (enabled && ui.is_key_chord_pressed(KeyChord::new(Key::Enter).with_mods(KeyMods::CTRL)))
-    {
+    // Ctrl+Enter is the shell's Enter too: with the terminal panel focused it is typed there, not a commit
+    // (and a dialog or prompt that is open has the keyboard).
+    let chord = enabled
+        && !commit_chord_blocked(
+            app.show_terminal_panel && app.terminal.focused,
+            app.dialog.is_open() || app.credential_prompt.is_some(),
+        )
+        && ui.is_key_chord_pressed(KeyChord::new(Key::Enter).with_mods(KeyMods::CTRL));
+    if pressed || chord {
         commit(cx, app, state);
     }
 }
 
+/// Whether the Ctrl+Enter commit shortcut must not fire: the terminal panel has the keyboard (the chord is also
+/// sent to the shell there) or a dialog / prompt is open.
+fn commit_chord_blocked(terminal_has_keyboard: bool, modal_open: bool) -> bool {
+    terminal_has_keyboard || modal_open
+}
+
 /// Commits the staged changes (or amends HEAD) with the form's message.
 fn commit(_cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState) {
+    if app.refuse_while_busy(state) {
+        return;
+    }
     let message = join_message(&state.commit_summary, &state.commit_description);
     let amend = state.amend;
     let previous_head = state.history.head_sha.clone();
@@ -814,6 +842,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_commit_chord_stays_out_of_the_terminal_and_dialogs() {
+        assert!(!commit_chord_blocked(false, false));
+        assert!(commit_chord_blocked(true, false));
+        assert!(commit_chord_blocked(false, true));
+        assert!(commit_chord_blocked(true, true));
+    }
+
+    #[test]
     fn templates_split_into_summary_and_description() {
         assert_eq!(split_template("one"), ("one", ""));
         assert_eq!(split_template("one\n\n\nbody\nmore"), ("one", "body\nmore"));
@@ -837,7 +873,7 @@ mod tests {
         );
         assert_eq!(
             split_amend_message("A\r\n\r\nB\r\n"),
-            ("A\r".to_owned(), "B".to_owned())
+            ("A".to_owned(), "B".to_owned())
         );
     }
 

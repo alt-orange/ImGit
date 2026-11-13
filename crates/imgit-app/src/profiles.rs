@@ -121,14 +121,15 @@ impl Profiles {
                 user_email: user_email.to_owned(),
             };
             let directory = loaded.directory_of(&profile.guid);
-            let _ = fs::create_dir_all(&directory);
+            // profile.txt first: a crash between the moves and the save would leave a folder the next start
+            // does not list, and it would create a second default profile.
+            let _ = loaded.save(&profile);
             for file in legacy_files {
                 let legacy = loaded.root.join(file);
                 if legacy.exists() {
                     let _ = fs::rename(&legacy, directory.join(file));
                 }
             }
-            let _ = loaded.save(&profile);
             profiles.push(profile);
         }
         loaded.profiles = profiles;
@@ -218,7 +219,7 @@ impl Profiles {
     ///
     /// # Errors
     /// It is the current profile, there is no such profile, or its folder could not be deleted (it stays
-    /// listed then).
+    /// listed then, and still loads: `profile.txt` is deleted last, so a failure part-way leaves it).
     pub fn remove(&mut self, guid: &str) -> Result<(), ProfileError> {
         if guid == self.current {
             return Err(ProfileError::IsCurrent);
@@ -226,10 +227,7 @@ impl Profiles {
         if self.find(guid).is_none() {
             return Err(ProfileError::NotFound(guid.to_owned()));
         }
-        match fs::remove_dir_all(self.directory_of(guid)) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
-            _ => {}
-        }
+        remove_profile_directory(&self.directory_of(guid))?;
         self.profiles.retain(|profile| profile.guid != guid);
         Ok(())
     }
@@ -287,10 +285,41 @@ impl Profiles {
     }
 }
 
+/// Deletes a profile's folder with everything in it, `profile.txt` last: until it is gone the profile is still
+/// there for the next load, so a failure part-way (a file in use) does not make it vanish half-deleted.
+fn remove_profile_directory(directory: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name() == PROFILE_FILE {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    match fs::remove_file(directory.join(PROFILE_FILE)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    // The profile is gone from disk whether or not the empty folder can be removed.
+    let _ = fs::remove_dir(directory);
+    Ok(())
+}
+
 /// `key=value` lines (the value runs to the end of the line); empty when the file cannot be read.
 fn read_values(path: &Path) -> HashMap<String, String> {
     let bytes = fs::read(path).unwrap_or_default();
-    String::from_utf8_lossy(&bytes)
+    let text = String::from_utf8_lossy(&bytes);
+    // A UTF-8 byte order mark (an editor's) is not part of the first key.
+    text.strip_prefix('\u{FEFF}')
+        .unwrap_or(&text)
         .split('\n')
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .filter_map(|line| line.split_once('='))
@@ -446,6 +475,85 @@ mod tests {
             matches!(profiles.set_current("nope"), Err(ProfileError::NotFound(guid)) if guid == "nope")
         );
         assert_eq!(profiles.current().guid, "a2");
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_not_part_of_the_first_key() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("profiles").join("bom");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("profile.txt"),
+            "\u{FEFF}name=Marked\r\nuser_name=A\r\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("config.txt"), "\u{FEFF}profile_guid=bom\n").unwrap();
+        let profiles = Profiles::load(root.path(), "", "", &[]);
+        assert_eq!(profiles.all().len(), 1);
+        assert_eq!(profiles.current().guid, "bom");
+        assert_eq!(profiles.current().name, "Marked");
+        assert_eq!(profiles.current().user_name, "A");
+    }
+
+    #[test]
+    fn a_failed_removal_leaves_a_loadable_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let mut profiles = Profiles::load(root.path(), "Ada", "ada@example.com", &[]);
+        let other = profiles.create(named("Other"), false).unwrap();
+        let directory = profiles.directory_of(&other);
+        fs::write(directory.join("a.txt"), "a").unwrap();
+        fs::write(directory.join("z.txt"), "z").unwrap();
+        // A file that cannot be deleted while it is held open (Windows) or sits in a read-only folder.
+        #[cfg(windows)]
+        let held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::write(directory.join("m.txt"), "m").unwrap();
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1) // FILE_SHARE_READ: no delete
+                .open(directory.join("m.txt"))
+                .unwrap()
+        };
+        #[cfg(unix)]
+        let locked = {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = directory.join("locked");
+            fs::create_dir(&locked).unwrap();
+            fs::write(locked.join("m.txt"), "m").unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+            locked
+        };
+
+        assert!(profiles.remove(&other).is_err());
+        assert!(profiles.find(&other).is_some());
+        assert!(directory.join("profile.txt").exists());
+        let reloaded = Profiles::load(root.path(), "", "", &[]);
+        assert_eq!(
+            reloaded.find(&other).map(|profile| profile.name.as_str()),
+            Some("Other")
+        );
+
+        #[cfg(windows)]
+        drop(held);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        profiles.remove(&other).unwrap();
+        assert!(profiles.find(&other).is_none());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn the_legacy_files_move_into_a_saved_profile() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("tabs.txt"), "t").unwrap();
+        let profiles = Profiles::load(root.path(), "Ada", "a@example.com", &["tabs.txt"]);
+        let directory = profiles.directory();
+        assert!(directory.join("profile.txt").is_file());
+        assert!(directory.join("tabs.txt").is_file());
+        assert_eq!(Profiles::load(root.path(), "", "", &[]).all().len(), 1);
     }
 
     #[test]

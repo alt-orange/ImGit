@@ -12,41 +12,143 @@ use imgit_git::{FileChange, FileStatus, Sha};
 
 use super::commits::git_args;
 use super::shared::{
-    OperationState, confirm, full_path, repo_item, save_git_output, selected_commits, workdir_of,
+    OperationState, confirm, full_path, repo_item, repo_view_item, save_git_output,
+    selected_commits, workdir_of,
 };
 use crate::app::application::Application;
 use crate::app::dialog::DialogKind;
 use crate::app::toasts::ToastKind;
 use crate::ui::Cx;
 use crate::ui::menu::{MenuItem, MenuItems, menu_item, menu_submenu, separated_menu};
-use crate::ui::panels::file_editor::open_file_editor;
+use crate::ui::panels::file_editor::{navigate_from_editor, open_file_editor};
 
-/// `pattern` and a line break appended to the repository's `.gitignore` (created when missing).
-fn append_to_gitignore(workdir: &Path, lines: &[String]) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(workdir.join(".gitignore"))?;
-    for line in lines {
-        writeln!(file, "{line}")?;
+/// Escapes what `.gitignore` reads as syntax, so that `text` matches only itself: a backslash, the glob
+/// characters `*`, `?` and `[`, a leading `#` (a comment) or `!` (a negation) and the trailing spaces git
+/// would drop.
+fn escape_ignore_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len() + 2);
+    for (index, ch) in text.chars().enumerate() {
+        if matches!(ch, '\\' | '*' | '?' | '[') || (index == 0 && matches!(ch, '#' | '!')) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
     }
-    Ok(())
+    // "Trailing spaces are ignored unless they are quoted with backslash".
+    let kept = escaped.trim_end_matches(' ').len();
+    let spaces = escaped.len() - kept;
+    escaped.truncate(kept);
+    escaped.push_str(&"\\ ".repeat(spaces));
+    escaped
 }
 
-/// The item that adds `pattern` to `.gitignore` and says so.
-fn ignore_item(label: String, workdir: &Path, pattern: String) -> MenuItem {
-    repo_item(label, workdir, move |_cx, app, state| {
-        match append_to_gitignore(state.repo.workdir(), std::slice::from_ref(&pattern)) {
-            Ok(()) => {
-                app.toasts
-                    .push_with_detail(ToastKind::Success, "Added to .gitignore", pattern)
-            }
-            Err(error) => app.toasts.push_with_detail(
-                ToastKind::Error,
-                "Could not write .gitignore",
-                error.to_string(),
-            ),
+/// The `.gitignore` line for `path` (relative to the working directory, '/' or '\\' separated): the file, or
+/// with `folder` the folder and everything in it. Escaped, and anchored with a leading '/' when it sits at the
+/// root, so that only that file (folder) is ignored and not every one of that name below it; a path with a
+/// folder in it is anchored by git already. `None` for a path no line can name (empty, or with a line break).
+fn ignore_line(path: &str, folder: bool) -> Option<String> {
+    let path = path.replace('\\', "/");
+    let path = path.trim_matches('/');
+    if path.is_empty() || path.contains(['\n', '\r']) {
+        return None;
+    }
+    let mut line = String::new();
+    if !path.contains('/') {
+        line.push('/');
+    }
+    line.push_str(&escape_ignore_text(path));
+    if folder {
+        line.push('/');
+    }
+    Some(line)
+}
+
+/// The `.gitignore` line for every file with the extension `extension` (without its dot): `*.rs`.
+fn ignore_extension_line(extension: &str) -> Option<String> {
+    (!extension.is_empty() && !extension.contains(['\n', '\r', '/']))
+        .then(|| format!("*.{}", escape_ignore_text(extension)))
+}
+
+/// What to append to a `.gitignore` whose bytes are `existing` so that it holds each of `lines`: the missing
+/// ones only (a line that is there already, or an unanchored copy of it, is skipped), each ended like the
+/// file's own lines (CRLF when it uses them), after a line break when the last line has none. Returns the
+/// bytes and how many lines they hold.
+fn gitignore_additions(existing: &[u8], lines: &[String]) -> (Vec<u8>, usize) {
+    let eol: &[u8] = if existing.windows(2).any(|pair| pair == b"\r\n") {
+        b"\r\n"
+    } else {
+        b"\n"
+    };
+    let mut present: std::collections::HashSet<Vec<u8>> = existing
+        .split(|&byte| byte == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line).to_vec())
+        .collect();
+    let mut added = Vec::new();
+    let mut count = 0;
+    for line in lines {
+        // `/name` is covered by `name`, which ignores every file of that name.
+        let unanchored = line
+            .strip_prefix('/')
+            .filter(|rest| !rest.trim_end_matches('/').contains('/'));
+        if present.contains(line.as_bytes())
+            || unanchored.is_some_and(|rest| present.contains(rest.as_bytes()))
+        {
+            continue;
         }
+        present.insert(line.as_bytes().to_vec());
+        added.extend_from_slice(line.as_bytes());
+        added.extend_from_slice(eol);
+        count += 1;
+    }
+    if count > 0 && !existing.is_empty() && !existing.ends_with(b"\n") {
+        let mut with_break = eol.to_vec();
+        with_break.extend(added);
+        added = with_break;
+    }
+    (added, count)
+}
+
+/// Appends `lines` to the repository's `.gitignore` (created when missing) as [`gitignore_additions`] says;
+/// returns how many were added (0: they were all there).
+fn append_to_gitignore(workdir: &Path, lines: &[String]) -> std::io::Result<usize> {
+    let path = workdir.join(".gitignore");
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let (added, count) = gitignore_additions(&existing, lines);
+    if count > 0 {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?
+            .write_all(&added)?;
+    }
+    Ok(count)
+}
+
+/// The toast of an append: what was added, or that it was there.
+fn report_ignored(app: &mut Application, result: std::io::Result<usize>, what: String) {
+    match result {
+        Ok(0) => app
+            .toasts
+            .push_with_detail(ToastKind::Info, "Already in .gitignore", what),
+        Ok(_) => app
+            .toasts
+            .push_with_detail(ToastKind::Success, "Added to .gitignore", what),
+        Err(error) => app.toasts.push_with_detail(
+            ToastKind::Error,
+            "Could not write .gitignore",
+            error.to_string(),
+        ),
+    }
+}
+
+/// The item that adds the line `pattern` to `.gitignore` and says so.
+fn ignore_item(label: String, workdir: &Path, pattern: String) -> MenuItem {
+    repo_view_item(label, workdir, move |_cx, app, state| {
+        let result = append_to_gitignore(state.repo.workdir(), std::slice::from_ref(&pattern));
+        report_ignored(app, result, pattern);
         state.refresh_status();
     })
 }
@@ -54,26 +156,34 @@ fn ignore_item(label: String, workdir: &Path, pattern: String) -> MenuItem {
 /// "Ignore": the file, its extension, its folder.
 fn ignore_submenu(workdir: &Path, path: &str) -> MenuItem {
     let p = Path::new(path);
-    let mut items = vec![ignore_item(
-        format!(
-            "Ignore '{}'",
-            p.file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_default()
-        ),
-        workdir,
-        path.to_owned(),
-    )];
-    if let Some(extension) = p.extension() {
-        let extension = format!(".{}", extension.to_string_lossy());
+    let mut items = Vec::new();
+    if let Some(line) = ignore_line(path, false) {
         items.push(ignore_item(
-            format!("All files with the extension '{extension}'"),
+            format!(
+                "Ignore '{}'",
+                p.file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default()
+            ),
             workdir,
-            format!("*{extension}"),
+            line,
         ));
     }
-    if let Some(parent) = p.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        let folder = parent.to_string_lossy().replace('\\', "/");
+    if let Some(extension) = p.extension()
+        && let Some(line) = ignore_extension_line(&extension.to_string_lossy())
+    {
+        items.push(ignore_item(
+            format!(
+                "All files with the extension '.{}'",
+                extension.to_string_lossy()
+            ),
+            workdir,
+            line,
+        ));
+    }
+    if let Some(parent) = p.parent().filter(|parent| !parent.as_os_str().is_empty())
+        && let Some(line) = ignore_line(&parent.to_string_lossy(), true)
+    {
         items.push(ignore_item(
             format!(
                 "All files in '{}/'",
@@ -83,7 +193,7 @@ fn ignore_submenu(workdir: &Path, path: &str) -> MenuItem {
                     .unwrap_or_default()
             ),
             workdir,
-            format!("{folder}/"),
+            line,
         ));
     }
     menu_submenu("Ignore", items)
@@ -118,7 +228,7 @@ fn edit_delete_items(workdir: &Path, path: &str) -> MenuItems {
     let (edit_path, delete_path) = (path.to_owned(), path.to_owned());
     let delete_workdir = workdir.to_path_buf();
     vec![
-        repo_item("Edit file", workdir, move |cx, app, state| {
+        repo_view_item("Edit file", workdir, move |cx, app, state| {
             open_file_editor(cx, app, state, &edit_path);
         }),
         menu_item("Delete file", move |_cx, app| {
@@ -154,7 +264,7 @@ fn history_items(workdir: &Path, path: &str, sha: &str) -> MenuItems {
         .into_iter()
         .map(|(label, blame)| {
             let (path, from) = (path.to_owned(), from.clone());
-            repo_item(label, workdir, move |_cx, _app, state| {
+            repo_view_item(label, workdir, move |_cx, _app, state| {
                 state.open_file_history(path, from.clone(), from, blame);
             })
         })
@@ -181,11 +291,30 @@ fn changes_among(state: &RepoState, paths: &[String], staged: bool) -> Vec<FileC
         .collect()
 }
 
+/// `changes` that were staged until just now, as the working directory lists them once unstaged: a new file
+/// (`Added`) is untracked then, which is what `Repository::discard` deletes.
+fn as_unstaged(changes: impl IntoIterator<Item = FileChange>) -> Vec<FileChange> {
+    changes
+        .into_iter()
+        .map(|mut change| {
+            if change.status == FileStatus::Added {
+                change.status = FileStatus::Untracked;
+            }
+            change
+        })
+        .collect()
+}
+
 /// A discard of the working directory changes of `paths` (unstaged first when they are staged).
 fn discard_paths(app: &mut Application, state: &mut RepoState, paths: &[String], staged: bool) {
-    let changes = changes_among(state, paths, staged);
+    let mut changes = changes_among(state, paths, staged);
     if staged {
-        let _ = state.repo.unstage(paths);
+        let unstaged = state.repo.unstage(paths);
+        // A file that is still staged must not be deleted.
+        if app.run(state, "Unstage", unstaged, None).is_none() {
+            return;
+        }
+        changes = as_unstaged(changes);
     }
     let result = state.repo.discard(&changes);
     app.run(state, "Discard", result, None);
@@ -223,22 +352,24 @@ pub fn workdir_file_menu(
     let mut ops = MenuItems::new();
     if conflicted {
         let target = change.clone();
-        ops.push(repo_item(
+        ops.push(repo_view_item(
             "Open in merge tool",
             &workdir,
             move |_cx, app, state| {
-                if let Err(error) = state.open_merge_tool(&target.path) {
-                    app.toasts.push_with_detail(
-                        ToastKind::Error,
-                        "Could not open the merge tool",
-                        error.to_string(),
-                    );
-                    state.open_diff(DiffTarget {
-                        source: DiffSource::Unstaged,
-                        path: target.path,
-                        status: target.status,
-                    });
-                }
+                navigate_from_editor(app, state, move |app, state| {
+                    if let Err(error) = state.open_merge_tool(&target.path) {
+                        app.toasts.push_with_detail(
+                            ToastKind::Error,
+                            "Could not open the merge tool",
+                            error.to_string(),
+                        );
+                        let _ = state.open_diff(DiffTarget {
+                            source: DiffSource::Unstaged,
+                            path: target.path,
+                            status: target.status,
+                        });
+                    }
+                });
             },
         ));
         if preferences().external_merge_tool_enabled() {
@@ -280,14 +411,16 @@ pub fn workdir_file_menu(
     let discard = |label: &str| {
         let copy = copy.clone();
         repo_item(label, &workdir, move |_cx, app, state| {
+            let mut change = copy.clone();
             if staged {
                 let paths = paths_of(&copy);
                 if state.repo.unstage(&paths).is_err() {
                     return;
                 }
+                change = as_unstaged([change]).remove(0);
             }
             let message = format!("Discarded changes to {}", file_name(&copy.path));
-            let result = state.repo.discard(std::slice::from_ref(&copy));
+            let result = state.repo.discard(std::slice::from_ref(&change));
             app.run(state, "Discard", result, Some(&message));
         })
     };
@@ -315,7 +448,7 @@ pub fn workdir_file_menu(
     let mut open = MenuItems::new();
     if preferences().external_diff_tool_enabled() && !conflicted {
         let path = path.clone();
-        open.push(repo_item(
+        open.push(repo_view_item(
             "Open in external diff tool",
             &workdir,
             move |_cx, app, state| {
@@ -340,7 +473,7 @@ pub fn workdir_file_menu(
             menu_item("Copy file path", move |cx, app| {
                 app.copy_to_clipboard(cx, &full_path(&copy_workdir, &copy_path));
             }),
-            repo_item(
+            repo_view_item(
                 "Create patch from file changes",
                 &workdir,
                 move |cx, app, state| {
@@ -397,7 +530,7 @@ pub fn commit_file_menu(
     let mut open = MenuItems::new();
     if preferences().external_diff_tool_enabled() {
         let (sha, path) = (sha.to_owned(), path.clone());
-        open.push(repo_item(
+        open.push(repo_view_item(
             "Open in external diff tool",
             &workdir,
             move |_cx, app, state| {
@@ -472,18 +605,16 @@ pub fn multiple_files_menu(
         move |_cx, app, state| discard_paths(app, state, &discard_paths_list, staged),
     ));
     let ignore_paths = paths.clone();
-    ops.push(repo_item(
+    ops.push(repo_view_item(
         format!("Ignore {n} files"),
         &workdir,
         move |_cx, app, state| {
-            match append_to_gitignore(state.repo.workdir(), &ignore_paths) {
-                Ok(()) => app.toasts.push(ToastKind::Success, "Added to .gitignore"),
-                Err(error) => app.toasts.push_with_detail(
-                    ToastKind::Error,
-                    "Could not write .gitignore",
-                    error.to_string(),
-                ),
-            }
+            let lines: Vec<String> = ignore_paths
+                .iter()
+                .filter_map(|path| ignore_line(path, false))
+                .collect();
+            let result = append_to_gitignore(state.repo.workdir(), &lines);
+            report_ignored(app, result, format!("{} files", lines.len()));
             state.refresh_status();
         },
     ));
@@ -497,7 +628,7 @@ pub fn multiple_files_menu(
     }
     separated_menu(vec![
         ops,
-        vec![repo_item(
+        vec![repo_view_item(
             format!("Create patch from changes in {n} files"),
             &workdir,
             move |cx, app, state| {
@@ -558,23 +689,13 @@ pub fn folder_menu(
             move |_cx, app, state| discard_paths(app, state, &discard_files, staged),
         ));
         let ignore_folder = folder.to_owned();
-        ops.push(repo_item(
+        ops.push(repo_view_item(
             format!("Ignore all files in '{base}/'"),
             &workdir,
             move |_cx, app, state| {
-                let pattern = format!("{ignore_folder}/");
-                match append_to_gitignore(state.repo.workdir(), std::slice::from_ref(&pattern)) {
-                    Ok(()) => app.toasts.push_with_detail(
-                        ToastKind::Success,
-                        "Added to .gitignore",
-                        pattern,
-                    ),
-                    Err(error) => app.toasts.push_with_detail(
-                        ToastKind::Error,
-                        "Could not write .gitignore",
-                        error.to_string(),
-                    ),
-                }
+                let lines: Vec<String> = ignore_line(&ignore_folder, true).into_iter().collect();
+                let result = append_to_gitignore(state.repo.workdir(), &lines);
+                report_ignored(app, result, lines.join(""));
                 state.refresh_status();
             },
         ));
@@ -588,7 +709,7 @@ pub fn folder_menu(
                 },
             ));
         }
-        ops.push(repo_item(
+        ops.push(repo_view_item(
             "Create Patch from changes in directory",
             &workdir,
             move |cx, app, state| {
@@ -635,7 +756,7 @@ pub fn file_history_commit_menu(
     let (copy_path, copy_workdir) = (path.to_owned(), workdir.clone());
     separated_menu(vec![
         vec![
-            repo_item("Show in graph", &workdir, move |_cx, _app, state| {
+            repo_view_item("Show in graph", &workdir, move |_cx, _app, state| {
                 state.close_file_history();
                 super::jump_to_commit(state, &jump_sha);
             })
@@ -656,13 +777,204 @@ pub fn file_history_commit_menu(
 mod tests {
     use super::*;
 
+    fn change(path: &str, status: FileStatus) -> FileChange {
+        FileChange {
+            path: path.to_owned(),
+            old_path: None,
+            status,
+            stats: None,
+        }
+    }
+
+    #[test]
+    fn staged_new_files_are_discarded_as_untracked_ones() {
+        let converted = as_unstaged([
+            change("new.txt", FileStatus::Added),
+            change("old.txt", FileStatus::Modified),
+        ]);
+        assert_eq!(converted[0].status, FileStatus::Untracked);
+        assert_eq!(converted[1].status, FileStatus::Modified);
+    }
+
+    #[test]
+    fn discarding_a_staged_new_file_deletes_it() {
+        let scratch = tempfile::tempdir().unwrap();
+        let folder = scratch.path().join("repo");
+        std::fs::create_dir_all(&folder).unwrap();
+        let repo = imgit_git::Repository::init(&folder).unwrap();
+        repo.set_local_config("user.name", Some("Test")).unwrap();
+        repo.set_local_config("user.email", Some("test@example.com"))
+            .unwrap();
+        repo.set_local_config("core.autocrlf", Some("false"))
+            .unwrap();
+        std::fs::write(
+            folder.join("old.txt"),
+            "old
+",
+        )
+        .unwrap();
+        repo.stage(&["old.txt"]).unwrap();
+        repo.commit("first", false).unwrap();
+        std::fs::write(
+            folder.join("new.txt"),
+            "new
+",
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("old.txt"),
+            "changed
+",
+        )
+        .unwrap();
+        repo.stage(&["new.txt", "old.txt"]).unwrap();
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        app.open_repository(&folder.to_string_lossy());
+        app.with_active(|app, state| {
+            state.refresh();
+            discard_paths(
+                app,
+                state,
+                &["new.txt".to_owned(), "old.txt".to_owned()],
+                true,
+            );
+            assert!(!folder.join("new.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(folder.join("old.txt")).unwrap(),
+                "old
+"
+            );
+            assert!(state.status.is_empty());
+        });
+    }
+
     #[test]
     fn ignoring_appends_one_line_per_pattern() {
         let scratch = tempfile::tempdir().unwrap();
-        append_to_gitignore(scratch.path(), &["a.txt".to_owned()]).unwrap();
+        append_to_gitignore(scratch.path(), &["/a.txt".to_owned()]).unwrap();
         append_to_gitignore(scratch.path(), &["*.log".to_owned(), "build/".to_owned()]).unwrap();
         let text = std::fs::read_to_string(scratch.path().join(".gitignore")).unwrap();
-        assert_eq!(text, "a.txt\n*.log\nbuild/\n");
+        assert_eq!(text, "/a.txt\n*.log\nbuild/\n");
+    }
+
+    #[test]
+    fn a_pattern_goes_on_its_own_line_whatever_the_file_ends_with() {
+        let lines = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        // The last line has no line break: one is added, not glued to the pattern.
+        let (added, count) = gitignore_additions(b"target", &lines(&["/a.txt"]));
+        assert_eq!((added.as_slice(), count), (&b"\n/a.txt\n"[..], 1));
+        // The file's own CRLF is kept, a missing last one is made up in the same style.
+        let (added, _) = gitignore_additions(b"one\r\ntwo", &lines(&["/a", "b/"]));
+        assert_eq!(added, b"\r\n/a\r\nb/\r\n");
+        let (added, _) = gitignore_additions(b"one\r\ntwo\r\n", &lines(&["/a"]));
+        assert_eq!(added, b"/a\r\n");
+        // An empty file, or none, needs no leading break.
+        assert_eq!(gitignore_additions(b"", &lines(&["/a"])).0, b"/a\n");
+    }
+
+    #[test]
+    fn a_pattern_that_is_there_already_is_not_added_again() {
+        let lines = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        let existing = b"/a.txt\r\nlog.txt\n*.o";
+        // Exact, as part of the request twice, or covered by the unanchored form of a root file.
+        let (added, count) = gitignore_additions(
+            existing,
+            &lines(&["/a.txt", "*.o", "/log.txt", "new/", "new/"]),
+        );
+        assert_eq!((added.as_slice(), count), (&b"\r\nnew/\r\n"[..], 1));
+        assert_eq!(
+            gitignore_additions(existing, &lines(&["/a.txt"])),
+            (Vec::new(), 0)
+        );
+        // A nested path is not covered by a root file of the same last name.
+        assert_eq!(
+            gitignore_additions(b"log.txt\n", &lines(&["/src/log.txt"])).1,
+            1
+        );
+        // Reported by the file append: nothing changes on disk.
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join(".gitignore"), "/a.txt\n").unwrap();
+        assert_eq!(
+            append_to_gitignore(scratch.path(), &lines(&["/a.txt"])).unwrap(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path().join(".gitignore")).unwrap(),
+            "/a.txt\n"
+        );
+    }
+
+    #[test]
+    fn ignore_lines_match_that_file_only() {
+        // A root file is anchored, so a file of that name in a folder stays tracked.
+        assert_eq!(ignore_line("a.txt", false).as_deref(), Some("/a.txt"));
+        // A path with a folder in it is anchored by git already.
+        assert_eq!(
+            ignore_line("src/a.txt", false).as_deref(),
+            Some("src/a.txt")
+        );
+        assert_eq!(
+            ignore_line("src\\ui\\a.txt", false).as_deref(),
+            Some("src/ui/a.txt")
+        );
+        assert_eq!(ignore_line("src", true).as_deref(), Some("/src/"));
+        assert_eq!(ignore_line("a/b", true).as_deref(), Some("a/b/"));
+        // Syntax in the name is escaped.
+        assert_eq!(ignore_line("#notes", false).as_deref(), Some("/\\#notes"));
+        assert_eq!(
+            ignore_line("!keep.txt", false).as_deref(),
+            Some("/\\!keep.txt")
+        );
+        assert_eq!(
+            ignore_line("a[1]*?.txt", false).as_deref(),
+            Some("/a\\[1]\\*\\?.txt")
+        );
+        assert_eq!(ignore_line("dir/a#b", false).as_deref(), Some("dir/a#b"));
+        assert_eq!(
+            ignore_line("trail  ", false).as_deref(),
+            Some("/trail\\ \\ ")
+        );
+        assert_eq!(
+            ignore_line("back\\slash", false).as_deref(),
+            Some("back/slash")
+        );
+        // No line can name these.
+        assert_eq!(ignore_line("", false), None);
+        assert_eq!(ignore_line("/", true), None);
+        assert_eq!(ignore_line("a\nb", false), None);
+        // The extension keeps its glob and escapes the rest.
+        assert_eq!(ignore_extension_line("rs").as_deref(), Some("*.rs"));
+        assert_eq!(ignore_extension_line("a[b").as_deref(), Some("*.a\\[b"));
+        assert_eq!(ignore_extension_line(""), None);
+    }
+
+    #[test]
+    fn git_ignores_exactly_what_the_lines_name() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let git = |args: &[&str]| {
+            let output = imgit_git::cli::run(dir, args, imgit_git::cli::RunOptions::default());
+            (output.exit_code, output.text)
+        };
+        assert_eq!(git(&["init", "-q"]).0, 0);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        // (No file called "star*": Windows has none, and `check-ignore` does not need one.)
+        for name in ["a.txt", "sub/a.txt", "#hash", "[x]"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        let lines: Vec<String> = ["a.txt", "#hash", "[x]", "star*"]
+            .iter()
+            .filter_map(|name| ignore_line(name, false))
+            .collect();
+        append_to_gitignore(dir, &lines).unwrap();
+        let ignored = |path: &str| git(&["check-ignore", "-q", "--", path]).0 == 0;
+        assert!(ignored("a.txt"));
+        // The copy in the folder is another file.
+        assert!(!ignored("sub/a.txt"));
+        assert!(ignored("#hash") && ignored("[x]") && ignored("star*"));
+        // The brackets did not become a character class matching "x".
+        std::fs::write(dir.join("x"), "x").unwrap();
+        assert!(!ignored("x"));
     }
 
     #[test]

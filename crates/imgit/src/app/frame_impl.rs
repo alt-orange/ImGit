@@ -36,7 +36,11 @@ impl AppFrame {
 
         let options = shell.options;
         match &options.repo {
-            Some(repo) => app.open_repository(&repo.to_string_lossy()),
+            Some(repo) => {
+                // Only this repository is open: the remembered tabs must survive this session.
+                app.started_with_repository = true;
+                app.open_repository(&repo.to_string_lossy());
+            }
             None if app.settings.remember_tabs => app.restore_tabs(),
             None => {}
         }
@@ -92,13 +96,13 @@ impl Frame for AppFrame {
                 if file_history {
                     state.open_file_history(path, sha.clone(), sha, blame);
                 } else if let Some(sha) = sha {
-                    state.open_diff(DiffTarget {
+                    let _ = state.open_diff(DiffTarget {
                         source: DiffSource::Commit(sha),
                         path,
                         status: FileStatus::Modified,
                     });
                 } else {
-                    state.open_diff(DiffTarget {
+                    let _ = state.open_diff(DiffTarget {
                         source: DiffSource::Unstaged,
                         path,
                         status: FileStatus::Modified,

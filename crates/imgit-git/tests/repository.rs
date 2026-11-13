@@ -1772,3 +1772,339 @@ fn commit_with_git_runs_git_commit() {
     assert_eq!(repo.commit_tree_paths(&next).unwrap(), ["a.txt", "b.txt"]);
     assert_eq!(scratch.read("a.txt"), "amended\n");
 }
+
+/// The index's content of `path`.
+fn index_blob(scratch: &Scratch, path: &str) -> Option<Vec<u8>> {
+    let raw = scratch.raw();
+    let index = raw.index().unwrap();
+    let entry = index.get_path(std::path::Path::new(path), 0)?;
+    Some(raw.find_blob(entry.id).unwrap().content().to_vec())
+}
+
+fn deleted(lineno: u32) -> LineSelection {
+    LineSelection {
+        origin: LineOrigin::Deleted,
+        lineno,
+    }
+}
+
+/// A repository of its own inside the working directory, with a commit.
+fn nested_repository(scratch: &Scratch, path: &str) {
+    scratch.write(&format!("{path}/inner.txt"), "inner\n");
+    let root = scratch.root().join(path);
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Inner",
+            "-c",
+            "user.email=inner@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "inner history",
+        ],
+    ] {
+        let output = cli::run(&root, &args, cli::RunOptions::default());
+        assert!(output.success(), "git {args:?}: {}", output.text);
+    }
+}
+
+#[test]
+fn discard_never_deletes_a_nested_repository() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    scratch.commit_file("tracked.txt", "base\n", "base");
+    scratch.write("junk.txt", "junk\n");
+    scratch.write("plain/x.txt", "x\n");
+    scratch.write("wrapper/file.txt", "f\n");
+    nested_repository(&scratch, "embedded");
+    nested_repository(&scratch, "wrapper/deep");
+
+    let status = repo.load_status().unwrap();
+    let error = repo.discard(&status.unstaged).unwrap_err().to_string();
+    assert!(error.contains("embedded"), "{error}");
+    assert!(error.contains("wrapper/deep"), "{error}");
+    assert!(!scratch.exists("junk.txt"));
+    assert!(!scratch.exists("plain/x.txt"));
+    assert!(!scratch.exists("wrapper/file.txt"));
+    assert!(scratch.exists("embedded/.git"));
+    assert_eq!(scratch.read("embedded/inner.txt"), "inner\n");
+    assert!(scratch.exists("wrapper/deep/.git"));
+
+    // Reset All leaves them alone as well, after doing the rest.
+    scratch.write("again.txt", "again\n");
+    assert!(repo.discard_all().is_err());
+    assert!(!scratch.exists("again.txt"));
+    assert!(scratch.exists("embedded/.git"));
+    assert!(scratch.exists("wrapper/deep/.git"));
+}
+
+#[test]
+fn discard_removes_the_folders_it_left_empty() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    scratch.commit_file(
+        "keep/tracked.txt",
+        "base
+",
+        "base",
+    );
+    scratch.write(
+        "keep/new.txt",
+        "n
+",
+    );
+    scratch.write(
+        "gone/a/b/one.txt",
+        "1
+",
+    );
+    scratch.write(
+        "gone/a/two.txt",
+        "2
+",
+    );
+    scratch.write(
+        "files/x.txt",
+        "x
+",
+    );
+    scratch.write(
+        "files/y.txt",
+        "y
+",
+    );
+    fs::create_dir_all(scratch.root().join("unrelated-empty")).unwrap();
+
+    let status = repo.load_status().unwrap();
+    repo.discard(&status.unstaged).unwrap();
+    assert!(!scratch.exists("keep/new.txt"));
+    assert!(scratch.exists("keep/tracked.txt"));
+    assert!(!scratch.exists("gone"), "a folder discard leaves no folder");
+    assert!(
+        !scratch.exists("files"),
+        "a folder discard leaves no folder"
+    );
+    // Only what the discard emptied goes.
+    assert!(scratch.exists("unrelated-empty"));
+    assert!(scratch.root().is_dir());
+
+    // A single deleted file: its parents go up to the first one that still holds something.
+    scratch.write(
+        "keep/deep/er/z.txt",
+        "z
+",
+    );
+    let file = FileChange {
+        path: "keep/deep/er/z.txt".to_owned(),
+        old_path: None,
+        status: FileStatus::Untracked,
+        stats: None,
+    };
+    repo.discard(&[file]).unwrap();
+    assert!(!scratch.exists("keep/deep"));
+    assert!(scratch.exists("keep/tracked.txt"));
+}
+
+#[test]
+fn apply_lines_keeps_bytes_that_are_not_utf8() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    fs::write(scratch.root().join("f.bin"), b"x\n\xff\ny\n").unwrap();
+    repo.stage(&["f.bin"]).unwrap();
+    repo.commit("base", false).unwrap();
+    fs::write(scratch.root().join("f.bin"), b"x\n\xff\nNEW\n\xfe\ny\n").unwrap();
+
+    repo.apply_lines("f.bin", &[added(3)], false).unwrap();
+    assert_eq!(
+        index_blob(&scratch, "f.bin").unwrap(),
+        b"x\n\xff\nNEW\ny\n".to_vec()
+    );
+    // And back out.
+    repo.apply_lines("f.bin", &[added(3)], true).unwrap();
+    assert_eq!(
+        index_blob(&scratch, "f.bin").unwrap(),
+        b"x\n\xff\ny\n".to_vec()
+    );
+}
+
+#[test]
+fn apply_lines_after_a_last_line_without_newline() {
+    // (the file as it is now, the line picked, the index afterwards)
+    let cases: [(&str, u32, &[u8]); 3] = [
+        ("a\nb\nc\n", 3, b"a\nb\nc\n"),
+        // The diff does not re-add the old last line at all.
+        ("a\nx\ny\n", 3, b"a\nb\ny\n"),
+        // Only the old line's new ending picked.
+        ("a\nb\nc\n", 2, b"a\nb\n"),
+    ];
+    for (text, picked, expected) in cases {
+        let scratch = Scratch::new();
+        scratch.commit_file("f.txt", "a\nb", "base");
+        scratch.write("f.txt", text);
+        scratch
+            .repo
+            .apply_lines("f.txt", &[added(picked)], false)
+            .unwrap();
+        assert_eq!(index_blob(&scratch, "f.txt").unwrap(), expected, "{text:?}");
+    }
+}
+
+#[test]
+fn unstaging_lines_after_a_last_line_without_newline() {
+    // HEAD "a\nb" (no ending), index "a\nb\nc\n": the diff is -b (old 2), +b\n (new 2), +c (new 3).
+    let cases: [(&[LineSelection], &[u8]); 7] = [
+        (&[added(3)], b"a\nb\n"),
+        // The line goes away as a whole.
+        (&[added(2)], b"a\nc\n"),
+        // The old line cannot come back unterminated with `c` staying after it: nothing is glued or doubled.
+        (&[deleted(2)], b"a\nb\nc\n"),
+        (&[deleted(2), added(2)], b"a\nb\nc\n"),
+        (&[deleted(2), added(3)], b"a\nb\n"),
+        // Nothing stays after it: it comes back as it was.
+        (&[deleted(2), added(2), added(3)], b"a\nb"),
+        (&[added(2), added(3)], b"a\n"),
+    ];
+    for (picked, expected) in cases {
+        let scratch = Scratch::new();
+        scratch.commit_file("f.txt", "a\nb", "base");
+        scratch.write("f.txt", "a\nb\nc\n");
+        scratch.repo.stage(&["f.txt"]).unwrap();
+        scratch.repo.apply_lines("f.txt", picked, true).unwrap();
+        assert_eq!(
+            index_blob(&scratch, "f.txt").unwrap(),
+            expected,
+            "{picked:?}"
+        );
+    }
+}
+
+#[test]
+fn unstaging_lines_when_the_index_loses_the_last_newline() {
+    // HEAD "a\nb\n", index "a\nb" (no ending): -b\n (old 2), +b (new 2).
+    let cases: [(&[LineSelection], &[u8]); 2] =
+        [(&[added(2)], b"a\n"), (&[deleted(2)], b"a\nb\nb")];
+    for (picked, expected) in cases {
+        let scratch = Scratch::new();
+        scratch.commit_file("f.txt", "a\nb\n", "base");
+        scratch.write("f.txt", "a\nb");
+        scratch.repo.stage(&["f.txt"]).unwrap();
+        scratch.repo.apply_lines("f.txt", picked, true).unwrap();
+        assert_eq!(
+            index_blob(&scratch, "f.txt").unwrap(),
+            expected,
+            "{picked:?}"
+        );
+    }
+}
+
+#[test]
+fn cherry_pick_of_a_change_already_in_head_commits_nothing() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    let base = scratch.commit_file("f.txt", "x\n", "base");
+    repo.create_branch("feature", &base, true).unwrap();
+    let picked = scratch.commit_file("f.txt", "y\n", "same change on feature");
+    repo.checkout_branch("main").unwrap();
+    let head = scratch.commit_file("f.txt", "y\n", "same change on main");
+
+    let error = repo.cherry_pick(&picked).unwrap_err().to_string();
+    assert!(error.contains("already in the current branch"), "{error}");
+    assert_eq!(scratch.head(), head);
+    assert_eq!(repo.state(), RepoState::None);
+    assert_eq!(scratch.read("f.txt"), "y\n");
+}
+
+#[test]
+fn revert_of_a_change_already_undone_commits_nothing() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    scratch.commit_file("f.txt", "x\n", "base");
+    let change = scratch.commit_file("f.txt", "y\n", "change");
+    let head = scratch.commit_file("f.txt", "x\n", "change back by hand");
+
+    let error = repo.revert(&change).unwrap_err().to_string();
+    assert!(error.contains("already in the current branch"), "{error}");
+    assert_eq!(scratch.head(), head);
+    assert_eq!(repo.state(), RepoState::None);
+}
+
+#[test]
+fn apply_lines_on_an_untracked_file_in_an_untracked_folder() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    scratch.commit_file("base.txt", "base\n", "base");
+    scratch.write("dir/new.txt", "x\ny\nz\n");
+    repo.apply_lines("dir/new.txt", &[added(2)], false).unwrap();
+    assert_eq!(index_blob(&scratch, "dir/new.txt").unwrap(), b"y\n");
+}
+
+#[test]
+fn commit_after_a_conflicted_cherry_pick_keeps_the_author() {
+    for with_git in [false, true] {
+        let scratch = Scratch::new();
+        let repo = &scratch.repo;
+        let base = scratch.commit_file("f.txt", "line\n", "base");
+        repo.create_branch("feature", &base, true).unwrap();
+        repo.set_local_config("user.name", Some("Other")).unwrap();
+        repo.set_local_config("user.email", Some("other@example.com"))
+            .unwrap();
+        let theirs = scratch.commit_file("f.txt", "theirs\n", "feature changes f");
+        repo.set_local_config("user.name", Some("Tester")).unwrap();
+        repo.set_local_config("user.email", Some("tester@example.com"))
+            .unwrap();
+        repo.checkout_branch("main").unwrap();
+        scratch.commit_file("f.txt", "ours\n", "main changes f");
+
+        assert_eq!(repo.cherry_pick(&theirs).unwrap(), Outcome::Conflicts);
+        scratch.write("f.txt", "resolved\n");
+        repo.stage(&["f.txt"]).unwrap();
+        let resolved = if with_git {
+            repo.commit_with_git("resolved pick", &CommitOptions::default())
+                .unwrap()
+        } else {
+            repo.commit("resolved pick", false).unwrap()
+        };
+        let original = repo.load_commit(&theirs).unwrap();
+        let commit = repo.load_commit(&resolved).unwrap();
+        assert_eq!(commit.author.name, "Other", "with_git: {with_git}");
+        assert_eq!(commit.author, original.author, "with_git: {with_git}");
+        assert_eq!(commit.author_time, original.author_time);
+    }
+}
+
+#[test]
+fn conflict_sides_refuses_files_that_are_not_utf8_text() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    let base = scratch.commit_file("f.dat", "base\n", "base");
+    repo.create_branch("feature", &base, true).unwrap();
+    fs::write(scratch.root().join("f.dat"), b"\xff\xfe theirs\n").unwrap();
+    repo.stage(&["f.dat"]).unwrap();
+    let theirs = repo.commit("theirs", false).unwrap();
+    repo.checkout_branch("main").unwrap();
+    fs::write(scratch.root().join("f.dat"), b"\xff ours\n").unwrap();
+    repo.stage(&["f.dat"]).unwrap();
+    repo.commit("ours", false).unwrap();
+
+    assert_eq!(repo.cherry_pick(&theirs).unwrap(), Outcome::Conflicts);
+    let error = repo.conflict_sides("f.dat").unwrap_err().to_string();
+    assert!(error.contains("not UTF-8"), "{error}");
+}
+
+#[test]
+fn apply_lines_unstages_part_of_a_staged_deletion() {
+    let scratch = Scratch::new();
+    let repo = &scratch.repo;
+    scratch.commit_file("f.txt", "1\n2\n3\n", "base");
+    fs::remove_file(scratch.root().join("f.txt")).unwrap();
+    repo.stage(&["f.txt"]).unwrap();
+    assert_eq!(index_blob(&scratch, "f.txt"), None);
+
+    repo.apply_lines("f.txt", &[deleted(2)], true).unwrap();
+    assert_eq!(index_blob(&scratch, "f.txt").unwrap(), b"2\n");
+}

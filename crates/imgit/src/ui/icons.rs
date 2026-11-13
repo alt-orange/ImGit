@@ -277,12 +277,77 @@ enum Layer {
     Secondary,
 }
 
+/// How many rasters the icon cache holds before the least recently used go: far more than a screen draws (a
+/// spinner alone makes one per degree), so normal use never evicts.
+const CACHE_CAPACITY: usize = 4096;
+
+/// A cache that keeps at most `capacity` values between frames, dropping the least recently used first. Values
+/// are only evicted by [`Self::begin_frame`], never while a frame is being drawn, so one handed out this frame
+/// stays valid for the rest of it.
+#[derive(Debug)]
+struct LruCache<V> {
+    /// Each value with the frame that last asked for it.
+    entries: HashMap<String, (V, u64)>,
+    frame: u64,
+    capacity: usize,
+}
+
+impl<V: Copy> LruCache<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            frame: 0,
+            capacity,
+        }
+    }
+
+    /// Starts a frame: returns (and forgets) the least recently used values beyond the capacity. None of them
+    /// was used in the frame that now begins.
+    fn begin_frame(&mut self) -> Vec<V> {
+        let excess = self.entries.len().saturating_sub(self.capacity);
+        let mut evicted = Vec::with_capacity(excess);
+        if excess > 0 {
+            let mut by_age: Vec<(u64, &String)> = self
+                .entries
+                .iter()
+                .map(|(key, &(_, used))| (used, key))
+                .collect();
+            by_age.sort_unstable();
+            let oldest: Vec<String> = by_age
+                .into_iter()
+                .take(excess)
+                .map(|(_, key)| key.clone())
+                .collect();
+            for key in oldest {
+                if let Some((value, _)) = self.entries.remove(&key) {
+                    evicted.push(value);
+                }
+            }
+        }
+        self.frame += 1;
+        evicted
+    }
+
+    /// The value under `key`, made by `make` when there is none; either way it counts as used this frame.
+    fn get_or_insert_with(&mut self, key: String, make: impl FnOnce() -> V) -> V {
+        let frame = self.frame;
+        let entry = self.entries.entry(key).or_insert_with(|| (make(), frame));
+        entry.1 = frame;
+        entry.0
+    }
+
+    /// Forgets everything, returning the values.
+    fn drain(&mut self) -> Vec<V> {
+        self.entries.drain().map(|(_, (value, _))| value).collect()
+    }
+}
+
 /// The Font Awesome table and the textures rasterised from it, in [`UiState`](crate::ui::UiState).
 #[derive(Debug)]
 pub struct Icons {
     table: Vec<FaIcon>,
     index: HashMap<&'static str, usize>,
-    cache: HashMap<String, CachedTexture>,
+    cache: LruCache<CachedTexture>,
 }
 
 impl Default for Icons {
@@ -304,7 +369,17 @@ impl Icons {
         Self {
             table,
             index,
-            cache: HashMap::new(),
+            cache: LruCache::new(CACHE_CAPACITY),
+        }
+    }
+
+    /// Starts a frame: frees the rasters beyond the cache's capacity that no recent frame drew. Call before
+    /// anything is drawn, so no icon of the frame is freed.
+    pub fn begin_frame(&mut self, textures: &mut dyn Textures) {
+        for cached in self.cache.begin_frame() {
+            if let Some(texture) = cached.texture {
+                textures.destroy_texture(texture);
+            }
         }
     }
 
@@ -316,7 +391,7 @@ impl Icons {
 
     /// Frees every rasterised icon (they are made again when drawn).
     pub fn clear(&mut self, textures: &mut dyn Textures) {
-        for (_, cached) in self.cache.drain() {
+        for cached in self.cache.drain() {
             if let Some(texture) = cached.texture {
                 textures.destroy_texture(texture);
             }
@@ -332,7 +407,7 @@ impl Icons {
         height: usize,
         build: impl FnOnce() -> Vec<u8>,
     ) -> CachedTexture {
-        *self.cache.entry(key).or_insert_with(|| {
+        self.cache.get_or_insert_with(key, || {
             let texture = (width > 0 && height > 0)
                 .then(|| {
                     textures
@@ -720,6 +795,41 @@ mod tests {
         for (index, icon) in Icon::ALL.iter().enumerate() {
             assert_eq!(*icon as usize, index);
         }
+    }
+
+    #[test]
+    fn the_cache_evicts_the_least_recently_used_between_frames() {
+        let mut cache = LruCache::<u32>::new(2);
+        assert!(cache.begin_frame().is_empty());
+        for (key, value) in [("a", 1), ("b", 2), ("c", 3)] {
+            cache.get_or_insert_with(key.to_owned(), || value);
+        }
+        // Over capacity, but nothing leaves during the frame that used them all.
+        assert_eq!(cache.entries.len(), 3);
+        // Next frame: one has to go (a tie in age: the smallest key).
+        assert_eq!(cache.begin_frame(), [1]);
+        assert_eq!(cache.entries.len(), 2);
+        // A used entry outlives an older one.
+        cache.get_or_insert_with("b".to_owned(), || 0);
+        cache.begin_frame();
+        cache.get_or_insert_with("d".to_owned(), || 4);
+        assert_eq!(cache.begin_frame(), [3]);
+    }
+
+    #[test]
+    fn an_evicted_entry_asked_for_in_the_same_frame_is_made_again() {
+        let mut cache = LruCache::<u32>::new(1);
+        cache.begin_frame();
+        cache.get_or_insert_with("a".to_owned(), || 1);
+        cache.begin_frame();
+        cache.get_or_insert_with("b".to_owned(), || 2);
+        // "a" was used a frame before "b": it is the one evicted, and asking for it builds a new value.
+        let evicted = cache.begin_frame();
+        assert_eq!(evicted, [1]);
+        assert_eq!(cache.get_or_insert_with("a".to_owned(), || 10), 10);
+        // Entries used this frame are never evicted by it.
+        assert_eq!(cache.get_or_insert_with("b".to_owned(), || 20), 2);
+        assert_eq!(cache.drain().len(), 2);
     }
 
     #[test]

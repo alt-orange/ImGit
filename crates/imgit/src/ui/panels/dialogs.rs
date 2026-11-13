@@ -9,15 +9,21 @@ mod modal;
 mod prompt_bar;
 mod slide_panel;
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Component, Path};
+use std::rc::Rc;
 
 use dear_imgui_rs::{StyleColor, StyleVar, WindowFlags};
 use imgit_app::RepoState;
-use imgit_app::repo_state::{InlineRef, UndoEntry};
+use imgit_app::repo_state::{
+    AUTO_STASH_BEFORE_RESET, AUTO_STASH_BEFORE_UNDO, InlineRef, UndoEntry,
+    hard_reset_keeping_changes, undo_hard_reset, with_changes_stashed,
+};
 use imgit_git::cli::Credential;
 use imgit_git::repository::short_sha;
 use imgit_git::{Error, ResetMode, Sha};
 
+use super::menus::push_delete_args;
 use crate::app::application::Application;
 use crate::app::dialog::{Dialog, DialogKind};
 use crate::app::toasts::ToastKind;
@@ -113,6 +119,146 @@ pub fn draw_slide_panel(
     app.panels.dialogs.slide = slide;
 }
 
+/// Why `name` (a branch or tag name the user typed, `kind` says which) cannot be used: git reads a name that
+/// starts with '-' as an option wherever it ends up on a command line. The text the dialogs and inline inputs
+/// show; `None` when the name is fine.
+#[must_use]
+pub fn leading_dash_error(kind: &str, name: &str) -> Option<String> {
+    name.starts_with('-')
+        .then(|| format!("A {kind} name cannot start with '-'"))
+}
+
+/// `git tag -s -m <message> -- <name> <sha>`: `--` keeps a name that starts with '-' from being an option.
+fn signed_tag_args(name: &str, sha: &str, message: &str) -> Vec<String> {
+    ["tag", "-s", "-m", message, "--", name, sha]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// A local branch as it was when it was deleted: what an undo needs to bring it back as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedBranch {
+    pub name: String,
+    /// The commit it pointed at.
+    pub sha: Sha,
+    /// What it tracked ("origin/main"): `branch.<name>.remote` / `.merge`, which deleting the branch removes.
+    pub upstream: Option<String>,
+}
+
+impl DeletedBranch {
+    /// The local branch `name` of `state` as it is now (`None` when there is none): call before deleting it.
+    #[must_use]
+    pub fn of(state: &RepoState, name: &str) -> Option<Self> {
+        let branch = state.find_ref(&format!("refs/heads/{name}"))?;
+        Some(Self {
+            name: name.to_owned(),
+            sha: branch.target.clone(),
+            upstream: branch.upstream.clone(),
+        })
+    }
+
+    /// Re-creates the branch at its tip and makes it track its upstream again. `Ok(false)` when a branch of
+    /// that name exists now (the user made one since): it is left alone, never moved onto the old tip.
+    ///
+    /// # Errors
+    ///
+    /// The branch could not be created, or it was but its tracking could not be restored.
+    pub fn restore(&self, repo: &imgit_git::Repository) -> imgit_git::Result<bool> {
+        if let Err(error) = repo.create_branch(&self.name, &self.sha, false) {
+            return if branch_exists(repo, &self.name) {
+                Ok(false)
+            } else {
+                Err(error)
+            };
+        }
+        if let Some(upstream) = self.upstream.as_deref() {
+            repo.set_upstream(&self.name, Some(upstream))
+                .map_err(|error| {
+                    Error::Message(format!(
+                        "Branch {} was restored, but it could not track {upstream} again: {error}",
+                        self.name
+                    ))
+                })?;
+        }
+        Ok(true)
+    }
+}
+
+/// Puts back `branches` (an undo). The ones whose name is taken now are skipped and named in the error that
+/// ends it, after the others were restored.
+///
+/// # Errors
+///
+/// A branch that could not be restored, or the names that were skipped.
+pub fn restore_branches(
+    repo: &imgit_git::Repository,
+    branches: &[DeletedBranch],
+) -> imgit_git::Result<()> {
+    let mut skipped = Vec::new();
+    for branch in branches {
+        if !branch.restore(repo)? {
+            skipped.push(branch.name.as_str());
+        }
+    }
+    if skipped.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Message(format!(
+        "Not restored, a branch of that name exists now: {}. The others were restored.",
+        skipped.join(", ")
+    )))
+}
+
+/// Whether the local branch `name` exists (a failed creation does not say why it failed).
+fn branch_exists(repo: &imgit_git::Repository, name: &str) -> bool {
+    imgit_git::cli::run(
+        repo.workdir(),
+        [
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{name}"),
+        ],
+        imgit_git::cli::RunOptions::default(),
+    )
+    .exit_code
+        == 0
+}
+
+/// A tag as it was when it was deleted: an annotated tag keeps its message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedTag {
+    pub name: String,
+    /// The commit it pointed at (peeled).
+    pub sha: Sha,
+    /// The message of an annotated tag; `None` for a lightweight one.
+    pub message: Option<String>,
+}
+
+impl DeletedTag {
+    /// The tag `name` of `state` as it is now (`None` when there is none): call before deleting it.
+    #[must_use]
+    pub fn of(state: &RepoState, name: &str) -> Option<Self> {
+        let tag = state.find_ref(&format!("refs/tags/{name}"))?;
+        Some(Self {
+            name: name.to_owned(),
+            sha: tag.target.clone(),
+            message: tag.annotated.then(|| tag.message.clone()),
+        })
+    }
+
+    /// Re-creates the tag: an annotated one with its message, a lightweight one as it was. Only the tag
+    /// object is new: it is tagged by the configured identity at the time of the undo, not by the original
+    /// tagger on the original date, which the `Repository` API cannot copy.
+    ///
+    /// # Errors
+    ///
+    /// libgit2's: the tag could not be created (one of that name exists now, for one).
+    pub fn restore(&self, repo: &imgit_git::Repository) -> imgit_git::Result<()> {
+        repo.create_tag(&self.name, &self.sha, self.message.as_deref())
+    }
+}
+
 /// Creates a branch at `sha` (checking it out when `checkout`) with an undo entry.
 pub fn create_branch_at(
     _cx: &mut Cx<'_>,
@@ -122,6 +268,22 @@ pub fn create_branch_at(
     sha: &str,
     checkout: bool,
 ) {
+    create_branch_in(app, state, name, sha, checkout);
+}
+
+/// [`create_branch_at`] without the frame.
+fn create_branch_in(
+    app: &mut Application,
+    state: &mut RepoState,
+    name: &str,
+    sha: &str,
+    checkout: bool,
+) {
+    if let Some(error) = leading_dash_error("branch", name) {
+        app.toasts
+            .push_with_detail(ToastKind::Error, "Create branch failed", error);
+        return;
+    }
     let previous_branch = if state.history.detached {
         None
     } else {
@@ -165,13 +327,29 @@ pub fn create_tag_at(
     sha: &str,
     message: &str,
 ) {
+    create_tag_in(app, state, name, sha, message);
+}
+
+/// [`create_tag_at`] without the frame.
+fn create_tag_in(
+    app: &mut Application,
+    state: &mut RepoState,
+    name: &str,
+    sha: &str,
+    message: &str,
+) {
+    if let Some(error) = leading_dash_error("tag", name) {
+        app.toasts
+            .push_with_detail(ToastKind::Error, "Create tag failed", error);
+        return;
+    }
     // Sign Tags by Default (tag.gpgSign): git signs it, an annotated tag (the message, else its name).
     if state.repo.config_bool("tag.gpgSign", false) {
         let message = if message.is_empty() { name } else { message };
         app.run_git_cli(
             state,
             "Create signed tag",
-            ["tag", "-s", name, sha, "-m", message],
+            signed_tag_args(name, sha, message),
         );
         return;
     }
@@ -210,20 +388,17 @@ pub fn create_tag_at(
 
 /// Undo for a history rewrite: a hard reset to the previous tip, with the uncommitted changes present at undo
 /// time stashed around it so they survive (as the menus' tip restore does). Built before the rewrite, while the
-/// history still holds the tip.
+/// history still holds the tip. A pop that conflicts is an error naming the stash that keeps the changes.
 fn tip_restore_entry(state: &RepoState, label: &str) -> UndoEntry {
     let tip: Option<Sha> = state.history.head_sha.clone();
     UndoEntry::new(label, move |repo| {
         let Some(sha) = &tip else {
             return Err(Error::Message("nothing to restore".to_owned()));
         };
-        let changes = repo.load_status().map_or(0, |status| status.count());
-        let stashed = changes > 0 && repo.stash_push("ImGit: auto stash before undo").is_ok();
-        let result = repo.reset(sha, ResetMode::Hard);
-        if stashed {
-            let _ = repo.stash_pop(0);
-        }
-        result
+        // Changes that cannot be set aside stop the undo: the hard reset would wipe them.
+        with_changes_stashed(repo, AUTO_STASH_BEFORE_UNDO, true, |repo| {
+            repo.reset(sha, ResetMode::Hard)
+        })
     })
     .with_redo_mode(ResetMode::Hard)
 }
@@ -258,6 +433,20 @@ fn with_dialog_repo(
             app.with_active(f);
         }
     }
+}
+
+/// [`with_dialog_repo`] for an action that changes the repository: refused with a toast while a git command is
+/// in flight on it ([`Application::with_idle_repo`]).
+fn with_idle_dialog_repo(
+    app: &mut Application,
+    workdir: Option<&Path>,
+    f: impl FnOnce(&mut Application, &mut RepoState),
+) {
+    with_dialog_repo(app, workdir, |app, state| {
+        if !app.refuse_while_busy(state) {
+            f(app, state);
+        }
+    });
 }
 
 fn draw_credentials(cx: &mut Cx<'_>, app: &mut Application) {
@@ -313,7 +502,7 @@ fn push_prompt(cx: &mut Cx<'_>, app: &mut Application) {
             app.run_git_cli(
                 state,
                 "Push",
-                ["push", "--set-upstream", &request.text_a, &refspec],
+                ["push", "--set-upstream", "--", &request.text_a, &refspec],
             );
         });
     }
@@ -339,8 +528,21 @@ fn text_prompt(cx: &mut Cx<'_>, app: &mut Application) {
     }
 }
 
+/// Whether `part` is a name Windows reserves for a device ("CON", "nul.txt", "COM1"...): a file of that name
+/// cannot be created, and opening it talks to the device instead.
+fn is_reserved_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default().trim_end();
+    let stem = stem.to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|number| matches!(number.as_bytes(), [b'1'..=b'9']))
+}
+
 /// The path of a file to create, as the components below the working directory: `None` when it would lie
-/// outside of it (absolute, on another drive, above it) or name no file (empty, ends with a separator).
+/// outside of it (absolute, on another drive, above it, a component with a ':' (a drive, or an NTFS alternate
+/// data stream), a reserved device name) or name no file (empty, ends with a separator).
 pub fn new_file_components(folder: &str, name: &str) -> Option<Vec<String>> {
     let path = if folder.is_empty() {
         name.to_owned()
@@ -351,13 +553,6 @@ pub fn new_file_components(folder: &str, name: &str) -> Option<Vec<String>> {
     if path.starts_with('/') || path.ends_with('/') {
         return None;
     }
-    // "C:..." names a drive.
-    let mut chars = path.chars();
-    if let (Some(first), Some(':')) = (chars.next(), chars.next())
-        && first.is_ascii_alphabetic()
-    {
-        return None;
-    }
     let mut parts: Vec<String> = Vec::new();
     for part in path.split('/') {
         match part {
@@ -365,6 +560,9 @@ pub fn new_file_components(folder: &str, name: &str) -> Option<Vec<String>> {
             ".." => {
                 parts.pop()?;
             }
+            // "C:evil" names a drive (and `PathBuf::join` would replace the working directory by it), "a:b" a
+            // data stream of the file "a".
+            part if part.contains(':') || is_reserved_device_name(part) => return None,
             part => parts.push(part.to_owned()),
         }
     }
@@ -400,11 +598,25 @@ fn create_file_prompt(cx: &mut Cx<'_>, app: &mut Application) {
     };
     with_dialog_repo(app, request.workdir.as_deref(), |app, state| {
         let relative = parts.join("/");
+        let workdir = state.repo.workdir();
         let full = parts
             .iter()
-            .fold(state.repo.workdir().to_path_buf(), |path, part| {
-                path.join(part)
-            });
+            .fold(workdir.to_path_buf(), |path, part| path.join(part));
+        // Whatever the components were, the file goes below the working directory.
+        let plain = parts.iter().all(|part| {
+            matches!(
+                Path::new(part).components().collect::<Vec<_>>()[..],
+                [Component::Normal(_)]
+            )
+        });
+        if !plain || !full.starts_with(workdir) {
+            app.toasts.push_with_detail(
+                ToastKind::Error,
+                title,
+                "The file must be inside the repository.",
+            );
+            return;
+        }
         if full.exists() {
             app.toasts
                 .push_with_detail(ToastKind::Error, title, "A file with that name exists.");
@@ -431,8 +643,15 @@ fn rename_branch_prompt(cx: &mut Cx<'_>, app: &mut Application) {
     if answer == Answer::No || request.text_a == request.ref_name {
         return;
     }
+    // The prompt stays open, with what was typed, so the name can be corrected.
+    if let Some(error) = leading_dash_error("branch", &request.text_a) {
+        app.toasts
+            .push_with_detail(ToastKind::Error, "Rename branch failed", error);
+        app.dialog = request;
+        return;
+    }
     let (from, to) = (request.ref_name.clone(), request.text_a.clone());
-    with_dialog_repo(app, request.workdir.as_deref(), |app, state| {
+    with_idle_dialog_repo(app, request.workdir.as_deref(), |app, state| {
         let result = state.repo.rename_branch(&from, &to);
         let done = format!("Renamed {from} to {to}");
         if app
@@ -458,7 +677,7 @@ fn stash_message_prompt(cx: &mut Cx<'_>, app: &mut Application) {
     if answer == Answer::No {
         return;
     }
-    with_dialog_repo(app, request.workdir.as_deref(), |app, state| {
+    with_idle_dialog_repo(app, request.workdir.as_deref(), |app, state| {
         let result = state.repo.stash_set_message(&request.sha, &request.text_a);
         app.run(
             state,
@@ -542,8 +761,10 @@ fn confirm_texts(d: &Dialog) -> (String, String, bool) {
 /// Destructive confirmations are the prompt bar over the toolbar, not a modal.
 fn confirm_prompt(cx: &mut Cx<'_>, app: &mut Application) {
     let (message, label, danger) = confirm_texts(&app.dialog);
+    // The key that opened the prompt (Escape in the file editor) must not answer it in the same frame.
+    let first_frame = std::mem::take(&mut app.dialog.just_opened);
     let answer = prompt_bar::draw_prompt_bar(cx, &message, &label, danger);
-    if answer == Answer::Pending {
+    if answer == Answer::Pending || (first_frame && answer == Answer::No) {
         return;
     }
     let request = std::mem::take(&mut app.dialog);
@@ -556,7 +777,7 @@ fn confirm_prompt(cx: &mut Cx<'_>, app: &mut Application) {
         }
         return;
     }
-    with_dialog_repo(
+    with_idle_dialog_repo(
         app,
         request.workdir.as_deref(),
         |app, state| match request.kind {
@@ -576,13 +797,18 @@ fn delete_branch(app: &mut Application, state: &mut RepoState, request: &Dialog)
         app.run_git_cli(
             state,
             "Delete remote branch",
-            ["push", &request.ref_remote, "--delete", &request.ref_name],
+            push_delete_args(&request.ref_remote, &request.ref_name),
         );
         return;
     }
     let name = request.ref_name.clone();
+    // What the branch tracked comes from the repository now; the dialog's copy is the fallback.
+    let deleted = DeletedBranch::of(state, &name).unwrap_or_else(|| DeletedBranch {
+        name: name.clone(),
+        sha: request.sha.clone(),
+        upstream: Some(request.text_a.clone()).filter(|upstream| !upstream.is_empty()),
+    });
     let upstream = request.text_a.clone();
-    let sha = request.sha.clone();
     let result = state.repo.delete_branch(&name);
     if app
         .run(
@@ -598,7 +824,7 @@ fn delete_branch(app: &mut Application, state: &mut RepoState, request: &Dialog)
     let redo_name = name.clone();
     state.push_undo(
         UndoEntry::new(format!("delete branch {name}"), move |repo| {
-            repo.set_branch_target(&name, &sha)
+            restore_branches(repo, std::slice::from_ref(&deleted))
         })
         .with_redo(move |repo| repo.delete_branch(&redo_name)),
     );
@@ -608,14 +834,19 @@ fn delete_branch(app: &mut Application, state: &mut RepoState, request: &Dialog)
         app.run_git_cli(
             state,
             "Delete remote branch",
-            ["push", remote, "--delete", branch],
+            push_delete_args(remote, branch),
         );
     }
 }
 
 fn delete_tag(app: &mut Application, state: &mut RepoState, request: &Dialog) {
     let name = request.ref_name.clone();
-    let sha = request.sha.clone();
+    // Before it goes: an annotated tag's message is what an undo needs to make it annotated again.
+    let deleted = DeletedTag::of(state, &name).unwrap_or_else(|| DeletedTag {
+        name: name.clone(),
+        sha: request.sha.clone(),
+        message: None,
+    });
     let remote = state
         .history
         .remotes
@@ -637,7 +868,7 @@ fn delete_tag(app: &mut Application, state: &mut RepoState, request: &Dialog) {
     let (redo_name, remote_tag) = (name.clone(), format!("refs/tags/{name}"));
     state.push_undo(
         UndoEntry::new(format!("delete tag {name}"), move |repo| {
-            repo.create_tag(&name, &sha, None)
+            deleted.restore(repo)
         })
         .with_redo(move |repo| repo.delete_tag(&redo_name)),
     );
@@ -645,7 +876,7 @@ fn delete_tag(app: &mut Application, state: &mut RepoState, request: &Dialog) {
         app.run_git_cli(
             state,
             "Delete remote tag",
-            ["push", &remote, "--delete", &remote_tag],
+            push_delete_args(&remote, &remote_tag),
         );
     }
 }
@@ -673,30 +904,51 @@ fn reset_mode_name(mode: ResetMode) -> &'static str {
     }
 }
 
-/// Resets run straight away.
+/// Resets run straight away. A hard reset first stashes the uncommitted changes it would wipe, and its undo
+/// brings back both the commit and those changes; the undo of a soft or mixed reset moves HEAD back in the same
+/// mode (they leave the working directory alone, so there is nothing else to restore).
 fn reset_now(_cx: &mut Cx<'_>, app: &mut Application) {
     let request = std::mem::take(&mut app.dialog);
-    with_dialog_repo(app, request.workdir.as_deref(), |app, state| {
+    with_idle_dialog_repo(app, request.workdir.as_deref(), |app, state| {
         let (sha, mode) = (request.sha.clone(), request.reset_mode);
         let previous = state.history.head_sha.clone();
-        let result = state.repo.reset(&sha, mode);
-        let done = format!("{} reset to {}", reset_mode_name(mode), short_sha(&sha));
-        if app.run(state, "Reset", result, Some(&done)).is_none() {
-            return;
-        }
-        let undo_mode = if mode == ResetMode::Hard {
-            ResetMode::Mixed
+        let result = if mode == ResetMode::Hard {
+            hard_reset_keeping_changes(&state.repo, &sha)
         } else {
-            mode
+            state.repo.reset(&sha, mode).map(|()| None)
         };
+        let mut done = format!("{} reset to {}", reset_mode_name(mode), short_sha(&sha));
+        if let Ok(Some(_)) = &result {
+            done.push_str(&format!(
+                ". Your uncommitted changes are kept in the stash \"{AUTO_STASH_BEFORE_RESET}\"."
+            ));
+        }
+        let Some(saved) = app.run(state, "Reset", result, Some(&done)) else {
+            return;
+        };
+        // The stash a hard reset made, which the next undo pops and a redo makes again.
+        let saved = Rc::new(RefCell::new(saved));
+        let (undo_saved, redo_saved) = (Rc::clone(&saved), saved);
         let redo_sha = sha.clone();
-        state.push_undo(
-            UndoEntry::new("reset", move |repo| match &previous {
-                Some(previous) => repo.reset(previous, undo_mode),
-                None => Err(Error::Message("nothing to restore".to_owned())),
-            })
-            .with_redo(move |repo| repo.reset(&redo_sha, mode)),
-        );
+        let entry = UndoEntry::new("reset", move |repo| {
+            let Some(previous) = &previous else {
+                return Err(Error::Message("nothing to restore".to_owned()));
+            };
+            if mode == ResetMode::Hard {
+                let saved = undo_saved.borrow_mut().take();
+                undo_hard_reset(repo, previous, saved.as_deref())
+            } else {
+                repo.reset(previous, mode)
+            }
+        });
+        state.push_undo(entry.with_redo(move |repo| {
+            if mode == ResetMode::Hard {
+                *redo_saved.borrow_mut() = hard_reset_keeping_changes(repo, &redo_sha)?;
+                Ok(())
+            } else {
+                repo.reset(&redo_sha, mode)
+            }
+        }));
     });
 }
 
@@ -882,6 +1134,251 @@ mod tests {
         assert_eq!(new_file_components("", "dir/"), None);
         assert_eq!(new_file_components("", "."), None);
         assert_eq!(new_file_components("", ""), None);
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let mut full = vec!["-c", "user.name=Test", "-c", "user.email=test@example.com"];
+        full.extend(args);
+        let output = imgit_git::cli::run(dir, full, imgit_git::cli::RunOptions::default());
+        assert_eq!(output.exit_code, 0, "git {args:?}: {}", output.text);
+        output.text.trim().to_owned()
+    }
+
+    /// A repository with two commits on `main` and a remote `origin` that has a `topic` branch (which the local
+    /// `topic` tracks), opened in an application.
+    fn fixture() -> (tempfile::TempDir, Application, std::path::PathBuf) {
+        let scratch = tempfile::tempdir().unwrap();
+        let folder = scratch.path().join("repo");
+        std::fs::create_dir_all(&folder).unwrap();
+        git(&folder, &["init", "-b", "main"]);
+        for name in ["one", "two"] {
+            std::fs::write(folder.join(format!("{name}.txt")), name).unwrap();
+            git(&folder, &["add", "-A"]);
+            git(&folder, &["commit", "-m", name]);
+        }
+        git(&folder, &["remote", "add", "origin", "../elsewhere.git"]);
+        git(
+            &folder,
+            &["update-ref", "refs/remotes/origin/topic", "HEAD"],
+        );
+        git(&folder, &["branch", "topic", "HEAD~1"]);
+        git(&folder, &["config", "branch.topic.remote", "origin"]);
+        git(
+            &folder,
+            &["config", "branch.topic.merge", "refs/heads/topic"],
+        );
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        app.open_repository(&folder.to_string_lossy());
+        (scratch, app, folder)
+    }
+
+    fn delete_request(kind: DialogKind, name: &str, sha: &str) -> Dialog {
+        let mut request = dialog(kind);
+        request.ref_name = name.to_owned();
+        request.sha = sha.to_owned();
+        request
+    }
+
+    #[test]
+    fn undoing_a_branch_delete_restores_what_it_tracked() {
+        let (_scratch, mut app, folder) = fixture();
+        app.with_active(|app, state| {
+            let tip = git(&folder, &["rev-parse", "topic"]);
+            state.refresh();
+            assert_eq!(
+                DeletedBranch::of(state, "topic")
+                    .unwrap()
+                    .upstream
+                    .as_deref(),
+                Some("origin/topic")
+            );
+            // The dialog knows the tip only; the upstream is read from the repository.
+            let request = delete_request(DialogKind::DeleteBranch, "topic", &tip);
+            delete_branch(app, state, &request);
+            // Deleting the branch removed its tracking configuration too.
+            assert_eq!(
+                git(
+                    &folder,
+                    &[
+                        "config",
+                        "--default",
+                        "none",
+                        "--get",
+                        "branch.topic.remote"
+                    ]
+                ),
+                "none"
+            );
+            app.undo(state);
+            assert_eq!(app.toasts.history()[0].title, "Undo Successful");
+            assert_eq!(git(&folder, &["rev-parse", "topic"]), tip);
+            assert_eq!(git(&folder, &["config", "branch.topic.remote"]), "origin");
+            assert_eq!(
+                git(&folder, &["config", "branch.topic.merge"]),
+                "refs/heads/topic"
+            );
+            // The tracking shows in the graph again.
+            assert_eq!(
+                DeletedBranch::of(state, "topic")
+                    .unwrap()
+                    .upstream
+                    .as_deref(),
+                Some("origin/topic")
+            );
+        });
+    }
+
+    #[test]
+    fn undoing_a_branch_delete_never_moves_a_branch_made_since() {
+        let (_scratch, mut app, folder) = fixture();
+        app.with_active(|app, state| {
+            let tip = git(&folder, &["rev-parse", "topic"]);
+            let request = delete_request(DialogKind::DeleteBranch, "topic", &tip);
+            delete_branch(app, state, &request);
+            git(&folder, &["branch", "topic", "main"]);
+            let theirs = git(&folder, &["rev-parse", "topic"]);
+            assert_ne!(theirs, tip);
+            app.undo(state);
+            // It says so and leaves the new branch alone.
+            let toast = &app.toasts.history()[0];
+            assert_eq!(toast.title, "Undo Failed");
+            assert!(toast.detail.contains("topic"), "{}", toast.detail);
+            assert_eq!(git(&folder, &["rev-parse", "topic"]), theirs);
+        });
+    }
+
+    #[test]
+    fn restoring_several_branches_skips_the_taken_names_and_says_so() {
+        let (_scratch, mut app, folder) = fixture();
+        git(&folder, &["branch", "other", "HEAD~1"]);
+        app.with_active(|_app, state| {
+            state.refresh();
+            let both: Vec<DeletedBranch> = ["topic", "other"]
+                .iter()
+                .map(|name| DeletedBranch::of(state, name).unwrap())
+                .collect();
+            let old_other = both[1].sha.clone();
+            for branch in &both {
+                state.repo.delete_branch(&branch.name).unwrap();
+            }
+            git(&folder, &["branch", "topic", "main"]);
+            let error = restore_branches(&state.repo, &both)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("topic") && !error.contains("other,"),
+                "{error}"
+            );
+            // "other" came back, "topic" is the one made since.
+            assert_eq!(git(&folder, &["rev-parse", "other"]), old_other);
+            assert_eq!(
+                git(&folder, &["rev-parse", "topic"]),
+                git(&folder, &["rev-parse", "main"])
+            );
+        });
+    }
+
+    #[test]
+    fn undoing_a_tag_delete_restores_an_annotated_tag_with_its_message() {
+        let (_scratch, mut app, folder) = fixture();
+        git(
+            &folder,
+            &["tag", "-a", "v1", "-m", "release notes\n\nmore", "HEAD~1"],
+        );
+        git(&folder, &["tag", "light", "HEAD"]);
+        app.with_active(|app, state| {
+            state.refresh();
+            let target = git(&folder, &["rev-parse", "v1^{commit}"]);
+            let deleted = DeletedTag::of(state, "v1").unwrap();
+            assert_eq!(deleted.sha, target);
+            assert!(
+                deleted
+                    .message
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("release notes")
+            );
+            assert_eq!(DeletedTag::of(state, "light").unwrap().message, None);
+            for name in ["v1", "light"] {
+                let request = delete_request(DialogKind::DeleteTag, name, "");
+                delete_tag(app, state, &request);
+            }
+            assert_eq!(git(&folder, &["tag", "-l"]), "");
+            app.undo(state);
+            app.undo(state);
+            // The annotated tag is a tag object again, with its message, at the same commit; the lightweight
+            // one stays a plain ref.
+            assert_eq!(git(&folder, &["cat-file", "-t", "v1"]), "tag");
+            assert_eq!(git(&folder, &["rev-parse", "v1^{commit}"]), target);
+            assert!(
+                git(&folder, &["tag", "-l", "--format=%(contents)", "v1"])
+                    .starts_with("release notes\n\nmore")
+            );
+            assert_eq!(git(&folder, &["cat-file", "-t", "light"]), "commit");
+        });
+    }
+
+    #[test]
+    fn a_name_that_starts_with_a_dash_is_refused_before_git_sees_it() {
+        assert_eq!(
+            leading_dash_error("branch", "-x").as_deref(),
+            Some("A branch name cannot start with '-'")
+        );
+        assert_eq!(
+            leading_dash_error("tag", "--force").as_deref(),
+            Some("A tag name cannot start with '-'")
+        );
+        assert_eq!(leading_dash_error("branch", "x-y"), None);
+        assert_eq!(leading_dash_error("branch", ""), None);
+        let (_scratch, mut app, folder) = fixture();
+        app.with_active(|app, state| {
+            let head = state.history.head_sha.clone().unwrap();
+            create_branch_in(app, state, "-x", &head, false);
+            assert_eq!(app.toasts.history()[0].title, "Create branch failed");
+            assert_eq!(
+                app.toasts.history()[0].detail,
+                "A branch name cannot start with '-'"
+            );
+            create_tag_in(app, state, "-t", &head, "");
+            assert_eq!(app.toasts.history()[0].title, "Create tag failed");
+            assert_eq!(git(&folder, &["tag", "-l"]), "");
+            assert!(state.undo_stack.is_empty());
+            // Anything else still works.
+            create_branch_in(app, state, "fine", &head, false);
+            assert_eq!(git(&folder, &["rev-parse", "fine"]), head);
+        });
+    }
+
+    #[test]
+    fn a_signed_tag_command_line_keeps_the_name_from_being_an_option() {
+        let (_scratch, _app, folder) = fixture();
+        let args = signed_tag_args("v2", "HEAD", "the message");
+        assert_eq!(args, ["tag", "-s", "-m", "the message", "--", "v2", "HEAD"]);
+        // Signing needs a key: `-a` makes the same line without one.
+        let mut annotated = args.clone();
+        annotated[1] = "-a".to_owned();
+        let output = imgit_git::cli::run(
+            &folder,
+            annotated.iter().map(String::as_str),
+            imgit_git::cli::RunOptions::default(),
+        );
+        assert_eq!(output.exit_code, 0, "{}", output.text);
+        assert!(
+            git(&folder, &["tag", "-l", "--format=%(contents)", "v2"]).starts_with("the message")
+        );
+        // A name with a dash is a (bad) name, not an option.
+        let output = imgit_git::cli::run(
+            &folder,
+            signed_tag_args("-s", "HEAD", "m")
+                .iter()
+                .map(String::as_str),
+            imgit_git::cli::RunOptions::default(),
+        );
+        assert!(
+            output.text.contains("not a valid tag name"),
+            "{}",
+            output.text
+        );
     }
 
     #[test]

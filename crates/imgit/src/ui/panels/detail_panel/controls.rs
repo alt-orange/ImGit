@@ -143,7 +143,7 @@ pub fn small_checkbox(
 }
 
 /// .btn-success / .btn-danger (12px, 6px 12px padding, 31.14px tall): a 1px border around 20% of the colour, 30%
-/// while hovered.
+/// while hovered. A button that is not `enabled` is drawn at half strength and never clicked.
 pub fn tone_action_button(
     cx: &mut Cx<'_>,
     id: &str,
@@ -151,27 +151,29 @@ pub fn tone_action_button(
     min: Vec2,
     max: Vec2,
     tone: Color,
+    enabled: bool,
 ) -> bool {
     let ui = cx.ui;
     let p = cx.palette;
     let draw = cx.window_draw_list();
     cx.set_cursor(min);
-    let clicked = ui.invisible_button(id, max - min);
-    let hovered = ui.is_item_hovered();
+    let clicked = ui.invisible_button(id, max - min) && enabled;
+    let hovered = ui.is_item_hovered() && enabled;
+    let alpha = if enabled { 1.0 } else { 0.5 };
     draw.add_rect_filled(
         min,
         max,
-        tone.with_alpha(if hovered { 0.3 } else { 0.2 }),
+        tone.with_alpha(if hovered { 0.3 } else { 0.2 } * alpha),
         cx.px(2.0),
     );
-    draw.add_rect(min, max, tone, cx.px(2.0), 1.0);
+    draw.add_rect(min, max, tone.with_alpha(alpha), cx.px(2.0), 1.0);
     let text_w = cx.text_size(cx.fonts.regular, 12.0, label).x;
     css_text(
         cx,
         draw,
         12.0,
         vec2(((min.x + max.x - text_w) / 2.0).round(), min.y + cx.px(7.0)),
-        p.text_normal,
+        p.text_normal.with_alpha(p.text_normal.a * alpha),
         label,
     );
     clicked

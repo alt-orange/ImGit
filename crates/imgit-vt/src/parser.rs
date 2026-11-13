@@ -4,6 +4,10 @@
 const MAX_OSC: usize = 4096;
 /// Parameters saturate here rather than overflow.
 const MAX_PARAM: u32 = 99_999;
+/// The parameters of a CSI kept; further ones are dropped, so that an unterminated sequence stays bounded.
+const MAX_PARAMS: usize = 32;
+/// The intermediate bytes of a CSI kept.
+const MAX_INTERMEDIATES: usize = 4;
 
 /// What the byte stream asks of the screen.
 pub(crate) trait Perform {
@@ -39,6 +43,8 @@ pub(crate) struct Csi {
     /// '?', '>', '<' or '=' before the parameters.
     private: Option<u8>,
     intermediates: Vec<u8>,
+    /// The parameter being read was dropped for want of room ([`MAX_PARAMS`]).
+    dropped: bool,
 }
 
 impl Csi {
@@ -68,6 +74,10 @@ impl Csi {
     }
 
     fn push_param(&mut self) {
+        if self.params.len() >= MAX_PARAMS {
+            self.dropped = true;
+            return;
+        }
         self.params.push(Param {
             value: None,
             sub: self.next_is_sub,
@@ -78,6 +88,9 @@ impl Csi {
         if !self.param_started {
             self.push_param();
             self.param_started = true;
+        }
+        if self.dropped {
+            return;
         }
         if let Some(param) = self.params.last_mut() {
             let value = param.value.unwrap_or(0) * 10 + u32::from(digit);
@@ -90,7 +103,14 @@ impl Csi {
             self.push_param();
         }
         self.param_started = false;
+        self.dropped = false;
         self.next_is_sub = colon;
+    }
+
+    fn intermediate(&mut self, byte: u8) {
+        if self.intermediates.len() < MAX_INTERMEDIATES {
+            self.intermediates.push(byte);
+        }
     }
 }
 
@@ -99,6 +119,19 @@ impl Csi {
 struct Utf8 {
     code_point: u32,
     remaining: u8,
+    /// The smallest value the sequence's length may encode; below it the sequence is overlong.
+    min: u32,
+}
+
+impl Utf8 {
+    /// The finished character: U+FFFD for an overlong or invalid sequence, and for a C1 control (U+0080 to
+    /// U+009F), which must not reach the cells as a raw control character.
+    fn decoded(self) -> char {
+        if self.code_point < self.min || (0x7F..=0x9F).contains(&self.code_point) {
+            return char::REPLACEMENT_CHARACTER;
+        }
+        char::from_u32(self.code_point).unwrap_or(char::REPLACEMENT_CHARACTER)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -172,7 +205,7 @@ impl Parser {
                     b'0'..=b'9' => csi.digit(byte - b'0'),
                     b';' | b':' => csi.separator(byte == b':'),
                     0x3C..=0x3F => csi.private = Some(byte),
-                    0x20..=0x2F => csi.intermediates.push(byte),
+                    0x20..=0x2F => csi.intermediate(byte),
                     0x40..=0x7E => {
                         performer.csi_dispatch(&csi, byte);
                         return;
@@ -219,9 +252,7 @@ impl Parser {
                 utf8.code_point = (utf8.code_point << 6) | u32::from(byte & 0x3F);
                 utf8.remaining -= 1;
                 if utf8.remaining == 0 {
-                    performer.print(
-                        char::from_u32(utf8.code_point).unwrap_or(char::REPLACEMENT_CHARACTER),
-                    );
+                    performer.print(utf8.decoded());
                 } else {
                     self.utf8 = Some(utf8);
                 }
@@ -230,20 +261,69 @@ impl Parser {
             // Cut short: the byte starts over below.
             performer.print(char::REPLACEMENT_CHARACTER);
         }
-        let lead = |mask: u8, remaining: u8| {
+        let lead = |mask: u8, remaining: u8, min: u32| {
             Some(Utf8 {
                 code_point: u32::from(byte & mask),
                 remaining,
+                min,
             })
         };
         match byte {
             0x00..=0x1F => performer.execute(byte),
             0x20..=0x7E => performer.print(char::from(byte)),
             0x7F => {}
-            0xC0..=0xDF => self.utf8 = lead(0x1F, 1),
-            0xE0..=0xEF => self.utf8 = lead(0x0F, 2),
-            0xF0..=0xF7 => self.utf8 = lead(0x07, 3),
+            // C0 and C1 can only start an overlong encoding of an ASCII character.
+            0xC0 | 0xC1 => performer.print(char::REPLACEMENT_CHARACTER),
+            0xC2..=0xDF => self.utf8 = lead(0x1F, 1, 0x80),
+            0xE0..=0xEF => self.utf8 = lead(0x0F, 2, 0x800),
+            0xF0..=0xF7 => self.utf8 = lead(0x07, 3, 0x1_0000),
             _ => performer.print(char::REPLACEMENT_CHARACTER),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Recorder {
+        params: usize,
+        intermediates: usize,
+        last: Option<u32>,
+    }
+
+    impl Perform for Recorder {
+        fn print(&mut self, _: char) {}
+        fn execute(&mut self, _: u8) {}
+        fn esc_dispatch(&mut self, _: u8) {}
+        fn csi_dispatch(&mut self, csi: &Csi, _: u8) {
+            self.params = csi.param_count();
+            self.intermediates = csi.intermediates().len();
+            self.last = csi.params.last().and_then(|param| param.value);
+        }
+        fn osc_dispatch(&mut self, _: &[u8]) {}
+    }
+
+    #[test]
+    fn an_endless_csi_keeps_a_bounded_number_of_parameters_and_intermediates() {
+        let mut parser = Parser::default();
+        let mut recorder = Recorder::default();
+        let mut feed = |bytes: &[u8], recorder: &mut Recorder| {
+            for &byte in bytes {
+                parser.advance(byte, recorder);
+            }
+        };
+        feed(b"\x1b[", &mut recorder);
+        for _ in 0..1000 {
+            feed(b"7;", &mut recorder);
+        }
+        for _ in 0..1000 {
+            feed(b" ", &mut recorder);
+        }
+        feed(b"m", &mut recorder);
+        assert_eq!(recorder.params, MAX_PARAMS);
+        assert_eq!(recorder.intermediates, MAX_INTERMEDIATES);
+        assert_eq!(recorder.last, Some(7));
     }
 }

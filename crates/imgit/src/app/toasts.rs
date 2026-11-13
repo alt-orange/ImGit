@@ -77,6 +77,8 @@ pub struct Toasts {
     keep_clear: Vec<Rect>,
     /// Newest first.
     history: Vec<Entry>,
+    /// Toasts pushed so far (see [`Self::pushed`]).
+    pushed: usize,
     /// The clock the slides run on (ImGui's time), set once per frame by [`Self::set_time`]: a toast pushed
     /// during a frame starts with it.
     now: f64,
@@ -124,7 +126,15 @@ impl Toasts {
         });
     }
 
+    /// How many toasts have ever been pushed. Unlike [`Self::unread`] it never falls when an entry is removed
+    /// or the history cap drops the oldest, so a new toast always raises it.
+    #[must_use]
+    pub fn pushed(&self) -> usize {
+        self.pushed
+    }
+
     fn push_entry(&mut self, entry: Entry) {
+        self.pushed = self.pushed.wrapping_add(1);
         self.history.insert(0, entry);
         self.history.truncate(MAX_HISTORY);
     }
@@ -423,6 +433,26 @@ mod tests {
         pushed(&mut toasts, "c");
         assert_eq!(toasts.unread(), 1);
         assert!(toasts.history()[1].read);
+    }
+
+    #[test]
+    fn removals_and_the_cap_keep_the_unread_count_true_to_the_entries() {
+        let mut toasts = Toasts::default();
+        for i in 0..50 {
+            pushed(&mut toasts, &format!("toast {i}"));
+        }
+        toasts.remove_history(0);
+        toasts.remove_history(99);
+        assert_eq!((toasts.history().len(), toasts.unread()), (49, 49));
+        assert_eq!(toasts.history()[0].title, "toast 48");
+        // Two more: one fills the gap, one pushes the oldest (unread) out.
+        pushed(&mut toasts, "a");
+        pushed(&mut toasts, "b");
+        assert_eq!((toasts.history().len(), toasts.unread()), (50, 50));
+        assert_eq!(toasts.history()[49].title, "toast 1");
+        // `unread()` is the same before and after a push that evicts an unread entry, so a desktop notification
+        // cannot go by it; the push count does rise.
+        assert_eq!(toasts.pushed(), 52);
     }
 
     #[test]

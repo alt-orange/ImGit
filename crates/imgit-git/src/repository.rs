@@ -371,11 +371,20 @@ impl Repository {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.git_bytes(args, input.as_bytes())
+    }
+
+    /// Runs `git` in the working directory with raw bytes on its stdin.
+    fn git_bytes<I, S>(&self, args: I, input: &[u8]) -> cli::Output
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         cli::run(
             &self.workdir,
             args,
             cli::RunOptions {
-                input,
+                input_bytes: Some(input),
                 ..cli::RunOptions::default()
             },
         )

@@ -7,7 +7,7 @@
 // Open / Delete File, the external diff tool) list the repository's files.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{
     ChildFlags, DrawFlags, InputTextFlags, Key, MouseButton, StyleColor, StyleVar, WindowFlags,
@@ -22,6 +22,7 @@ use crate::app::dialog::DialogKind;
 use crate::app::toasts::ToastKind;
 use crate::theme::Color;
 use crate::ui::geom::vec2;
+use crate::ui::panels::file_editor::navigate_from_editor;
 use crate::ui::panels::{
     checkout_ref, gitflow_finish_items, gitflow_start_items, open_branch_cleanup, open_file_editor,
 };
@@ -106,14 +107,41 @@ fn file_list<'a>(tree: Vec<String>, changed: impl Iterator<Item = &'a str>) -> V
     files
 }
 
+/// What a cached [`FileList`] is good for: the repository, its HEAD, and the changed paths (their number and a
+/// hash of them, so that replacing one changed file by another is a change too).
+fn files_key<'a>(
+    workdir: &Path,
+    head: Option<&str>,
+    changed: impl Iterator<Item = &'a str>,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut count = 0_usize;
+    for path in changed {
+        path.hash(&mut hasher);
+        count += 1;
+    }
+    format!(
+        "{}|{}|{count}|{:x}",
+        workdir.display(),
+        head.unwrap_or(""),
+        hasher.finish()
+    )
+}
+
 /// The repository's files: HEAD's tree plus the working directory's new files, sorted; read again when HEAD or
-/// the status changes.
+/// the changed files change.
 fn repository_files<'a>(cache: &'a mut FileList, state: &RepoState) -> &'a [String] {
-    let key = format!(
-        "{}|{}|{}",
-        state.repo.workdir().display(),
-        state.history.head_sha.as_deref().unwrap_or(""),
-        state.status.count()
+    let status = &state.status;
+    let key = files_key(
+        state.repo.workdir(),
+        state.history.head_sha.as_deref(),
+        status
+            .unstaged
+            .iter()
+            .chain(&status.staged)
+            .chain(&status.conflicted)
+            .map(|change| change.path.as_str()),
     );
     if cache.key != key {
         cache.key = key;
@@ -123,7 +151,6 @@ fn repository_files<'a>(cache: &'a mut FileList, state: &RepoState) -> &'a [Stri
             .as_deref()
             .and_then(|sha| state.repo.commit_tree_paths(sha).ok())
             .unwrap_or_default();
-        let status = &state.status;
         cache.files = file_list(
             tree,
             status
@@ -167,16 +194,21 @@ fn run_file_action(
         }
         FileAction::View => {
             if let Some((change, staged)) = change {
-                state.open_diff(DiffTarget {
-                    source: if staged {
-                        DiffSource::Staged
-                    } else {
-                        DiffSource::Unstaged
-                    },
-                    path: path.to_owned(),
-                    status: change.status,
+                let path = path.to_owned();
+                // Unsaved text in the file editor is asked about first.
+                navigate_from_editor(app, state, move |_app, state| {
+                    if state.open_diff(DiffTarget {
+                        source: if staged {
+                            DiffSource::Staged
+                        } else {
+                            DiffSource::Unstaged
+                        },
+                        path,
+                        status: change.status,
+                    }) {
+                        state.file_view = true;
+                    }
                 });
-                state.file_view = true;
             } else {
                 state.open_file_history(path, None, None, false);
             }
@@ -266,6 +298,21 @@ impl Rows {
         self.add(label, move |cx, app| {
             if let Some(workdir) = workdir {
                 app.with_repo(&workdir, |app, state| action(cx, app, state));
+            }
+        });
+    }
+
+    /// [`Self::add_repo`] for a command that changes the repository: it only toasts "Wait for <title> to
+    /// finish" while a git command is running on it ([`Application::with_idle_repo`]).
+    fn add_repo_mutating(
+        &mut self,
+        label: impl Into<String>,
+        action: impl FnOnce(&mut Cx<'_>, &mut Application, &mut RepoState) + 'static,
+    ) {
+        let workdir = self.workdir.clone();
+        self.add(label, move |cx, app| {
+            if let Some(workdir) = workdir {
+                app.with_idle_repo(&workdir, |app, state| action(cx, app, state));
             }
         });
     }
@@ -382,7 +429,7 @@ fn build_entries(
             } else {
                 r.message.clone()
             };
-            rows.add_repo(label, move |_cx, app, state| {
+            rows.add_repo_mutating(label, move |_cx, app, state| {
                 let result = if pop {
                     state.repo.stash_pop(index)
                 } else {
@@ -410,7 +457,11 @@ fn build_entries(
             app.run_git_cli(
                 state,
                 "Apply patch",
-                ["apply".to_owned(), file.to_string_lossy().into_owned()],
+                [
+                    "apply".to_owned(),
+                    "--".to_owned(),
+                    file.to_string_lossy().into_owned(),
+                ],
             );
         }
     });
@@ -522,7 +573,12 @@ fn build_entries(
         app.run_git_cli(
             state,
             "Prune",
-            ["remote".to_owned(), "prune".to_owned(), remote],
+            [
+                "remote".to_owned(),
+                "prune".to_owned(),
+                "--".to_owned(),
+                remote,
+            ],
         );
     });
     rows.add_repo("Pull", |_cx, app, state| {
@@ -542,11 +598,12 @@ fn build_entries(
     rows.add_repo("Search Commits", |_cx, _app, state| {
         state.search_open = true;
         state.search_focus_requested = true;
+        state.run_search(); // leftover text searches again
     });
     rows.add("Settings", |_cx, app| {
         app.preferences_open = true;
     });
-    rows.add_repo("Stage all changes", |_cx, app, state| {
+    rows.add_repo_mutating("Stage all changes", |_cx, app, state| {
         let result = state.repo.stage_all();
         app.run(state, "Stage all", result, None);
     });
@@ -576,7 +633,7 @@ fn build_entries(
         app.terminal.focus_requested = app.show_terminal_panel;
     });
     rows.add_repo("Undo", |_cx, app, state| app.undo(state));
-    rows.add_repo("Unstage all changes", |_cx, app, state| {
+    rows.add_repo_mutating("Unstage all changes", |_cx, app, state| {
         let result = state.repo.unstage_all();
         app.run(state, "Unstage all", result, None);
     });
@@ -899,6 +956,25 @@ mod tests {
         assert_eq!(ranked.len(), MAX_FILE_MATCHES);
         assert_eq!(ranked[0], 0);
         assert!(rank(labels.iter().map(String::as_str), "nothing like it", None).is_empty());
+    }
+
+    #[test]
+    fn replacing_one_changed_file_by_another_changes_the_files_key() {
+        let key = |head: Option<&str>, changed: &[&str]| {
+            files_key(Path::new("/repo"), head, changed.iter().copied())
+        };
+        let before = key(Some("abc"), &["a.txt"]);
+        // Same number of changed files, another one: the cached list would be stale.
+        assert_ne!(before, key(Some("abc"), &["b.txt"]));
+        assert_eq!(before, key(Some("abc"), &["a.txt"]));
+        assert_ne!(before, key(Some("def"), &["a.txt"]));
+        assert_ne!(before, key(Some("abc"), &["a.txt", "b.txt"]));
+        // Paths are told apart where they join.
+        assert_ne!(key(None, &["ab", "c"]), key(None, &["a", "bc"]));
+        assert_ne!(
+            files_key(Path::new("/other"), Some("abc"), ["a.txt"].into_iter()),
+            before
+        );
     }
 
     #[test]

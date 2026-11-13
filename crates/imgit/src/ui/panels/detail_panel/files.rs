@@ -13,6 +13,7 @@ use crate::app::application::Application;
 use crate::app::settings::FileSort;
 use crate::theme::{Color, FONT_SIZE_ROW, FONT_SIZE_TINY};
 use crate::ui::menu::popup_menu;
+use crate::ui::panels::file_editor::navigate_from_editor;
 use crate::ui::panels::menus;
 use crate::ui::widgets::file_name;
 use crate::ui::{Cx, DrawList, Icon, Rect, Vec2, vec2};
@@ -501,7 +502,7 @@ pub fn apply_events(
     let mut actions = Vec::new();
     for event in events {
         match event {
-            ListEvent::Open(change) => open_file(state, kind, change),
+            ListEvent::Open(change) => open_file(app, state, kind, change),
             ListEvent::Action(change) => actions.push(change),
             ListEvent::FileMenu(change) => {
                 let items = match kind {
@@ -528,20 +529,24 @@ pub fn apply_events(
 
 /// A click on a file row: a conflicted file opens in the merge tool (its plain diff when its sides cannot be
 /// read), a file a commit did not change (View all files) in the file history as the commit left it.
-fn open_file(state: &mut RepoState, kind: &ListKind, change: FileChange) {
+fn open_file(app: &mut Application, state: &mut RepoState, kind: &ListKind, change: FileChange) {
     if let ListKind::Commit(sha) = kind
         && change.status == FileStatus::Unknown
     {
         state.open_file_history(change.path, Some(sha.clone()), Some(sha.clone()), false);
         return;
     }
-    if change.status != FileStatus::Conflicted || state.open_merge_tool(&change.path).is_err() {
-        state.open_diff(DiffTarget {
-            source: kind.diff_source(),
-            path: change.path,
-            status: change.status,
-        });
-    }
+    let source = kind.diff_source();
+    // Unsaved text in the file editor is asked about first.
+    navigate_from_editor(app, state, move |_app, state| {
+        if change.status != FileStatus::Conflicted || state.open_merge_tool(&change.path).is_err() {
+            let _ = state.open_diff(DiffTarget {
+                source,
+                path: change.path,
+                status: change.status,
+            });
+        }
+    });
 }
 
 /// A file list's section header ("Unstaged Files (2)"): the 14px caret 15px in, the 14px label 5px after it and

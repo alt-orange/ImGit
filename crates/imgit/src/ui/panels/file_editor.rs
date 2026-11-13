@@ -149,21 +149,79 @@ fn close_editor(state: &mut RepoState) {
     };
     state.refresh_status();
     let status = unstaged_status(state, &edit.path, FileStatus::Modified);
-    state.open_diff(DiffTarget {
+    // The edit is gone, so nothing can refuse this.
+    let _ = state.open_diff(DiffTarget {
         source: DiffSource::Unstaged,
         path: edit.path,
         status,
     });
 }
 
+/// Asks whether to discard the editor's unsaved changes (the Discard Changes confirmation); `then` runs, with
+/// the repository found again, when the user confirms. Cancelling changes nothing.
+fn ask_discard(
+    app: &mut Application,
+    state: &RepoState,
+    then: impl FnOnce(&mut Application, &mut RepoState) + 'static,
+) {
+    let workdir = state.repo.workdir().to_path_buf();
+    let path = state
+        .file_edit
+        .as_ref()
+        .map(|edit| edit.path.clone())
+        .unwrap_or_default();
+    app.dialog.open(DialogKind::Confirm);
+    app.dialog.title = "Discard Changes".to_owned();
+    app.dialog.message = format!("Discard your unsaved changes to {path}?");
+    app.dialog.confirm_label = "Discard".to_owned();
+    app.dialog.danger = true;
+    app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
+        app.with_repo(&workdir, then);
+    }));
+}
+
+/// Runs `navigate`, a move away from the open file editor (another file's diff, closing the file view, the
+/// merge tool, another commit...). While the editor holds unsaved text it asks first (Discard Changes): the
+/// confirmation drops the text and runs `navigate`, cancelling leaves everything as it is. Every such
+/// navigation goes through here (`RepoState::open_diff` and `close_diff` refuse on their own otherwise).
+///
+/// `navigate` runs with the edit gone when it was deferred, so the `RepoState` calls in it are not refused.
+pub fn navigate_from_editor(
+    app: &mut Application,
+    state: &mut RepoState,
+    navigate: impl FnOnce(&mut Application, &mut RepoState) + 'static,
+) {
+    if state.has_unsaved_edit() {
+        ask_discard(app, state, move |app, state| {
+            state.discard_file_edit();
+            navigate(app, state);
+        });
+    } else {
+        navigate(app, state);
+    }
+}
+
 /// Opens `path` of the working directory in the editor (and in the file view); `false`, with a toast, when it
-/// is missing, binary or too large.
+/// is missing, binary or too large, and when unsaved text in the editor first has to be discarded (asked).
 pub fn open_file_editor(
     _cx: &mut Cx<'_>,
     app: &mut Application,
     state: &mut RepoState,
     path: &str,
 ) -> bool {
+    if state.has_unsaved_edit() {
+        let path = path.to_owned();
+        ask_discard(app, state, move |app, state| {
+            state.discard_file_edit();
+            // The confirmation runs outside a frame's drawing, with no `Cx` of its own to lend.
+            open_file_editor_now(app, state, &path);
+        });
+        return false;
+    }
+    open_file_editor_now(app, state, path)
+}
+
+fn open_file_editor_now(app: &mut Application, state: &mut RepoState, path: &str) -> bool {
     let file = workdir_file(state, path);
     let Ok(metadata) = fs::metadata(&file).and_then(|metadata| {
         if metadata.is_file() {
@@ -226,11 +284,13 @@ pub fn open_file_editor(
         .is_none_or(|target| target.path != path)
     {
         let status = unstaged_status(state, path, FileStatus::Unknown);
-        state.open_diff(DiffTarget {
+        if !state.open_diff(DiffTarget {
             source: DiffSource::Unstaged,
             path: path.to_owned(),
             status,
-        });
+        }) {
+            return false;
+        }
     }
     state.file_edit = Some(edit);
     true
@@ -248,7 +308,6 @@ pub fn draw_file_editor(
     let ui = cx.ui;
     let p = cx.palette;
     let draw = cx.window_draw_list();
-    let workdir = state.repo.workdir().to_path_buf();
     let Some(edit) = state.file_edit.as_mut() else {
         return;
     };
@@ -296,6 +355,7 @@ pub fn draw_file_editor(
     );
 
     // The text, in the code font, 10px in.
+    let escape;
     cx.set_cursor(min);
     {
         let _frame = ui.push_style_color(StyleColor::FrameBg, p.app_bg0);
@@ -314,7 +374,14 @@ pub fn draw_file_editor(
             ui.set_keyboard_focus_here();
             edit.focus = false;
         }
-        cx.input_multiline("##file_editor_text", &mut edit.text, None, max - min, false);
+        // Escape in the text is typing for the application's shortcuts, so it cancels the edit from here; the
+        // field is not drawn then, as ImGui would revert its text on the key.
+        escape = ui.is_any_item_active() && ui.is_key_pressed(Key::Escape);
+        if escape {
+            ui.dummy(max - min);
+        } else {
+            cx.input_multiline("##file_editor_text", &mut edit.text, None, max - min, false);
+        }
     }
 
     let path = edit.path.clone();
@@ -325,23 +392,16 @@ pub fn draw_file_editor(
         }
         return;
     }
-    if cancel_clicked {
+    if cancel_clicked || escape {
         if !dirty {
             close_editor(state);
             return;
         }
-        app.dialog.open(DialogKind::Confirm);
-        app.dialog.title = "Discard Changes".to_owned();
-        app.dialog.message = format!("Discard your unsaved changes to {path}?");
-        app.dialog.confirm_label = "Discard".to_owned();
-        app.dialog.danger = true;
-        app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
-            app.with_repo(&workdir, |_app, state| {
-                if state.file_edit.is_some() {
-                    close_editor(state);
-                }
-            });
-        }));
+        ask_discard(app, state, |_app, state| {
+            if state.file_edit.is_some() {
+                close_editor(state);
+            }
+        });
     }
 }
 

@@ -6,8 +6,8 @@ use imgit_app::preferences::preferences;
 
 use super::controls::{BTN, Field, Tone, focused};
 use super::form::{
-    Form, flag_of, git_checkbox, help, row, row_checkbox, setting_checkbox, setting_number,
-    stored_checkbox, title,
+    Form, autocrlf_checkbox, flag_of, git_checkbox, help, row, row_checkbox, setting_checkbox,
+    setting_number, stored_checkbox, title,
 };
 use super::page::Page;
 use super::store::{Scope, save_settings};
@@ -163,16 +163,8 @@ pub(super) fn general_page(page: &mut Page<'_, '_>) {
         );
     });
     row(page, form, "AutoCRLF", |page, r| {
-        git_checkbox(
-            page,
-            r,
-            "##autocrlf",
-            Scope::Global,
-            "core.autocrlf",
-            false,
-            false,
-        );
-        help(page, r, "Sets core.autocrlf in your global Git Config.");
+        let note = autocrlf_checkbox(page, r, "##autocrlf");
+        help(page, r, &note);
     });
     row(
         page,

@@ -112,6 +112,9 @@ pub fn stash_changes(
     state: &mut RepoState,
     message: &str,
 ) -> bool {
+    if app.refuse_while_busy(state) {
+        return false;
+    }
     let pushed = state.repo.stash_push(message);
     let Some(stash_sha) = app.run(state, "Stash", pushed, Some("Changes stashed")) else {
         return false;

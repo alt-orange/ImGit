@@ -11,8 +11,9 @@ use imgit_git::{NodeType, RebaseAction, RebaseStep, Ref, RefType, ResetMode, Sha
 use super::shared::{
     MergeState, OperationState, RefGroup, arranged_steps, branch_group_name, branch_groups_at,
     chain_index, checkout_commit_item, cherry_pick_item, cherry_picks_item, compare_items,
-    copy_sha_item, create_branch_item, group_for_ref, head_chain, head_restore_entry,
-    merge_into_head, merge_state, pick_steps_with_reword, pin_item, remote_branch_name, repo_item,
+    copy_sha_item, create_branch_item, fetch_refspec_args, force_branch_args, group_for_ref,
+    head_chain, head_restore_entry, merge_into_head, merge_state, pick_steps_with_reword, pin_item,
+    push_args, push_delete_args, rebase_args, remote_branch_name, repo_item, repo_view_item,
     reset_items, revert_item, reword_item, rewrite, selected_commits, selected_youngest_first,
     selection_contiguous_in_chain, toggle_hide_item, toggle_solo_item, workdir_of,
     worktree_commit_item, worktree_item,
@@ -22,6 +23,8 @@ use crate::app::dialog::DialogKind;
 use crate::app::toasts::ToastKind;
 use crate::ui::Cx;
 use crate::ui::menu::{MenuItem, MenuItems, menu_item, menu_submenu, separated_menu};
+use crate::ui::panels::dialogs::DeletedBranch;
+use crate::ui::panels::dialogs::restore_branches;
 use crate::ui::panels::workflows::gitflow_finish_items;
 
 /// `git` arguments from literals and names.
@@ -50,7 +53,7 @@ fn rebase_group(state: &RepoState, sha: &str, multi: bool) -> MenuItems {
     if index > 0 {
         let short: String = sha.chars().take(6).collect();
         let owned = sha.to_owned();
-        items.push(repo_item(
+        items.push(repo_view_item(
             format!("Interactive Rebase {index} children of {short}"),
             &workdir,
             move |_cx, _app, state| {
@@ -65,7 +68,7 @@ fn rebase_group(state: &RepoState, sha: &str, multi: bool) -> MenuItems {
     // Squash: a contiguous multi-selection on the chain.
     if selection_on_chain {
         let selected = selected.clone();
-        items.push(repo_item(
+        items.push(repo_view_item(
             format!("Squash {} commits", selected.len()),
             &workdir,
             move |_cx, app, state| {
@@ -234,7 +237,7 @@ fn rebase_onto_commit_items(state: &RepoState, sha: &str) -> MenuItems {
     vec![repo_item(
         format!("Rebase {head} onto this commit"),
         state.repo.workdir(),
-        move |_cx, app, state| app.run_git_cli(state, "Rebase", ["rebase", sha.as_str()]),
+        move |_cx, app, state| app.run_git_cli(state, "Rebase", rebase_args(&sha)),
     )]
 }
 
@@ -317,7 +320,10 @@ fn merge_and_rebase_items(state: &RepoState, theirs: &Ref) -> MenuItems {
                             );
                             return;
                         }
-                        checkout_ref(cx, app, state, &their_ref);
+                        // A checkout that failed was reported: merging on would change the wrong branch.
+                        if !checkout_ref(cx, app, state, &their_ref) {
+                            return;
+                        }
                         merge_into_head(app, state, &ours_name, false);
                     },
                 ));
@@ -350,13 +356,13 @@ fn merge_and_rebase_items(state: &RepoState, theirs: &Ref) -> MenuItems {
     items.push(repo_item(
         format!("Rebase {ours} onto {their_short}"),
         &workdir,
-        move |_cx, app, state| app.run_git_cli(state, "Rebase", ["rebase", onto.as_str()]),
+        move |_cx, app, state| app.run_git_cli(state, "Rebase", rebase_args(&onto)),
     ));
     let above = state.commits_above(Some(&theirs.target), None);
     let linear = above.iter().all(|commit| commit.parents.len() <= 1);
     if state.repo.is_ancestor(&theirs.target, &head.target) && !above.is_empty() && linear {
         let (target, label) = (theirs.target.clone(), their_short.clone());
-        items.push(repo_item(
+        items.push(repo_view_item(
             format!("Interactive Rebase {ours} onto {their_short}"),
             &workdir,
             move |_cx, _app, state| state.start_rebase_plan(&target, &label, None, None),
@@ -381,21 +387,25 @@ fn delete_branches(app: &mut Application, workdir: &Path, refs: Vec<Ref>) {
     app.dialog.danger = true;
     let workdir = workdir.to_path_buf();
     app.dialog.on_confirm = Some(Box::new(move |_cx, app| {
-        app.with_repo(&workdir, |app, tab| {
+        app.with_idle_repo(&workdir, |app, tab| {
             let mut pushes: Vec<Vec<String>> = Vec::new();
             let mut deleted: Vec<String> = Vec::new();
             for reference in &refs {
                 match reference.ref_type {
                     RefType::RemoteBranch => {
-                        pushes.push(git_args(&[
-                            "push",
+                        pushes.push(push_delete_args(
                             &reference.remote,
-                            "--delete",
                             remote_branch_name(reference),
-                        ]));
+                        ));
                     }
                     RefType::LocalBranch => {
-                        let (name, sha) = (reference.name.clone(), reference.target.clone());
+                        let name = reference.name.clone();
+                        // The tip and what it tracked, as the menu showed them: for the undo.
+                        let restore = DeletedBranch {
+                            name: name.clone(),
+                            sha: reference.target.clone(),
+                            upstream: reference.upstream.clone(),
+                        };
                         if let Err(error) = tab.repo.delete_branch(&name) {
                             app.toasts.push_with_detail(
                                 ToastKind::Error,
@@ -405,10 +415,10 @@ fn delete_branches(app: &mut Application, workdir: &Path, refs: Vec<Ref>) {
                             continue;
                         }
                         deleted.push(name.clone());
-                        let (redo_name, undo_name) = (name.clone(), name.clone());
+                        let redo_name = name.clone();
                         tab.push_undo(
                             UndoEntry::new(format!("delete branch {name}"), move |repo| {
-                                repo.set_branch_target(&undo_name, &sha)
+                                restore_branches(repo, std::slice::from_ref(&restore))
                             })
                             .with_redo(move |repo| repo.delete_branch(&redo_name)),
                         );
@@ -498,7 +508,7 @@ fn remote_ops(workdir: &Path, state: &RepoState, branch: &Ref) -> MenuItems {
                     app.run_git_cli(state, "Pull", ["pull", "--ff"]);
                 } else if let Some((remote, name)) = split {
                     let refspec = format!("{name}:{}", pull.name);
-                    app.run_git_cli(state, "Pull", ["fetch", remote, refspec.as_str()]);
+                    app.run_git_cli(state, "Pull", fetch_refspec_args(remote, &refspec));
                 } else {
                     app.toasts.push_with_detail(
                         ToastKind::Error,
@@ -520,7 +530,7 @@ fn remote_ops(workdir: &Path, state: &RepoState, branch: &Ref) -> MenuItems {
                 return;
             };
             let refspec = format!("{}:{name}", push.name);
-            app.run_git_cli(state, "Push", ["push", remote, refspec.as_str()]);
+            app.run_git_cli(state, "Push", push_args(remote, &refspec));
         }),
         menu_item("Set Upstream", move |_cx, app| {
             app.dialog.open(DialogKind::SetUpstream);
@@ -665,7 +675,7 @@ fn ref_group_items(
                     app.run_git_cli(
                         state,
                         "Apply patch",
-                        ["apply", file.to_string_lossy().as_ref()],
+                        ["apply", "--", file.to_string_lossy().as_ref()],
                     );
                 }
             }));
@@ -752,7 +762,7 @@ fn patch_items(workdir: &Path, state: &RepoState, sha: &str, multi: bool) -> Men
     } else {
         "Create patch from commit"
     };
-    vec![repo_item(label, workdir, move |cx, app, state| {
+    vec![repo_view_item(label, workdir, move |cx, app, state| {
         let (Some(newest), Some(oldest)) = (shas.first(), shas.last()) else {
             return;
         };
@@ -922,11 +932,7 @@ fn tag_menu(state: &RepoState, tag: &Ref, in_left_panel: bool) -> MenuItems {
     let push_tag = |remote: String, name: String| {
         move |_cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState| {
             let target = format!("refs/tags/{name}");
-            app.run_git_cli(
-                state,
-                "Push tag",
-                ["push", remote.as_str(), target.as_str()],
-            );
+            app.run_git_cli(state, "Push tag", push_args(&remote, &target));
         }
     };
     let mut push = MenuItems::new();
@@ -957,13 +963,7 @@ fn tag_menu(state: &RepoState, tag: &Ref, in_left_panel: bool) -> MenuItems {
                         .history
                         .remotes
                         .iter()
-                        .map(|remote| {
-                            vec![
-                                "push".to_owned(),
-                                remote.name.clone(),
-                                format!("refs/tags/{all_name}"),
-                            ]
-                        })
+                        .map(|remote| push_args(&remote.name, &format!("refs/tags/{all_name}")))
                         .collect();
                     app.run_git_cli_sequence(state, "Push tag", runs);
                 },
@@ -1159,7 +1159,7 @@ pub fn ref_drop_menu(
                 app.run_git_cli(
                     state,
                     "Fast-forward",
-                    ["branch", "-f", branch.name.as_str(), to.target.as_str()],
+                    force_branch_args(&branch.name, &to.target),
                 );
             }
         })
@@ -1219,7 +1219,7 @@ pub fn ref_drop_menu(
                 if !rebase_ours.is_head && !checkout_ref(cx, app, state, &rebase_ours) {
                     return;
                 }
-                app.run_git_cli(state, "Rebase", ["rebase", rebase_onto.name.as_str()]);
+                app.run_git_cli(state, "Rebase", rebase_args(&rebase_onto.name));
             },
         ));
         // Offered when D has commits T lacks.
@@ -1260,11 +1260,7 @@ pub fn ref_drop_menu(
             let (local, remote) = (local.clone(), remote.clone());
             move |_cx: &mut Cx<'_>, app: &mut Application, state: &mut RepoState| {
                 let refspec = format!("{}:{}", local.name, remote_branch_name(&remote));
-                app.run_git_cli(
-                    state,
-                    "Push",
-                    ["push", remote.remote.as_str(), refspec.as_str()],
-                );
+                app.run_git_cli(state, "Push", push_args(&remote.remote, &refspec));
             }
         };
         match target_remotes.as_slice() {
@@ -1318,6 +1314,9 @@ pub fn reword_commit(
     sha: &str,
     message: &str,
 ) -> bool {
+    if app.refuse_while_busy(state) {
+        return false;
+    }
     reword(app, state, sha, message)
 }
 
@@ -1369,14 +1368,15 @@ fn reword(app: &mut Application, state: &mut RepoState, sha: &str, message: &str
     true
 }
 
-/// Selects the commit and scrolls the graph to it, closing the open diff.
+/// Selects the commit and scrolls the graph to it, closing the open diff; a file editor holding unsaved text
+/// stays open (it asks on its own when closed), the diff with it.
 pub fn jump_to_commit(state: &mut RepoState, sha: &str) {
     let Some(&row) = state.history.row_by_sha.get(sha) else {
         return;
     };
     state.select_only(sha);
     state.scroll_to_row = Some(row);
-    state.close_diff();
+    let _ = state.close_diff();
 }
 
 /// Checks `reference` out; a remote branch the first time gets its local branch made.
@@ -1402,6 +1402,10 @@ pub fn checkout_ref(
     state: &mut RepoState,
     reference: &Ref,
 ) -> bool {
+    // A checkout from the graph or the left panel (a double click, a drag) does not come through a menu item.
+    if app.refuse_while_busy(state) {
+        return false;
+    }
     check_out_ref(app, state, reference)
 }
 

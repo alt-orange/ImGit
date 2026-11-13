@@ -245,8 +245,9 @@ impl Screen {
         std::mem::take(&mut self.replies)
     }
 
-    /// The text from `start` up to (not including) `end`, as a selection is copied: trailing blanks go, hard line
-    /// breaks become CR LF and soft-wrapped lines join without a break. Lines no longer in the buffer are skipped.
+    /// The text from `start` up to (not including) `end`, as a selection is copied: trailing blanks go (those of
+    /// a soft-wrapped line stay, they separate its words from the next line's), hard line breaks become CR LF
+    /// and soft-wrapped lines join without a break. Lines no longer in the buffer are skipped.
     #[must_use]
     pub fn text_between(&self, start: Point, end: Point) -> String {
         let first = self.first_line_id();
@@ -268,7 +269,8 @@ impl Screen {
                 .iter()
                 .filter_map(|cell| cell.ch)
                 .collect();
-            if id != end.line || to >= cells.len() {
+            // The blanks of a soft-wrapped line are text (the space between words that wrapped).
+            if (id != end.line || to >= cells.len()) && !line.is_wrapped() {
                 row.truncate(row.trim_end_matches(' ').len());
             }
             text += &row;
@@ -508,9 +510,11 @@ impl Screen {
     fn erase_cells(&mut self, y: usize, from: usize, to: usize) {
         let blank = self.blank();
         let to = to.min(self.columns);
-        if let Some(cells) = self.row(y).cells.get_mut(from..to) {
-            cells.fill(blank);
+        let cells = &mut self.row(y).cells;
+        if let Some(erased) = cells.get_mut(from..to) {
+            erased.fill(blank);
         }
+        blank_split_wide(cells, blank);
     }
 
     fn erase_row(&mut self, y: usize) {
@@ -588,6 +592,7 @@ impl Screen {
         let tail = &mut self.row(self.cursor.row).cells[x..];
         tail.rotate_right(count);
         tail[..count].fill(blank);
+        blank_split_wide(&mut self.row(self.cursor.row).cells, blank);
         self.pending_wrap = false;
     }
 
@@ -600,6 +605,7 @@ impl Screen {
         tail.rotate_left(count);
         let kept = tail.len() - count;
         tail[kept..].fill(blank);
+        blank_split_wide(&mut self.row(self.cursor.row).cells, blank);
         self.pending_wrap = false;
     }
 
@@ -812,6 +818,19 @@ const fn char_width(ch: char) -> usize {
         | 0x1F900..=0x1F9FF
         | 0x20000..=0x3FFFD => 2,
         _ => 1,
+    }
+}
+
+/// Blanks both halves of every wide character that an edit cut: a continuation cell with no wide character
+/// before it, and a wide character with no continuation after it.
+fn blank_split_wide(cells: &mut [Cell], blank: Cell) {
+    let wide = |cell: &Cell| cell.ch.is_some_and(|ch| char_width(ch) == 2);
+    for x in 0..cells.len() {
+        let orphan_continuation = cells[x].ch.is_none() && (x == 0 || !wide(&cells[x - 1]));
+        let orphan_lead = wide(&cells[x]) && cells.get(x + 1).is_none_or(|next| next.ch.is_some());
+        if orphan_continuation || orphan_lead {
+            cells[x] = blank;
+        }
     }
 }
 

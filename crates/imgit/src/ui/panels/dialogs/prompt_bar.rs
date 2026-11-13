@@ -929,7 +929,18 @@ pub fn draw_rename_prompt(cx: &mut Cx<'_>, d: &mut Dialog, caret_to_end: &mut bo
                 }
                 (entered, ui.is_item_active())
             });
-            let border = if active {
+            // A branch name that starts with '-' would be read as an option by git: refused, with the reason.
+            let invalid = if d.kind == Some(DialogKind::RenameBranch) {
+                super::leading_dash_error("branch", &d.text_a)
+            } else {
+                None
+            };
+            if let Some(error) = &invalid {
+                cx.styled_tooltip(min, max, error, false);
+            }
+            let border = if invalid.is_some() {
+                cx.palette.red
+            } else if active {
                 cx.palette.accent
             } else {
                 pen.field_border
@@ -938,8 +949,9 @@ pub fn draw_rename_prompt(cx: &mut Cx<'_>, d: &mut Dialog, caret_to_end: &mut bo
             x = max.x + cx.px(12.0);
 
             // TextPrompt's `flag`: an empty answer is one too (it clears the name).
-            let complete =
-                !d.text_a.is_empty() || (d.kind == Some(DialogKind::TextPrompt) && d.flag);
+            let complete = (!d.text_a.is_empty()
+                || (d.kind == Some(DialogKind::TextPrompt) && d.flag))
+                && invalid.is_none();
             let mut answer = Answer::Pending;
             let primary = ButtonKind::Primary {
                 tone: cx.palette.green,

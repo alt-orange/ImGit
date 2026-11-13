@@ -1577,5 +1577,91 @@ fn arbitrary_input_keeps_the_invariants() {
                 .lines()
                 .all(|line| line.cells().len() == screen.columns())
         );
+        assert!(has_no_control_characters(&screen));
     }
+}
+
+// Hardening.
+
+/// No cell of the buffer holds a control character.
+fn has_no_control_characters(screen: &Screen) -> bool {
+    screen
+        .lines()
+        .flat_map(|line| line.cells())
+        .all(|cell| cell.ch.is_none_or(|ch| !ch.is_control()))
+}
+
+#[test]
+fn overlong_and_c1_utf8_becomes_a_replacement_character() {
+    // C0 / C1 leads, overlong NUL / ESC / space, and the C1 controls U+0085 and U+009B.
+    let mut screen = Screen::new(30, 2, 0);
+    screen
+        .feed(b"a\xc0\x80b\xc1\xbfc\xe0\x80\x80d\xf0\x80\x80\x9be\xe0\x80\xa0f\xc2\x85g\xc2\x9bh");
+    assert!(has_no_control_characters(&screen));
+    assert_eq!(
+        screen.screen_line(0).text().trim_end(),
+        "a\u{fffd}\u{fffd}b\u{fffd}\u{fffd}c\u{fffd}d\u{fffd}e\u{fffd}f\u{fffd}g\u{fffd}h"
+    );
+    // The sequences that are valid still print.
+    let screen = fed(10, 1, "\u{e9}\u{4e2d}\u{1f600}");
+    assert_eq!(
+        screen.screen_line(0).text().trim_end(),
+        "\u{e9}\u{4e2d}\u{1f600}"
+    );
+}
+
+#[test]
+fn csi_parameters_and_intermediates_are_capped() {
+    // A sequence that never ends is bounded; once it does end the screen carries on.
+    let mut input = String::from("\x1b[");
+    input.push_str(&"1;".repeat(100_000));
+    input.push_str(&" ".repeat(100_000));
+    let mut screen = fed(10, 2, &input);
+    screen.feed(b"m\x1b[0mok");
+    assert_eq!(screen.screen_line(0).text().trim_end(), "ok");
+}
+
+#[test]
+fn a_wrapped_line_keeps_its_trailing_blank_when_copied() {
+    let screen = fed(6, 3, "hello world");
+    let point = |line, column| Point { line, column };
+    assert_eq!(screen.text_between(point(0, 0), point(1, 5)), "hello world");
+    // A line that is not wrapped still loses its blanks.
+    let screen = fed(8, 3, "hi\r\nyo");
+    assert_eq!(screen.text_between(point(0, 0), point(1, 8)), "hi\r\nyo");
+}
+
+/// No continuation cell without a wide character before it, no wide character without its continuation.
+fn wide_pairs_are_whole(screen: &Screen) -> bool {
+    let wide = |cell: &Cell| cell.ch == Some('\u{4e2d}');
+    screen.lines().all(|line| {
+        let cells = line.cells();
+        cells.iter().enumerate().all(|(x, cell)| {
+            (!cell.is_wide_continuation() || (x > 0 && wide(&cells[x - 1])))
+                && (!wide(cell) || cells.get(x + 1).is_some_and(Cell::is_wide_continuation))
+        })
+    })
+}
+
+#[test]
+fn editing_through_a_wide_character_blanks_both_halves() {
+    // "a中b": the pair sits in columns 1 and 2 (cursor column 2 and 3, one-based).
+    for (edit, expected) in [
+        ("\x1b[3G\x1b[P", "a b"),
+        ("\x1b[3G\x1b[@", "a   b"),
+        ("\x1b[3G\x1b[X", "a  b"),
+        ("\x1b[3G\x1b[1K", "   b"),
+        ("\x1b[3G\x1b[K", "a"),
+        ("\x1b[3G\x1b[J", "a"),
+    ] {
+        let screen = fed(6, 1, &format!("a\u{4e2d}b{edit}"));
+        assert!(wide_pairs_are_whole(&screen), "{edit:?}");
+        let text = screen.screen_line(0).text();
+        assert!(!text.contains('\u{4e2d}'), "{edit:?}: {text:?}");
+        assert_eq!(text.trim_end(), expected, "{edit:?}");
+    }
+    // An edit that leaves the pair alone keeps it.
+    let screen = fed(6, 1, "a\u{4e2d}b\x1b[4G\x1b[X");
+    assert!(screen.screen_line(0).text().contains('\u{4e2d}'));
+    assert!(wide_pairs_are_whole(&screen));
 }

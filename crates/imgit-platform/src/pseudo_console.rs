@@ -138,13 +138,22 @@ mod tests {
 
     /// Reads until the shell has exited or `wanted` shows up in the output.
     fn read_until(console: &mut PseudoConsole, wanted: &str) -> String {
+        read_until_after(console, "", wanted)
+    }
+
+    /// Reads until the shell has exited or `wanted` shows up in the output after the first `marker` (output
+    /// from before the marker, such as the shell's prompt, does not count).
+    fn read_until_after(console: &mut PseudoConsole, marker: &str, wanted: &str) -> String {
         let started = Instant::now();
         let mut output = Vec::new();
         loop {
             let done = console.exited();
             output.extend(console.read());
             let text = String::from_utf8_lossy(&output);
-            if done || text.contains(wanted) || started.elapsed() > Duration::from_secs(30) {
+            let seen = text
+                .find(marker)
+                .is_some_and(|at| text[at + marker.len()..].contains(wanted));
+            if done || seen || started.elapsed() > Duration::from_secs(30) {
                 return text.into_owned();
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -183,7 +192,9 @@ mod tests {
         let mut console = PseudoConsole::spawn(&args, Some(folder.path()), 80, 24).unwrap();
         assert!(!console.exited());
         console.resize(100, 30).unwrap();
-        // The shell runs in the folder it was given; the caret / quotes keep the typed command from matching.
+        // The shell runs in the folder it was given; the caret / quotes keep the typed command from matching. The
+        // prompt (which on Windows shows the folder) is already on screen before the command runs, so only the
+        // folder printed after the command's own output counts.
         let command = if cfg!(windows) {
             "echo im^git& cd\r"
         } else {
@@ -191,7 +202,7 @@ mod tests {
         };
         console.write(command.as_bytes()).unwrap();
         let name = folder.path().file_name().unwrap().to_str().unwrap();
-        let text = read_until(&mut console, name);
+        let text = read_until_after(&mut console, "imgit", name);
         assert!(text.contains("imgit") && text.contains(name), "{text:?}");
         console.write(b"exit\r").unwrap();
         assert!(wait_for_exit(&mut console));

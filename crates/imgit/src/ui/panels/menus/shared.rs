@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use imgit_app::repo_state::{AUTO_STASH_BEFORE_UNDO, with_changes_stashed};
 use imgit_app::{RepoState, WIP_SHA};
 use imgit_git::repository::{Outcome, short_sha};
 use imgit_git::{
@@ -18,9 +19,24 @@ use crate::ui::menu::{MenuItem, menu_item};
 
 pub use imgit_git::RepoState as OperationState;
 
-/// A row whose click runs `run` on the repository at `workdir` (found again when it runs: the tab may have
-/// been closed or its state be out meanwhile, then nothing happens).
+/// A row whose click changes the repository at `workdir` (found again when it runs: the tab may have been
+/// closed or its state be out meanwhile, then nothing happens). While a git command is in flight on the
+/// repository the click only toasts "Wait for <title> to finish" ([`Application::with_idle_repo`]): this is where
+/// every menu action that mutates it gets its busy guard. Rows that only look (hide, solo, pin, compare, open a
+/// dialog or a view...) are [`repo_view_item`]s.
 pub fn repo_item(
+    label: impl Into<String>,
+    workdir: &Path,
+    run: impl FnOnce(&mut Cx<'_>, &mut Application, &mut RepoState) + 'static,
+) -> MenuItem {
+    let workdir = workdir.to_path_buf();
+    menu_item(label, move |cx, app| {
+        app.with_idle_repo(&workdir, |app, state| run(cx, app, state));
+    })
+}
+
+/// [`repo_item`] for a row that does not change the repository: it stays available while a git command runs.
+pub fn repo_view_item(
     label: impl Into<String>,
     workdir: &Path,
     run: impl FnOnce(&mut Cx<'_>, &mut Application, &mut RepoState) + 'static,
@@ -34,6 +50,62 @@ pub fn repo_item(
 /// The working directory of the repository the menu is for.
 pub fn workdir_of(state: &RepoState) -> std::path::PathBuf {
     state.repo.workdir().to_path_buf()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Command lines with names the user typed.
+//
+// A branch, tag or remote name may start with '-' (libgit2 accepts it, and it can come from elsewhere), and git
+// would read such a name as an option. Every command line that takes one builds its arguments here, with `--`
+// before the positional names where git's syntax allows it (checked against git's documentation: `rebase`,
+// `merge`, `branch`, `push`, `fetch`, `worktree add`, `tag`).
+
+/// `git rebase -- <onto>`.
+#[must_use]
+pub fn rebase_args(onto: &str) -> Vec<String> {
+    vec!["rebase".to_owned(), "--".to_owned(), onto.to_owned()]
+}
+
+/// `git merge --squash -- <name>`.
+#[must_use]
+pub fn squash_merge_args(name: &str) -> Vec<String> {
+    ["merge", "--squash", "--", name]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// `git branch -f -- <name> <target>`: moves the branch `name` to `target`.
+#[must_use]
+pub fn force_branch_args(name: &str, target: &str) -> Vec<String> {
+    ["branch", "-f", "--", name, target]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// `git push -- <remote> <refspec>`.
+#[must_use]
+pub fn push_args(remote: &str, refspec: &str) -> Vec<String> {
+    ["push", "--", remote, refspec].map(str::to_owned).to_vec()
+}
+
+/// `git push --delete -- <remote> <name>`: deletes the branch `name` on the remote.
+#[must_use]
+pub fn push_delete_args(remote: &str, name: &str) -> Vec<String> {
+    ["push", "--delete", "--", remote, name]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// `git fetch -- <remote> <refspec>`.
+#[must_use]
+pub fn fetch_refspec_args(remote: &str, refspec: &str) -> Vec<String> {
+    ["fetch", "--", remote, refspec].map(str::to_owned).to_vec()
+}
+
+/// `git fetch -- <remote>`.
+#[must_use]
+pub fn fetch_args(remote: &str) -> Vec<String> {
+    ["fetch", "--", remote].map(str::to_owned).to_vec()
 }
 
 /// Undo for anything that moved HEAD: go back to the branch (or detached commit) we were on.
@@ -72,13 +144,12 @@ pub fn tip_restore_entry(
         let Some(sha) = sha.as_deref().filter(|sha| !sha.is_empty()) else {
             return Err(GitError::Message("nothing to restore".to_owned()));
         };
-        let dirty = repo.load_status().map(|status| status.count()).unwrap_or(0) > 0;
-        let stashed = dirty && repo.stash_push("ImGit: auto stash before undo").is_ok();
-        let result = repo.reset(sha, mode);
-        if stashed {
-            let _ = repo.stash_pop(0);
-        }
-        result
+        with_changes_stashed(
+            repo,
+            AUTO_STASH_BEFORE_UNDO,
+            mode == ResetMode::Hard,
+            |repo| repo.reset(sha, mode),
+        )
     })
     .with_redo_mode(mode)
 }
@@ -120,7 +191,7 @@ pub fn merge_into_head(
 ) {
     // Preferences > Commit > Squash: the branch's changes are staged without a merge commit.
     if state.repo.config_bool("imgit.squashMerges", false) {
-        app.run_git_cli(state, "Squash merge", ["merge", "--squash", name]);
+        app.run_git_cli(state, "Squash merge", squash_merge_args(name));
         return;
     }
     let head = state.history.head_branch.clone().unwrap_or_default();
@@ -514,21 +585,42 @@ pub fn cherry_picks_item(state: &RepoState) -> Option<MenuItem> {
         format!("Cherry pick {count} commits"),
         state.repo.workdir(),
         move |_cx, app, state| {
-            let undo = tip_restore_entry(state, "cherry pick", ResetMode::Hard);
             // Oldest first.
-            for sha in shas.iter().rev() {
-                let result = state.repo.cherry_pick(sha);
-                if !matches!(result, Ok(Outcome::Done)) {
-                    report_sequencer(app, state, "Cherry pick", &result, "");
-                    return;
-                }
-            }
-            state.push_undo(undo);
-            app.toasts
-                .push(ToastKind::Success, format!("Cherry picked {count} commits"));
-            state.refresh();
+            let oldest_first: Vec<Sha> = shas.iter().rev().cloned().collect();
+            cherry_pick_all(app, state, &oldest_first);
         },
     ))
+}
+
+/// Cherry picks `shas` (oldest first) one after another. When commit N of M fails or stops on conflicts, the N-1
+/// before it stay applied, so the undo entry for them is pushed before the failure is reported: undo goes back
+/// to the tip the first pick started from.
+pub fn cherry_pick_all(app: &mut Application, state: &mut RepoState, shas: &[Sha]) {
+    let count = shas.len();
+    let mut undo = tip_restore_entry(state, "cherry pick", ResetMode::Hard);
+    for (applied, sha) in shas.iter().enumerate() {
+        let result = state.repo.cherry_pick(sha);
+        if !matches!(result, Ok(Outcome::Done)) {
+            if applied > 0 {
+                undo.label = format!("cherry pick {applied} commits");
+                state.push_undo(undo);
+            }
+            report_sequencer(app, state, "Cherry pick", &result, "");
+            if applied > 0 {
+                app.toasts.push(
+                    ToastKind::Info,
+                    format!(
+                        "{applied} of {count} commits were cherry picked; undo takes them back"
+                    ),
+                );
+            }
+            return;
+        }
+    }
+    state.push_undo(undo);
+    app.toasts
+        .push(ToastKind::Success, format!("Cherry picked {count} commits"));
+    state.refresh();
 }
 
 /// "Reset <branch> to this commit" with its three modes, which open the Reset dialog.
@@ -588,7 +680,7 @@ pub fn revert_item(workdir: &Path, sha: &str) -> MenuItem {
 /// "Edit commit message": opens the Reword dialog with the commit's message.
 pub fn reword_item(workdir: &Path, sha: &str) -> MenuItem {
     let sha = sha.to_owned();
-    repo_item("Edit commit message", workdir, move |_cx, app, state| {
+    repo_view_item("Edit commit message", workdir, move |_cx, app, state| {
         let Some(commit) = state.commit_for(&sha) else {
             return;
         };
@@ -619,7 +711,7 @@ pub fn toggle_hide_item(
 ) -> MenuItem {
     let checked = state.hidden_refs.contains(full_name);
     let full_name = full_name.to_owned();
-    repo_item("Hide", workdir, move |_cx, _app, state| {
+    repo_view_item("Hide", workdir, move |_cx, _app, state| {
         if !state.hidden_refs.remove(&full_name) {
             state.hidden_refs.insert(full_name);
         }
@@ -639,7 +731,7 @@ pub fn toggle_solo_item(
 ) -> MenuItem {
     let checked = state.solo_ref.as_deref() == Some(full_name);
     let full_name = full_name.to_owned();
-    let item = repo_item(label, workdir, move |_cx, _app, state| {
+    let item = repo_view_item(label, workdir, move |_cx, _app, state| {
         state.solo_ref = if state.solo_ref.as_deref() == Some(full_name.as_str()) {
             None
         } else {
@@ -665,7 +757,7 @@ pub fn pin_item(workdir: &Path, state: &RepoState, full_name: &str, short_label:
         "Pin to Left".to_owned()
     };
     let full_name = full_name.to_owned();
-    repo_item(label, workdir, move |_cx, _app, state| {
+    repo_view_item(label, workdir, move |_cx, _app, state| {
         state.pinned_branch = if pinned { None } else { Some(full_name) };
         state.refresh();
     })
@@ -677,7 +769,7 @@ pub fn compare_items(workdir: &Path, state: &RepoState, sha: &str) -> Vec<MenuIt
         return Vec::new();
     }
     let sha = sha.to_owned();
-    vec![repo_item(
+    vec![repo_view_item(
         "Compare commit against working directory",
         workdir,
         move |_cx, _app, state| {
@@ -839,6 +931,259 @@ mod tests {
         assert_eq!(label("refs/heads/main"), "main");
         assert_eq!(label("refs/heads/feature/x"), "feature/x");
         assert_eq!(label("refs/remotes/origin/main"), "origin/main");
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> (i32, String) {
+        let mut full = vec!["-c", "user.name=Test", "-c", "user.email=test@example.com"];
+        full.extend(args);
+        let output = cli::run(dir, full, cli::RunOptions::default());
+        (output.exit_code, output.text.trim().to_owned())
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) -> String {
+        let (code, text) = git(dir, args);
+        assert_eq!(code, 0, "git {args:?}: {text}");
+        text
+    }
+
+    fn run_args(dir: &Path, args: &[String]) -> (i32, String) {
+        let output = cli::run(
+            dir,
+            ["-c", "user.name=Test", "-c", "user.email=test@example.com"]
+                .into_iter()
+                .chain(args.iter().map(String::as_str)),
+            cli::RunOptions::default(),
+        );
+        (output.exit_code, output.text)
+    }
+
+    fn commit_file(dir: &Path, name: &str, text: &str, message: &str) {
+        std::fs::write(dir.join(name), text).unwrap();
+        git_ok(dir, &["add", "-A"]);
+        git_ok(dir, &["commit", "-m", message]);
+    }
+
+    /// A repository with `base` on `main`, in the folder `repo` of a scratch folder.
+    fn repository() -> (tempfile::TempDir, std::path::PathBuf) {
+        let scratch = tempfile::tempdir().unwrap();
+        let folder = scratch.path().join("repo");
+        std::fs::create_dir_all(&folder).unwrap();
+        git_ok(&folder, &["init", "-b", "main"]);
+        git_ok(&folder, &["config", "core.autocrlf", "false"]);
+        commit_file(&folder, "a.txt", "base\n", "base");
+        (scratch, folder)
+    }
+
+    /// Whether git took `output` for a failure to parse the command line, not for what the command did.
+    fn is_usage_error(output: &str) -> bool {
+        output.contains("usage:")
+            || output.contains("unknown switch")
+            || output.contains("unknown option")
+    }
+
+    #[test]
+    fn branch_names_that_start_with_a_dash_are_not_options() {
+        let (_scratch, dir) = repository();
+        // libgit2 and update-ref accept such a name; git's own commands refuse to make one.
+        git_ok(&dir, &["update-ref", "refs/heads/-x", "HEAD"]);
+        git_ok(&dir, &["checkout", "-b", "work"]);
+        commit_file(&dir, "w.txt", "w\n", "work");
+        git_ok(&dir, &["checkout", "main"]);
+        commit_file(&dir, "m.txt", "m\n", "main");
+        git_ok(&dir, &["checkout", "work"]);
+
+        let (code, text) = run_args(&dir, &rebase_args("-x"));
+        assert_eq!(code, 0, "{text}");
+        assert!(!is_usage_error(&text), "{text}");
+        // The history is what `git rebase -x`'s base gives: work on top of the base commit only.
+        let (code, text) = run_args(&dir, &squash_merge_args("-x"));
+        assert_eq!(code, 0, "{text}");
+        assert!(!is_usage_error(&text), "{text}");
+        // `branch -f` refuses the name itself, which proves it was read as one.
+        let (code, text) = run_args(&dir, &force_branch_args("-x", "HEAD"));
+        assert_ne!(code, 0);
+        assert!(!is_usage_error(&text), "{text}");
+        assert!(text.contains("not a valid branch name"), "{text}");
+        // The remote operations: a remote named like an option is a remote that is not there.
+        let (code, text) = run_args(&dir, &push_args("-x", "work:work"));
+        assert_ne!(code, 0);
+        assert!(!is_usage_error(&text), "{text}");
+        let (code, text) = run_args(&dir, &push_delete_args("-x", "-y"));
+        assert_ne!(code, 0);
+        assert!(!is_usage_error(&text), "{text}");
+        let (code, text) = run_args(&dir, &fetch_args("-x"));
+        assert_ne!(code, 0);
+        assert!(!is_usage_error(&text), "{text}");
+        let (code, text) = run_args(&dir, &fetch_refspec_args("-x", "a:b"));
+        assert_ne!(code, 0);
+        assert!(!is_usage_error(&text), "{text}");
+    }
+
+    #[test]
+    fn the_command_lines_keep_their_order() {
+        assert_eq!(rebase_args("main"), ["rebase", "--", "main"]);
+        assert_eq!(
+            squash_merge_args("topic"),
+            ["merge", "--squash", "--", "topic"]
+        );
+        assert_eq!(
+            force_branch_args("topic", "abc"),
+            ["branch", "-f", "--", "topic", "abc"]
+        );
+        assert_eq!(push_args("origin", "a:b"), ["push", "--", "origin", "a:b"]);
+        assert_eq!(
+            push_delete_args("origin", "topic"),
+            ["push", "--delete", "--", "origin", "topic"]
+        );
+        assert_eq!(fetch_args("origin"), ["fetch", "--", "origin"]);
+        assert_eq!(
+            fetch_refspec_args("origin", "a:b"),
+            ["fetch", "--", "origin", "a:b"]
+        );
+    }
+
+    #[test]
+    fn the_command_lines_do_what_they_did() {
+        // `--` changes nothing for a normal name: the commands still push, delete and rebase.
+        let (scratch, dir) = repository();
+        let remote = scratch.path().join("remote.git");
+        git_ok(
+            scratch.path(),
+            &["init", "--bare", "-b", "main", "remote.git"],
+        );
+        git_ok(
+            &dir,
+            &["remote", "add", "origin", &remote.to_string_lossy()],
+        );
+        let ok = |args: Vec<String>| {
+            let (code, text) = run_args(&dir, &args);
+            assert_eq!(code, 0, "{args:?}: {text}");
+        };
+        ok(push_args("origin", "main:main"));
+        ok(push_args("origin", "main:topic"));
+        assert!(git_ok(&remote, &["branch", "--list", "topic"]).contains("topic"));
+        ok(push_delete_args("origin", "topic"));
+        assert_eq!(git_ok(&remote, &["branch", "--list", "topic"]), "");
+        ok(fetch_args("origin"));
+        ok(fetch_refspec_args("origin", "main:refs/heads/copy"));
+        assert_eq!(
+            git_ok(&dir, &["rev-parse", "copy"]),
+            git_ok(&dir, &["rev-parse", "main"])
+        );
+        git_ok(&dir, &["checkout", "-b", "work"]);
+        commit_file(&dir, "w.txt", "w\n", "work");
+        ok(rebase_args("main"));
+        ok(force_branch_args("copy", "work"));
+        assert_eq!(
+            git_ok(&dir, &["rev-parse", "copy"]),
+            git_ok(&dir, &["rev-parse", "work"])
+        );
+        git_ok(&dir, &["checkout", "main"]);
+        ok(squash_merge_args("work"));
+        assert!(dir.join("w.txt").exists());
+    }
+
+    #[test]
+    fn a_cherry_pick_that_stops_midway_can_still_be_undone() {
+        let (scratch, dir) = repository();
+        git_ok(&dir, &["checkout", "-b", "side"]);
+        commit_file(&dir, "b.txt", "b\n", "adds b");
+        commit_file(&dir, "a.txt", "side\n", "changes a");
+        git_ok(&dir, &["checkout", "main"]);
+        commit_file(&dir, "a.txt", "main\n", "main changes a");
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        app.open_repository(&dir.to_string_lossy());
+        app.with_active(|app, state| {
+            let tip = state.history.head_sha.clone().unwrap();
+            let pick = |summary: &str| {
+                state
+                    .history
+                    .commits
+                    .iter()
+                    .find(|commit| commit.summary == summary)
+                    .unwrap()
+                    .sha
+                    .clone()
+            };
+            // Commit 2 of 2 conflicts with "main changes a".
+            let shas = [pick("adds b"), pick("changes a")];
+            cherry_pick_all(app, state, &shas);
+            // The first was applied: HEAD moved, and there is something to undo.
+            assert_ne!(state.history.head_sha.as_deref(), Some(tip.as_str()));
+            assert!(dir.join("b.txt").exists());
+            assert_eq!(state.undo_stack.len(), 1);
+            let titles: Vec<&str> = app
+                .toasts
+                .history()
+                .iter()
+                .map(|toast| toast.title.as_str())
+                .collect();
+            assert!(
+                titles.contains(&"Cherry pick stopped on conflicts"),
+                "{titles:?}"
+            );
+            assert!(
+                titles.iter().any(|t| t.starts_with("1 of 2 commits")),
+                "{titles:?}"
+            );
+            app.undo(state);
+            assert_eq!(state.history.head_sha.as_deref(), Some(tip.as_str()));
+            assert!(!dir.join("b.txt").exists());
+            assert_eq!(
+                std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+                "main\n"
+            );
+        });
+    }
+
+    #[test]
+    fn a_cherry_pick_that_fails_at_once_has_nothing_to_undo() {
+        let (scratch, dir) = repository();
+        git_ok(&dir, &["checkout", "-b", "side"]);
+        commit_file(&dir, "a.txt", "side\n", "changes a");
+        git_ok(&dir, &["checkout", "main"]);
+        commit_file(&dir, "a.txt", "main\n", "main changes a");
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        app.open_repository(&dir.to_string_lossy());
+        app.with_active(|app, state| {
+            let sha = state
+                .history
+                .commits
+                .iter()
+                .find(|commit| commit.summary == "changes a")
+                .unwrap()
+                .sha
+                .clone();
+            cherry_pick_all(app, state, &[sha]);
+            assert!(state.undo_stack.is_empty());
+        });
+    }
+
+    #[test]
+    fn menu_clicks_that_change_the_repository_wait_for_a_running_command() {
+        use imgit_app::repo_state::AsyncOperation;
+        let (scratch, dir) = repository();
+        let mut app = Application::with_config_directory(scratch.path().join("config"));
+        app.open_repository(&dir.to_string_lossy());
+        app.with_active(|_, state| {
+            state.async_op = Some(AsyncOperation {
+                title: "Rebase".to_owned(),
+                job: imgit_app::job::Job::idle(),
+                silent: false,
+                args: Vec::new(),
+                attempt: None,
+                queued: Vec::new(),
+            });
+        });
+        // `repo_item` clicks run through `with_idle_repo`, `repo_view_item` ones through `with_repo`.
+        let workdir = dir.clone();
+        let mut changed = false;
+        app.with_idle_repo(&workdir, |_, _| changed = true);
+        assert!(!changed);
+        assert_eq!(app.toasts.history()[0].title, "Wait for Rebase to finish");
+        let mut looked = false;
+        app.with_repo(&workdir, |_, _| looked = true);
+        assert!(looked);
     }
 
     #[test]

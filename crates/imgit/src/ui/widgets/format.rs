@@ -81,7 +81,13 @@ pub fn format_relative(unix_seconds: i64) -> String {
         .map_or(0, |elapsed| {
             i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
         });
-    relative_time(now - unix_seconds)
+    relative_to(now, unix_seconds)
+}
+
+/// [`relative_time`] of `unix_seconds` as seen at `now`; a commit date at either end of the `i64` range gives
+/// the nearest extreme instead of overflowing.
+fn relative_to(now: i64, unix_seconds: i64) -> String {
+    relative_time(now.saturating_sub(unix_seconds))
 }
 
 impl Cx<'_> {
@@ -196,6 +202,18 @@ mod tests {
             assert_eq!(relative_time(delta), expected, "{delta}");
         }
         assert_eq!(format_relative(i64::MAX), "just now");
+    }
+
+    #[test]
+    fn absurd_timestamps_do_not_overflow() {
+        // Both of these panicked in a debug build: `now - unix_seconds` left the range.
+        assert!(relative_to(1_000, i64::MIN).ends_with("years ago"));
+        assert_eq!(relative_to(-1_000, i64::MAX), "just now");
+        assert_eq!(relative_to(i64::MAX, i64::MIN), relative_time(i64::MAX));
+        assert!(format_relative(i64::MIN).ends_with("years ago"));
+        // The date formats give an empty string for a time the system cannot represent.
+        assert!(imgit_platform::system::local_time(i64::MIN).is_none());
+        assert!(imgit_platform::system::local_time(i64::MAX).is_none());
     }
 
     #[test]

@@ -28,7 +28,8 @@ fn ssh_command(target: &SshTarget) -> Vec<String> {
     if let Some(port) = &target.port {
         args.extend(["-p", port]);
     }
-    args.push(&target.target);
+    // `--`: whatever the target is, ssh reads it as the destination and never as an option.
+    args.extend(["--", &target.target]);
     args.into_iter().map(str::to_owned).collect()
 }
 
@@ -116,16 +117,24 @@ mod tests {
                 "BatchMode=yes",
                 "-o",
                 "ConnectTimeout=6",
+                "--",
                 "git@github.com"
             ]
         );
+        // A target that looks like an option stays after `--`.
+        let hostile = SshTarget {
+            target: "-oProxyCommand=cmd@host".to_owned(),
+            port: None,
+        };
+        let line = ssh_command(&hostile);
+        assert_eq!(line[line.len() - 2..], ["--", "-oProxyCommand=cmd@host"]);
         let other_port = SshTarget {
             target: "deploy@git.example.com".to_owned(),
             port: Some("2222".to_owned()),
         };
         assert_eq!(
             ssh_command(&other_port)[6..],
-            ["-p", "2222", "deploy@git.example.com"]
+            ["-p", "2222", "--", "deploy@git.example.com"]
         );
     }
 }

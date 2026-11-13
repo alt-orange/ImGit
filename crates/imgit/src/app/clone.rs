@@ -7,7 +7,23 @@ use imgit_app::job::Job;
 use imgit_git::cli::{self, CloneProgress, Credential};
 
 use crate::app::application::Application;
+use crate::app::git_ops::credentials_for;
 use crate::app::toasts::ToastKind;
+
+/// The arguments of `git clone`: `--` ends the options, so a url or folder that starts with `-` is not one.
+fn clone_args(url: &str, destination: &str) -> Vec<String> {
+    ["clone", "--progress", "--", url, destination]
+        .map(str::to_owned)
+        .into()
+}
+
+/// `path` made absolute against the process's folder (unchanged when that cannot be told).
+fn absolute(path: &str) -> String {
+    std::path::absolute(path).map_or_else(
+        |_| path.to_owned(),
+        |absolute| absolute.to_string_lossy().into_owned(),
+    )
+}
 
 /// A running clone; the destination opens as a tab when it finishes. Its progress is written by the clone's
 /// thread and read by the Clone dialog's progress bar.
@@ -30,11 +46,21 @@ impl Application {
         destination: String,
         attempt: Option<Credential>,
     ) {
-        let mut credentials = self.credentials.clone();
-        if let Some(attempt) = &attempt {
-            credentials.retain(|credential| credential.url != attempt.url);
-            credentials.insert(0, attempt.clone());
+        let url = url.trim().to_owned();
+        if url.is_empty() {
+            self.toasts.push_with_detail(
+                ToastKind::Error,
+                "Clone failed",
+                "There is no repository url to clone",
+            );
+            return;
         }
+        // git runs in `parent`: a relative destination would be resolved against it a second time, and the
+        // repository opened afterwards would be looked up against the process's own folder.
+        let parent = absolute(&parent);
+        let destination = absolute(&destination);
+        // Only the cloned host's credential reaches git.
+        let credentials = credentials_for(&self.credentials, [url.as_str()], attempt.as_ref());
         let progress = Arc::new(Mutex::new(CloneProgress::default()));
         let sink = Arc::clone(&progress);
         let (work_parent, work_url, work_destination) =
@@ -47,7 +73,7 @@ impl Application {
             };
             cli::run(
                 Path::new(&work_parent),
-                ["clone", "--progress", &work_url, &work_destination],
+                clone_args(&work_url, &work_destination),
                 cli::RunOptions {
                     credentials: &credentials,
                     on_output: Some(&mut on_output),

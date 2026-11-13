@@ -134,6 +134,9 @@ pub struct Application {
     pub(crate) hidden_refs: BTreeMap<String, HashSet<String>>,
     /// `restore_tabs` is opening the remembered tabs.
     pub(crate) restoring_tabs: bool,
+    /// This session was started with a repository on the command line (also how "Open in a new window"
+    /// starts one): its tabs are not the remembered set, so it never writes `tabs.txt`.
+    pub(crate) started_with_repository: bool,
     pub(crate) next_tab_id: u64,
     /// A submodule `open_submodule` made, waiting for its parent's tab to be put back.
     pub(crate) pending_submodule: Option<PendingSubmodule>,
@@ -143,8 +146,8 @@ pub struct Application {
     #[allow(clippy::vec_box)] // the boxes come from the tabs and go back to nothing
     pub(crate) closed_submodules: Vec<Box<RepoState>>,
     pub(crate) pending_profile: Option<String>,
-    /// The toasts not yet read at the last frame (desktop notifications).
-    pub(crate) unread_toasts: usize,
+    /// The toasts pushed so far, as of the last frame (a rise makes the window ask for attention).
+    pub(crate) toasts_pushed_seen: usize,
     /// The next custom-themes reload is one the user asked for: it reports success.
     pub(crate) report_theme_reload: bool,
 }
@@ -200,12 +203,13 @@ impl Application {
             background: Vec::new(),
             hidden_refs: BTreeMap::new(),
             restoring_tabs: false,
+            started_with_repository: false,
             next_tab_id: 1,
             pending_submodule: None,
             closing_submodule: None,
             closed_submodules: Vec::new(),
             pending_profile: None,
-            unread_toasts: 0,
+            toasts_pushed_seen: 0,
             report_theme_reload: false,
         };
         app.apply_profile_identity(false);
@@ -270,6 +274,8 @@ impl Application {
         };
         // The profile being left keeps its settings and tabs.
         self.save_state();
+        // From here the tabs are the new profile's remembered ones, not the command-line repository.
+        self.started_with_repository = false;
         self.tabs.clear();
         self.tab_groups.clear();
         self.closed_tabs.clear();

@@ -65,6 +65,27 @@ pub struct ProfileMenuState {
     scroll: f32,
 }
 
+/// The scroll offset that shows row `row` (each `row_height` tall) in a list `view_height` tall: `scroll` when it
+/// is already fully visible, else the nearest offset that shows it, within `0..=max_scroll`.
+fn scroll_to_show(
+    scroll: f32,
+    row: usize,
+    row_height: f32,
+    view_height: f32,
+    max_scroll: f32,
+) -> f32 {
+    let top = row as f32 * row_height;
+    let bottom = top + row_height;
+    let shown = if top < scroll {
+        top
+    } else if bottom > scroll + view_height {
+        bottom - view_height
+    } else {
+        scroll
+    };
+    shown.clamp(0.0, max_scroll.max(0.0))
+}
+
 /// 14px text in a 20px line box whose top is `line_top` (device px), placed like Chromium.
 fn line_text(
     cx: &Cx<'_>,
@@ -160,7 +181,8 @@ pub fn profile_select_menu(
         WindowFlags::NO_MOVE | WindowFlags::NO_SCROLLBAR | WindowFlags::NO_SCROLL_WITH_MOUSE,
     )?;
     // The option the keyboard / mouse is on starts at the current profile.
-    if ui.is_window_appearing() {
+    let appearing = ui.is_window_appearing();
+    if appearing {
         let menu = &mut cx.state.profile_menu;
         menu.scroll = 0.0;
         menu.focused = profiles
@@ -206,11 +228,24 @@ pub fn profile_select_menu(
         scroll = (scroll - ui.io().mouse_wheel() * cx.px(OPTION_HEIGHT)).clamp(0.0, max_scroll);
     }
     let last = profiles.len().saturating_sub(1);
+    let mut keyboard_moved = appearing;
     if ui.is_key_pressed(Key::DownArrow) {
         focused = (focused + 1).min(last);
+        keyboard_moved = true;
     }
     if ui.is_key_pressed(Key::UpArrow) {
         focused = focused.saturating_sub(1);
+        keyboard_moved = true;
+    }
+    // The row Enter would pick is never outside the list.
+    if keyboard_moved {
+        scroll = scroll_to_show(
+            scroll,
+            focused,
+            cx.px(OPTION_HEIGHT),
+            list_max.y - list_min.y,
+            max_scroll,
+        );
     }
     let mut picked = None;
     if ui.is_key_pressed(Key::Enter) && focused < profiles.len() {
@@ -276,4 +311,27 @@ pub fn profile_select_menu(
     drop(popup);
     let _ = MouseButton::Left;
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scroll_to_show;
+
+    #[test]
+    fn the_focused_row_is_scrolled_into_view() {
+        // Rows 45 tall, a 100 tall view of ten rows (450 tall: at most 350 scroll).
+        let show = |scroll, row| scroll_to_show(scroll, row, 45.0, 100.0, 350.0);
+        // Already visible: untouched.
+        assert_eq!(show(0.0, 1), 0.0);
+        // Below the view: its bottom edge lines up with the view's.
+        assert_eq!(show(0.0, 2), 35.0);
+        assert_eq!(show(0.0, 9), 350.0);
+        // Above the view: its top edge does.
+        assert_eq!(show(200.0, 1), 45.0);
+        assert_eq!(show(10.0, 0), 0.0);
+        // The menu opening on a late profile.
+        assert_eq!(show(0.0, 7), 260.0);
+        // Never beyond the scrollable range.
+        assert_eq!(scroll_to_show(0.0, 5, 45.0, 100.0, 0.0), 0.0);
+    }
 }
