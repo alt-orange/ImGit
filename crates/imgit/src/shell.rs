@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow};
-use dear_imgui_rs::{ConfigFlags, Context, Ui, sys};
+use dear_imgui_rs::{ConfigFlags, Context, SystemClipboard, Ui, sys};
 use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use glow::HasContext as _;
 use glutin::config::{Config as GlConfig, ConfigTemplateBuilder, GlConfig as _};
@@ -271,6 +271,23 @@ where
         {
             return self.fail(event_loop, error.into());
         }
+        #[cfg(target_os = "macos")]
+        if !self.config.options.scripted() {
+            match &event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    let position = position.to_logical::<f32>(state.window.scale_factor());
+                    state.cursor_position = [position.x, position.y];
+                }
+                WindowEvent::MouseInput {
+                    state: winit::event::ElementState::Pressed,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } => {
+                    state.chrome.drag_title_bar(state.cursor_position);
+                }
+                _ => {}
+            }
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => match state.redraw(&self.config.options) {
@@ -333,6 +350,8 @@ struct State<F> {
     surface: Surface<WindowSurface>,
     gl_context: PossiblyCurrentContext,
     window: Arc<Window>,
+    #[cfg(target_os = "macos")]
+    cursor_position: [f32; 2],
 }
 
 impl<F: Frame> State<F> {
@@ -372,6 +391,11 @@ impl<F: Frame> State<F> {
         };
         let mut platform = WinitPlatform::new(&mut imgui)?;
         platform.attach_window(Arc::clone(&window), hidpi_mode, &mut imgui)?;
+        // Winit handles keyboard input but does not install clipboard callbacks. Connect ImGui's
+        // text fields and the terminal to the OS clipboard for copy, cut and paste.
+        imgui.set_clipboard_backend(
+            SystemClipboard::new().context("initializing the system clipboard")?,
+        );
         let (_, framebuffer_scale) = display_metrics(&window);
         let density = framebuffer_scale[0];
 
@@ -427,6 +451,8 @@ impl<F: Frame> State<F> {
             surface,
             gl_context,
             window,
+            #[cfg(target_os = "macos")]
+            cursor_position: [0.0; 2],
         };
         state.apply_window_requests(&requests);
         Ok(state)
@@ -587,7 +613,9 @@ impl<F: Frame> State<F> {
             self.frame_index += 1;
         }
 
-        self.animating = requests.animating;
+        // ImGui trickles rapid press/release events across frames. Drain that queue at display
+        // speed instead of making each remaining event wait for the 100 ms idle timeout.
+        self.animating = requests.animating || pending_input_events(&self.imgui);
         self.apply_window_requests(&requests);
         Ok(keep_running && !requests.quit)
     }
@@ -606,6 +634,20 @@ impl<F: Frame> State<F> {
         if let Err(error) = self.platform.shutdown(&mut self.imgui) {
             eprintln!("imgit: platform shutdown: {error}");
         }
+    }
+}
+
+/// Whether ImGui deferred input to a later frame (including synthesized menu shortcuts).
+fn pending_input_events(imgui: &Context) -> bool {
+    // SAFETY: the shell owns the current context on this thread. No frame or mutable reference is
+    // active here; only the queue length is read.
+    unsafe {
+        let context = sys::igGetCurrentContext();
+        debug_assert_eq!(
+            imgui.io() as *const _ as *const (),
+            sys::igGetIO_Nil().cast()
+        );
+        !context.is_null() && (*context).InputEventsQueue.Size > 0
     }
 }
 
@@ -664,6 +706,14 @@ fn create_window(
     if !cfg!(target_os = "macos") {
         // macOS takes the icon from the bundle.
         attributes = attributes.with_window_icon(app_icon(64));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        attributes = attributes
+            .with_title_hidden(true)
+            .with_titlebar_transparent(true)
+            .with_fullsize_content_view(true);
     }
     let template = ConfigTemplateBuilder::new()
         .with_alpha_size(8)
@@ -732,4 +782,67 @@ fn create_gl(
     let gl =
         unsafe { glow::Context::from_loader_function_cstr(|name| display.get_proc_address(name)) };
     Ok((context, surface, Rc::new(gl)))
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use dear_imgui_rs::{ClipboardBackend, Key};
+
+    struct Clipboard;
+    impl ClipboardBackend for Clipboard {
+        fn get(&mut self) -> Option<String> {
+            Some("pasted text".into())
+        }
+        fn set(&mut self, _: &str) {}
+    }
+
+    #[test]
+    fn quick_command_v_pastes_once_and_drains_queued_release() {
+        let mut context = Context::create();
+        context.set_ini_filename(None::<String>).unwrap();
+        context.set_clipboard_backend(Clipboard);
+        context.io_mut().set_display_size([400.0, 200.0]);
+        context.io_mut().set_delta_time(1.0 / 60.0);
+        context.io_mut().set_config_macosx_behaviors(true);
+        context
+            .font_atlas()
+            .try_claim_legacy_renderer()
+            .unwrap()
+            .build();
+        let mut text = String::new();
+        // Focus a real input widget and allow its shortcut routing to settle.
+        for frame in 0..4 {
+            let ui = context.frame();
+            ui.window("test").build(|| {
+                if frame == 0 {
+                    ui.set_keyboard_focus_here();
+                }
+                ui.input_text("field", &mut text).build();
+            });
+            drop(context.render_legacy());
+        }
+        // The whole chord arrives before a single redraw, as with a quick tap at idle.
+        context.io_mut().add_key_event(Key::ModSuper, true);
+        context.io_mut().add_key_event(Key::V, true);
+        context.io_mut().add_key_event(Key::V, false);
+        context.io_mut().add_key_event(Key::ModSuper, false);
+        assert!(pending_input_events(&context));
+        let mut frames = 0;
+        while pending_input_events(&context) {
+            assert!(frames < 8, "input queue did not drain");
+            let ui = context.frame();
+            ui.window("test").build(|| {
+                ui.input_text("field", &mut text).build();
+            });
+            drop(context.render_legacy());
+            frames += 1;
+        }
+        assert_eq!(text, "pasted text");
+        assert!(!context.io().key_ctrl());
+        assert!(
+            frames >= 2,
+            "press and release must survive in separate frames"
+        );
+    }
 }

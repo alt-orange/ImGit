@@ -27,7 +27,7 @@ anyhow = "1"
 # Gravatar downloads (the system's TLS stack: no C toolchain needed for the crypto).
 ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 thiserror.workspace = true
-dear-imgui-rs = "0.22"
+dear-imgui-rs = { version = "0.22", features = ["system-clipboard"] }
 dear-imgui-winit = "0.22"
 dear-imgui-glow = "0.22"
 winit = "0.30"
@@ -54,6 +54,9 @@ windows = { version = "0.62", optional = true, features = [
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
 
 [dev-dependencies]
 tempfile.workspace = true

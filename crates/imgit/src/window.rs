@@ -1,7 +1,7 @@
 //! Platform touches on the main window: its frame, its cursors and the scale of the UI's logical pixels.
 //!
 //! The portable part lives here; `window/windows.rs` holds the Win32 calls, `window/portable.rs` what winit
-//! alone can do elsewhere, and `window/macos.rs` the (still unported) Cocoa title bar.
+//! alone can do elsewhere, and `window/macos.rs` the unified macOS title bar.
 //!
 //! The C++ `platform::native_window()` has no counterpart: winit's `Window` implements
 //! `raw_window_handle::HasWindowHandle`, which is what system dialogs take as their parent
@@ -61,6 +61,8 @@ pub struct WindowChrome {
     imp: imp::Chrome,
     /// Whether one of our cursors is up (so [`Self::reset_cursor`] has something to undo).
     custom_cursor: bool,
+    #[cfg(target_os = "macos")]
+    drag_region: ([f32; 2], [f32; 2]),
 }
 
 impl WindowChrome {
@@ -74,6 +76,8 @@ impl WindowChrome {
             dark: true,
             imp,
             custom_cursor: false,
+            #[cfg(target_os = "macos")]
+            drag_region: ([0.0; 2], [0.0; 2]),
         };
         chrome.apply_frame();
         chrome
@@ -127,12 +131,27 @@ impl WindowChrome {
         }
     }
 
+    /// Starts a native window drag only in the unused portion of the tabs bar.
+    #[cfg(target_os = "macos")]
+    pub fn drag_title_bar(&self, position: [f32; 2]) {
+        let (min, max) = self.drag_region;
+        if position[0] >= min[0]
+            && position[0] < max[0]
+            && position[1] >= min[1]
+            && position[1] < max[1]
+        {
+            let _ = self.window.drag_window();
+        }
+    }
+
     /// Where the tabs bar is the title bar: the part of it (window coordinates, logical px) that acts as one,
     /// moving the window when dragged and zooming or minimising on a double-click, as the system is set. Set
     /// every frame, empty (max <= min) when there is none. A no-op off macOS.
     pub fn set_title_bar_drag_region(&mut self, min: [f32; 2], max: [f32; 2]) {
         #[cfg(target_os = "macos")]
-        macos::set_drag_region(min, max);
+        {
+            self.drag_region = (min, max);
+        }
         #[cfg(not(target_os = "macos"))]
         let _ = (min, max);
     }
