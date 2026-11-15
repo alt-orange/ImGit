@@ -220,9 +220,20 @@ where
             return; // the window exists already
         };
         match State::new(event_loop, &self.config, create) {
-            Ok(state) => {
-                state.window.request_redraw();
+            Ok(mut state) => {
+                // Hidden windows may receive no redraw events. Present the first frame explicitly
+                // before showing the window, so Windows never exposes an unpainted client area.
+                let first_frame = state.redraw(&self.config.options);
+                if matches!(first_frame, Ok(true)) {
+                    state.window.set_visible(true);
+                    state.window.request_redraw();
+                }
                 self.state = Some(state);
+                match first_frame {
+                    Ok(true) => {}
+                    Ok(false) => event_loop.exit(),
+                    Err(error) => self.fail(event_loop, error),
+                }
             }
             Err(error) => self.fail(event_loop, error),
         }
@@ -655,6 +666,7 @@ fn create_window(
     };
     let mut attributes = Window::default_attributes()
         .with_title("ImGit Desktop")
+        .with_visible(false)
         .with_inner_size(LogicalSize::new(options.width, options.height))
         .with_min_inner_size(LogicalSize::new(
             MIN_PAGE_SIZE[0],
