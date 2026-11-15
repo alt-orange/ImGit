@@ -300,8 +300,8 @@ impl Application {
     /// light menus). Each entry is its label (rounded up) plus 6px on both sides.
     fn draw_menu_bar(&mut self, cx: &mut Cx<'_>) {
         if has_native_menu_bar() {
-            // TODO(macOS): the same menus in the system menu bar, built from `bar_menu()` as they open (see
-            // `app_menu`); their clicks run here, on the UI thread inside the frame.
+            #[cfg(target_os = "macos")]
+            crate::app_menu::draw_native_menu_bar(cx, self);
             return;
         }
         let ui = cx.ui;
