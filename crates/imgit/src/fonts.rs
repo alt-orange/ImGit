@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dear_imgui_rs::{Context, FontConfig, FontId, FontSource, FontStackToken, Ui, sys};
+use imgit_platform::system::{SystemFont, system_font_file};
 
 use crate::assets;
 use crate::gfx::Renderer;
@@ -145,35 +146,6 @@ impl TextSettings {
         settings.fallback_gamma = number("IMGIT_FREETYPE_GAMMA").map(|gamma| gamma.max(1.0));
         settings
     }
-}
-
-/// The roles ImGit fills with a system font.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SystemFont {
-    /// The native menus' face.
-    Ui,
-    /// The diff and the terminal.
-    Monospace,
-    /// The tooltips.
-    Arial,
-}
-
-/// The font file for `font`; `None` when the system has none.
-///
-/// TODO: switch to `imgit_platform::system::system_font_file` (which also knows macOS and fontconfig) once the
-/// shell depends on that crate.
-fn system_font_file(font: SystemFont) -> Option<PathBuf> {
-    if !cfg!(windows) {
-        return None;
-    }
-    let file = match font {
-        SystemFont::Ui => "segoeui.ttf",
-        SystemFont::Monospace => "consola.ttf",
-        SystemFont::Arial => "arial.ttf",
-    };
-    let windows = env::var_os("WINDIR").or_else(|| env::var_os("SystemRoot"))?;
-    let path = Path::new(&windows).join("Fonts").join(file);
-    path.is_file().then_some(path)
 }
 
 /// `(usWinAscent + usWinDescent) / unitsPerEm` of the face `font_no` in a TrueType / OpenType file: the line
@@ -476,6 +448,17 @@ mod tests {
         }
         assert_eq!(em_scale_from_file(b"not a font", 0), None);
         assert!(!is_sfnt(b"PNG"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_default_monospace_font_is_loadable() {
+        // The UI must use the platform lookup too: its old Windows-only lookup silently
+        // substituted proportional Open Sans for the terminal and editor on macOS.
+        let path = system_font_file(SystemFont::Monospace).expect("macOS monospace font");
+        let data = fs::read(path).expect("readable system font");
+        assert!(is_loadable_font(&data));
+        assert!(em_scale_from_file(&data, 0).is_some());
     }
 
     #[test]
