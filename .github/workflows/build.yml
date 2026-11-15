@@ -145,10 +145,7 @@ jobs:
               upx -t "dist/$name/imgit.exe"
             fi
           elif [ "$RUNNER_OS" = macOS ]; then
-            cp target/release/imgit "dist/$name/"
-            strip -x "dist/$name/imgit"
-            # strip drops the linker's ad-hoc signature, without which Apple silicon refuses to run the binary
-            codesign --force --sign - "dist/$name/imgit"
+            bash tools/macos/bundle.sh target/release/imgit "dist/$name/ImGit.app"
           else
             cp target/release/imgit "dist/$name/"
             strip --strip-all --remove-section=.comment "dist/$name/imgit"
