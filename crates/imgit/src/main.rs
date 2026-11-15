@@ -38,6 +38,7 @@ use crate::fonts::{FontRequest, TextSettings};
 const GALLERY_FLAG: &str = "--gallery";
 
 fn main() -> anyhow::Result<ExitCode> {
+    let startup_start = std::time::Instant::now();
     // `git` runs ImGit as its GIT_ASKPASS with the prompt as the only argument: answer it and exit before any
     // window exists.
     if env::args_os().count() == 2
@@ -46,6 +47,7 @@ fn main() -> anyhow::Result<ExitCode> {
     {
         return Ok(imgit_git::cli::askpass_main(&prompt));
     }
+    imgit_app::startup::init(startup_start);
     let args: Vec<String> = env::args().skip(1).collect();
     let gallery = args.iter().any(|arg| arg == GALLERY_FLAG);
     let options = DevOptions::parse(args.into_iter().filter(|arg| arg != GALLERY_FLAG));
@@ -62,7 +64,12 @@ fn main() -> anyhow::Result<ExitCode> {
     }
 
     // The application first: it loads the profile's preferences, which name the Editor and Terminal fonts.
-    let app = Application::new();
+    let mut app = {
+        let _timing = imgit_app::startup::span("application.preferences");
+        Application::new()
+    };
+    app.prepare_startup_repositories(options.repo.as_deref());
+    let font_timing = imgit_app::startup::span("fonts.resolve");
     let font_file = |preference| monospace_font_file(&preferences().get(preference));
     let config = shell::Config {
         options,
@@ -72,6 +79,7 @@ fn main() -> anyhow::Result<ExitCode> {
         },
         text,
     };
+    drop(font_timing);
     shell::run(config, move |shell| AppFrame::new(app, shell))?;
     Ok(ExitCode::SUCCESS)
 }

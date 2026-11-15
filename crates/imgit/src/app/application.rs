@@ -134,6 +134,12 @@ pub struct Application {
     pub(crate) hidden_refs: BTreeMap<String, HashSet<String>>,
     /// `restore_tabs` is opening the remembered tabs.
     pub(crate) restoring_tabs: bool,
+    /// Ordered startup reads run on one worker while graphics initializes. Dropping receivers
+    /// cancels the remaining queue after the worker finishes its current repository.
+    pub(crate) startup_repositories: BTreeMap<
+        String,
+        std::sync::mpsc::Receiver<Option<imgit_app::repo_state::PreparedRepository>>,
+    >,
     /// This session was started with a repository on the command line (also how "Open in a new window"
     /// starts one): its tabs are not the remembered set, so it never writes `tabs.txt`.
     pub(crate) started_with_repository: bool,
@@ -203,6 +209,7 @@ impl Application {
             background: Vec::new(),
             hidden_refs: BTreeMap::new(),
             restoring_tabs: false,
+            startup_repositories: BTreeMap::new(),
             started_with_repository: false,
             next_tab_id: 1,
             pending_submodule: None,

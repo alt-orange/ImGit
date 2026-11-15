@@ -34,6 +34,7 @@ impl AppFrame {
         app.request_custom_themes(&mut ui_state, false);
         app.apply_settings_to(&mut ui_state);
 
+        let repositories_timing = imgit_app::startup::span("repositories.restore");
         let options = shell.options;
         match &options.repo {
             Some(repo) => {
@@ -52,6 +53,13 @@ impl AppFrame {
             && let Some(recent) = app.recent_repos.first().cloned()
         {
             app.open_repository(&recent.to_string_lossy());
+        }
+        // A missing or changed saved path may leave an unused preload. Never reuse it for a
+        // repository opened later in the session (or after a profile switch).
+        app.startup_repositories.clear();
+        drop(repositories_timing);
+        if app.active().is_some() {
+            imgit_app::startup::mark("repository.active_ready");
         }
         Self {
             app,

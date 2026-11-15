@@ -10,6 +10,7 @@ pub mod merge_tool;
 pub mod preferences;
 pub mod profiles;
 pub mod repo_state;
+pub mod startup;
 pub mod syntax;
 pub mod text;
 pub mod theme_file;

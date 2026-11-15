@@ -377,12 +377,19 @@ pub fn load_fonts(
     let semibold = embedded(imgui, "OpenSans-Semibold", FONT_SIZE_NORMAL).unwrap_or(regular);
     let bold = embedded(imgui, "OpenSans-Bold", FONT_SIZE_NORMAL).unwrap_or(semibold);
     let italic = embedded(imgui, "OpenSans-Italic", FONT_SIZE_NORMAL).unwrap_or(regular);
-    let mono = system(imgui, SystemFont::Monospace, FONT_SIZE_SMALL).unwrap_or(regular);
+    let mono_path = system_font_file(SystemFont::Monospace);
+    let mono = mono_path
+        .as_ref()
+        .and_then(|path| from_file(imgui, path, FONT_SIZE_SMALL))
+        .unwrap_or(regular);
     let ui_font = system(imgui, SystemFont::Ui, FONT_SIZE_SMALL).unwrap_or(regular);
     let arial = system(imgui, SystemFont::Arial, FONT_SIZE_SMALL).unwrap_or(regular);
     // The user's file when it is a font the loader accepts (a damaged one would make `add_font` panic), else
-    // the system's monospace face, in an ImFont of its own.
+    // the already loaded system face. Identical roles share one font and glyph cache.
     let preferred_mono = |imgui: &Context, preference: Option<&PathBuf>| {
+        if preference.is_none() || preference == mono_path.as_ref() {
+            return mono;
+        }
         let chosen = preference.and_then(|path| {
             let data = fs::read(path).ok()?;
             if !is_loadable_font(&data) {
@@ -395,12 +402,14 @@ pub fn load_fonts(
             let name = path.file_stem()?.to_string_lossy().into_owned();
             add_font(imgui, &name, &data, FONT_SIZE_SMALL, grayscale)
         });
-        chosen
-            .or_else(|| system(imgui, SystemFont::Monospace, FONT_SIZE_SMALL))
-            .unwrap_or(mono)
+        chosen.unwrap_or(mono)
     };
     let editor = preferred_mono(imgui, request.editor.as_ref());
-    let terminal = preferred_mono(imgui, request.terminal.as_ref());
+    let terminal = if request.editor == request.terminal {
+        editor
+    } else {
+        preferred_mono(imgui, request.terminal.as_ref())
+    };
 
     let style = imgui.style_mut();
     style.set_font_size_base(regular.size(FONT_SIZE_NORMAL));

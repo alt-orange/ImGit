@@ -24,7 +24,9 @@ use glutin::display::{GetGlDisplay as _, GlDisplay as _};
 use glutin::surface::{
     GlSurface as _, Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface,
 };
-use glutin_winit::{DisplayBuilder, GlWindow as _};
+#[cfg(not(windows))]
+use glutin_winit::DisplayBuilder;
+use glutin_winit::GlWindow as _;
 use raw_window_handle::HasWindowHandle as _;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -223,9 +225,14 @@ where
             Ok(mut state) => {
                 // Hidden windows may receive no redraw events. Present the first frame explicitly
                 // before showing the window, so Windows never exposes an unpainted client area.
-                let first_frame = state.redraw(&self.config.options);
+                let first_frame = {
+                    let _timing = imgit_app::startup::span("frame.first");
+                    state.redraw(&self.config.options)
+                };
                 if matches!(first_frame, Ok(true)) {
                     state.window.set_visible(true);
+                    imgit_app::startup::mark("window.show_requested");
+                    imgit_app::startup::finish();
                     state.window.request_redraw();
                 }
                 self.state = Some(state);
@@ -371,9 +378,13 @@ impl<F: Frame> State<F> {
         C: FnOnce(&mut ShellContext<'_>) -> F,
     {
         let options = &config.options;
+        let window_timing = imgit_app::startup::span("window.create");
         let (window, gl_config) = create_window(event_loop, options)?;
+        drop(window_timing);
         let window = Arc::new(window);
+        let gl_timing = imgit_app::startup::span("graphics.context");
         let (gl_context, surface, gl) = create_gl(&window, &gl_config)?;
+        drop(gl_timing);
         let chrome = WindowChrome::new(Arc::clone(&window));
 
         let dpi_scale = layout_scale(&window);
@@ -413,7 +424,10 @@ impl<F: Frame> State<F> {
         // IMGIT_RENDERER=glow forces the stock renderer (and with it grey-scale text), for comparisons.
         let prefer_lcd =
             std::env::var_os("IMGIT_RENDERER").is_none_or(|renderer| renderer != "glow");
+        let renderer_timing = imgit_app::startup::span("graphics.renderer");
         let mut renderer = Renderer::new(Rc::clone(&gl), &mut imgui, prefer_lcd)?;
+        drop(renderer_timing);
+        let font_timing = imgit_app::startup::span("fonts.load");
         let fonts = fonts::load_fonts(
             &mut imgui,
             &mut renderer,
@@ -422,6 +436,8 @@ impl<F: Frame> State<F> {
             dpi_scale,
             density,
         );
+
+        drop(font_timing);
 
         let script = match &options.script {
             Some(path) => {
@@ -620,6 +636,9 @@ impl<F: Frame> State<F> {
         self.surface
             .swap_buffers(&self.gl_context)
             .context("presenting the frame")?;
+        if self.frame_index == 0 {
+            imgit_app::startup::mark("frame.first_swap_complete");
+        }
         if counted {
             self.frame_index += 1;
         }
@@ -717,6 +736,7 @@ fn create_window(
         .with_theme(Some(Theme::Dark));
     if !cfg!(target_os = "macos") {
         // macOS takes the icon from the bundle.
+        let _timing = imgit_app::startup::span("window.icon");
         attributes = attributes.with_window_icon(app_icon(64));
     }
     #[cfg(target_os = "macos")]
@@ -731,17 +751,81 @@ fn create_window(
         .with_alpha_size(8)
         .with_depth_size(0)
         .with_stencil_size(0);
+    create_window_with_config(event_loop, attributes, template)
+}
+
+// Keep the same WGL -> EGL fallback as DisplayBuilder, but time each Windows setup phase.
+#[cfg(windows)]
+fn create_window_with_config(
+    event_loop: &ActiveEventLoop,
+    attributes: winit::window::WindowAttributes,
+    template: ConfigTemplateBuilder,
+) -> anyhow::Result<(Window, GlConfig)> {
+    use glutin::display::{Display, DisplayApiPreference};
+    use raw_window_handle::HasDisplayHandle as _;
+
+    let window = {
+        let _timing = imgit_app::startup::span("window.native");
+        event_loop
+            .create_window(attributes)
+            .context("creating the window")?
+    };
+    let raw_window = window.window_handle()?.as_raw();
+    let display = {
+        let _timing = imgit_app::startup::span("window.display");
+        // SAFETY: the event loop and window owning the handles remain alive throughout setup.
+        unsafe {
+            Display::new(
+                event_loop.display_handle()?.as_raw(),
+                DisplayApiPreference::WglThenEgl(Some(raw_window)),
+            )
+        }
+        .context("creating the OpenGL display")?
+    };
+    let config = {
+        let _timing = imgit_app::startup::span("window.pixel_format");
+        let template = template.compatible_with_native_window(raw_window).build();
+        // SAFETY: the template's native handle belongs to the live window above.
+        choose_gl_config(unsafe { display.find_configs(template) }?)
+            .ok_or_else(|| anyhow!("the display offers no pixel format"))?
+    };
+    Ok((window, config))
+}
+
+#[cfg(not(windows))]
+fn create_window_with_config(
+    event_loop: &ActiveEventLoop,
+    attributes: winit::window::WindowAttributes,
+    template: ConfigTemplateBuilder,
+) -> anyhow::Result<(Window, GlConfig)> {
     let (window, gl_config) = DisplayBuilder::new()
         .with_window_attributes(Some(attributes))
         .build(event_loop, template, |configs| {
             // No multisampling: ImGui anti-aliases its own geometry.
-            configs
-                .min_by_key(|config| config.num_samples())
-                .expect("the display offers a pixel format")
+            choose_gl_config(configs).expect("the display offers a pixel format")
         })
         .map_err(|error| anyhow!("creating the window: {error}"))?;
     let window = window.ok_or_else(|| anyhow!("the display gave no window"))?;
     Ok((window, gl_config))
+}
+
+/// ImGui handles its own anti-aliasing: zero samples is optimal. Stop at the first such
+/// config instead of querying every remaining driver pixel format. Keep the minimum as
+/// a fallback for displays that only offer multisampled configurations.
+fn choose_gl_config(configs: impl Iterator<Item = GlConfig>) -> Option<GlConfig> {
+    let mut best = None;
+    let mut best_samples = u8::MAX;
+    for config in configs {
+        let samples = config.num_samples();
+        if samples == 0 {
+            return Some(config);
+        }
+        if best.is_none() || samples < best_samples {
+            best_samples = samples;
+            best = Some(config);
+        }
+    }
+    best
 }
 
 /// The application icon at `size` pixels, from the embedded PNG.

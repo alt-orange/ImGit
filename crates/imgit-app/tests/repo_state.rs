@@ -1556,3 +1556,56 @@ fn a_rebuild_drops_the_comparison_and_shifts_a_pending_scroll() {
     assert_eq!(scratch.state.compare_sha, None);
     assert_eq!(scratch.state.scroll_to_row, Some(1));
 }
+
+#[test]
+fn initial_history_uses_supplied_limit_and_hidden_refs() {
+    let (scratch, shas) = Scratch::with_commits(5);
+    let git = git2::Repository::open(scratch.root()).unwrap();
+    let commit = git
+        .find_commit(git2::Oid::from_str(&shas[4]).unwrap())
+        .unwrap();
+    git.branch("hidden", &commit, false).unwrap();
+    let state = RepoState::with_history_options(
+        Repository::open(scratch.root()).unwrap(),
+        imgit_git::HistoryOptions {
+            max_commits: 2,
+            hidden_refs: ["refs/heads/hidden".to_owned()].into_iter().collect(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(state.history.commits.len(), 2);
+    assert_eq!(state.history.commits[0].sha, shas[4]);
+    assert!(
+        state
+            .history
+            .refs
+            .iter()
+            .any(|r| r.full_name == "refs/heads/hidden" && r.hidden)
+    );
+}
+
+#[test]
+fn prepared_history_crosses_threads_and_refreshes_after_outside_changes() {
+    let (mut scratch, shas) = Scratch::with_commits(4);
+    let path = scratch.root();
+    let prepared = thread::spawn(move || {
+        let repo = Repository::open(path).unwrap();
+        imgit_app::repo_state::PreparedRepository::load(
+            &repo,
+            imgit_git::HistoryOptions {
+                max_commits: 2,
+                ..Default::default()
+            },
+        )
+    })
+    .join()
+    .unwrap();
+    let latest = scratch.commit_file("a.txt", "new contents\n", "outside change");
+    let mut state = RepoState::from_prepared(Repository::open(scratch.root()).unwrap(), prepared);
+    // Installing a prepared result does not secretly repeat its history read.
+    assert_eq!(state.history.commits.len(), 2);
+    assert_eq!(state.history.commits[0].sha, shas[3]);
+    state.refresh_status();
+    assert_eq!(state.history.commits[0].sha, latest);
+    assert_eq!(state.history.commits.len(), 2);
+}

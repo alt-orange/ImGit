@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use imgit_app::RepoState;
 use imgit_app::preferences::{pref, preferences};
 use imgit_app::profiles::write_text_file;
-use imgit_git::Repository;
+use imgit_git::{HistoryOptions, Repository};
 
 use crate::app::application::{Application, MAX_RECENT};
 use crate::app::dialog::DialogKind;
@@ -271,6 +271,76 @@ impl Application {
         }
     }
 
+    /// Read the initial repositories in order on one worker while graphics initializes.
+    /// Each tab consumes its own result; no extra thread is created per repository.
+    pub fn prepare_startup_repositories(&mut self, requested: Option<&Path>) {
+        self.startup_repositories.clear();
+        let mut paths = match requested {
+            Some(path) => vec![path.to_string_lossy().into_owned()],
+            None if self.settings.remember_tabs => {
+                TabsFile::parse(&self.read_profile_file("tabs.txt"))
+                    .tabs
+                    .into_iter()
+                    .filter(|entry| Path::new(&entry.path).exists())
+                    .map(|entry| entry.path)
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        if requested.is_none()
+            && paths.is_empty()
+            && let Some(path) = self.recent_repos.first()
+        {
+            paths.push(path.to_string_lossy().into_owned());
+        }
+        let mut pending = Vec::new();
+        for path in paths {
+            let path = path.trim().to_owned();
+            if path.is_empty() || self.startup_repositories.contains_key(&path) {
+                continue;
+            }
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.startup_repositories.insert(path.clone(), receiver);
+            pending.push((path, sender));
+        }
+        if pending.is_empty() {
+            return;
+        }
+        let hidden = self.hidden_refs.clone();
+        let max_commits = self.commit_limit();
+        if std::thread::Builder::new()
+            .name("startup-repositories".into())
+            .spawn(move || {
+                let mut loaded = std::collections::HashSet::new();
+                for (path, sender) in pending {
+                    let prepared = Repository::open(&path).ok().and_then(|repository| {
+                        let key = alias_key(&repository.workdir().to_string_lossy());
+                        // Different saved paths can resolve to the same working directory.
+                        if !loaded.insert(key.clone()) {
+                            return None;
+                        }
+                        let options = HistoryOptions {
+                            max_commits,
+                            hidden_refs: hidden.get(&key).cloned().unwrap_or_default(),
+                            ..HistoryOptions::default()
+                        };
+                        Some(imgit_app::repo_state::PreparedRepository::load(
+                            &repository,
+                            options,
+                        ))
+                    });
+                    if sender.send(prepared).is_err() {
+                        break;
+                    }
+                }
+            })
+            .is_err()
+        {
+            // If a worker cannot be started, tabs load through the normal synchronous path.
+            self.startup_repositories.clear();
+        }
+    }
+
     // Opening and closing
 
     /// Opens the repository at `path` in a tab (or shows its tab when it is open already): a toast when it
@@ -303,8 +373,18 @@ impl Application {
             self.active_tab = Some(index);
             return;
         }
-        let mut state = Box::new(RepoState::new(repo));
-        self.configure_new_state(&mut state);
+        let prepared = self.startup_repositories.remove(path).and_then(|receiver| {
+            let _timing = imgit_app::startup::span("repository.wait_for_preload");
+            receiver.recv().ok().flatten()
+        });
+        let state = match prepared {
+            Some(prepared) => {
+                let mut state = Box::new(RepoState::from_prepared(repo, prepared));
+                state.push_after_commit = self.settings.push_after_commit;
+                state
+            }
+            None => self.new_repo_state(repo),
+        };
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         self.tabs.push(Tab::new(id, state));
@@ -315,18 +395,22 @@ impl Application {
         self.recent_repos.retain(|recent| *recent != workdir);
         self.recent_repos.insert(0, workdir);
         self.recent_repos.truncate(MAX_RECENT);
-        self.save_recent();
+        if !self.restoring_tabs {
+            self.save_recent();
+        }
     }
 
-    /// The settings a tab starts from, and the refs hidden last time.
-    fn configure_new_state(&self, state: &mut RepoState) {
-        state.commit_limit = self.commit_limit();
+    /// Applies saved history settings before the first (and only) initial refresh.
+    fn new_repo_state(&self, repo: Repository) -> Box<RepoState> {
+        let key = alias_key(&repo.workdir().to_string_lossy());
+        let options = HistoryOptions {
+            max_commits: self.commit_limit(),
+            hidden_refs: self.hidden_refs.get(&key).cloned().unwrap_or_default(),
+            ..HistoryOptions::default()
+        };
+        let mut state = Box::new(RepoState::with_history_options(repo, options));
         state.push_after_commit = self.settings.push_after_commit;
-        let key = alias_key(&state.repo.workdir().to_string_lossy());
-        if let Some(hidden) = self.hidden_refs.get(&key) {
-            state.hidden_refs.clone_from(hidden);
-            state.refresh(); // the constructor loaded the graph with every ref
-        }
+        state
     }
 
     /// After a clone: when the repository in the active tab has submodules, asks whether to initialize them
@@ -409,8 +493,7 @@ impl Application {
                 return;
             }
         };
-        let mut submodule = Box::new(RepoState::new(repo));
-        self.configure_new_state(&mut submodule);
+        let submodule = self.new_repo_state(repo);
         self.pending_submodule = Some(PendingSubmodule {
             tab_id: self.tabs[tab].id,
             submodule,
@@ -806,6 +889,7 @@ impl Application {
             }
         }
         self.restoring_tabs = false;
+        self.save_recent();
         self.drop_empty_tab_groups();
         if let Some(wanted) = file.active
             && let Some(active) = restored_active(&opened_as, wanted)
@@ -869,6 +953,82 @@ mod tests {
 
     fn groups(app: &Application) -> Vec<Option<&str>> {
         app.tabs.iter().map(|tab| tab.group.as_deref()).collect()
+    }
+
+    #[test]
+    fn startup_preload_preserves_restoration_and_saved_options() {
+        let mut f = fixture(&["a", "b"]);
+        f.app.settings.remember_tabs = true;
+        f.app.settings.initial_commits = 500;
+        f.app.active_tab = Some(1);
+        let key = alias_key(&f.app.tabs[0].root_workdir.to_string_lossy());
+        f.app
+            .hidden_refs
+            .insert(key, ["refs/heads/hidden".to_owned()].into_iter().collect());
+        f.app.save_state();
+        f.app.tabs.clear();
+        f.app.prepare_startup_repositories(None);
+        assert_eq!(f.app.startup_repositories.len(), 2);
+        f.app.restore_tabs();
+        assert!(f.app.startup_repositories.is_empty());
+        assert_eq!(labels(&f.app), ["a", "b"]);
+        assert_eq!(f.app.active_tab, Some(1));
+        let state = f.app.tabs[0].state.as_ref().unwrap();
+        assert_eq!(state.commit_limit, 500);
+        assert!(state.hidden_refs.contains("refs/heads/hidden"));
+    }
+
+    #[test]
+    fn startup_preload_supports_explicit_and_recent_repositories() {
+        let mut f = fixture(&["a", "b"]);
+        let explicit = f.app.tabs[0].root_workdir.clone();
+        f.app.tabs.clear();
+        f.app.prepare_startup_repositories(Some(&explicit));
+        f.app.open_repository(&explicit.to_string_lossy());
+        assert!(f.app.startup_repositories.is_empty());
+        assert_eq!(labels(&f.app), ["a"]);
+        f.app.tabs.clear();
+        f.app.settings.remember_tabs = false;
+        f.app.prepare_startup_repositories(None);
+        f.app.open_repository(&explicit.to_string_lossy());
+        assert!(f.app.startup_repositories.is_empty());
+        assert_eq!(labels(&f.app), ["a"]);
+    }
+
+    #[test]
+    fn startup_queue_continues_after_a_non_repository() {
+        let mut f = fixture(&["a", "b"]);
+        let first = f.app.tabs[0].root_workdir.clone();
+        let second = f.app.tabs[1].root_workdir.clone();
+        let invalid = first.parent().unwrap().join("not-a-repo");
+        fs::create_dir(&invalid).unwrap();
+        f.app.settings.remember_tabs = true;
+        fs::write(
+            f.app.config_path("tabs.txt"),
+            format!(
+                "{}\n{}\n{}\n#active=2\n",
+                invalid.display(),
+                first.display(),
+                second.display()
+            ),
+        )
+        .unwrap();
+        f.app.tabs.clear();
+        f.app.prepare_startup_repositories(None);
+        f.app.restore_tabs();
+        assert_eq!(labels(&f.app), ["a", "b"]);
+        assert_eq!(f.app.active_tab, Some(1));
+        assert!(
+            !f.app
+                .startup_repositories
+                .contains_key(&second.to_string_lossy().into_owned())
+        );
+        let saved = fs::read_to_string(f.app.config_path("recent.txt")).unwrap();
+        assert_eq!(
+            saved.lines().next(),
+            Some(second.to_string_lossy().as_ref())
+        );
+        f.app.startup_repositories.clear();
     }
 
     #[test]

@@ -139,6 +139,26 @@ original binary.
 exits; `--script steps.txt --shots dir` replays clicks and keys and saves shots along the way. The images above were
 made this way.
 
+**Startup timings** — set `IMGIT_STARTUP_TIMINGS` to a CSV file path before launching:
+
+```powershell
+$env:IMGIT_STARTUP_TIMINGS = "$PWD/startup.csv"
+./target/release/imgit.exe .
+```
+
+The file is overwritten once after the first frame is swapped and the window show is requested. Rows contain
+`phase,elapsed_ms,duration_ms`: elapsed time is measured from entry into `main`, and duration is the time within
+that scope. Nested scopes and the startup repository worker overlap; do not sum them. Repeated repository rows correspond to repositories loaded
+in sequence. Milestones have approximately zero duration. The trace includes preferences, window/context and
+renderer creation (with separate icon, native-window, display and pixel-format timings on Windows),
+font resolution/loading, repository status, line statistics, history and graph layout,
+restoration, active-repository readiness, and the first frame. Requested/restored repositories are
+preloaded in order on one worker during graphics setup; `repository.wait_for_preload` measures any remaining wait
+before attaching it to its tab. Tab order and the remembered active tab are preserved. It does not measure OS process-loader time or
+when the desktop compositor actually displays the window. Tracing is off when the variable is unset; no
+repository paths are recorded. Use a fresh release build and compare several launches of the same session.
+Remove the variable with `Remove-Item Env:IMGIT_STARTUP_TIMINGS` when finished.
+
 ## Source map
 
 | Path | What |

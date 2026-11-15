@@ -395,12 +395,22 @@ struct StatusSnapshot {
 ///
 /// `with_submodules`: also the submodules (each one opened to read its HEAD, as the status read does).
 fn read_status(repo: &Repository, with_submodules: bool) -> StatusSnapshot {
-    let mut status = repo.load_status();
+    let _timing = crate::startup::span("repository.status_snapshot");
+    let mut status = {
+        let _timing = crate::startup::span("repository.status");
+        repo.load_status()
+    };
     if let Ok(status) = &mut status
         && status.count() <= MAX_FILES_WITH_STATS
     {
-        let _ = repo.fill_stats(&mut status.staged, StatsSource::Staged, None);
-        let _ = repo.fill_stats(&mut status.unstaged, StatsSource::Unstaged, None);
+        let _timing = crate::startup::span("repository.line_stats");
+        // An empty side needs no diff: fill_stats otherwise scans the tree even with no outputs.
+        if !status.staged.is_empty() {
+            let _ = repo.fill_stats(&mut status.staged, StatsSource::Staged, None);
+        }
+        if !status.unstaged.is_empty() {
+            let _ = repo.fill_stats(&mut status.unstaged, StatsSource::Unstaged, None);
+        }
     }
     StatusSnapshot {
         status,
@@ -587,10 +597,53 @@ impl fmt::Debug for RepoState {
     }
 }
 
+/// Initial repository data that can be read on a worker while the UI creates its window.
+/// Contains no UI state or undo callbacks. Status precedes history, as in a normal refresh.
+pub struct PreparedRepository {
+    options: HistoryOptions,
+    snapshot: StatusSnapshot,
+    history: imgit_git::Result<History>,
+}
+
+impl PreparedRepository {
+    #[must_use]
+    pub fn load(repository: &Repository, options: HistoryOptions) -> Self {
+        let _timing = crate::startup::span("repository.initial_load");
+        let snapshot = read_status(repository, false);
+        let history = {
+            let _timing = crate::startup::span("repository.history");
+            repository.load_history(&options)
+        };
+        Self {
+            options,
+            snapshot,
+            history,
+        }
+    }
+}
+
 impl RepoState {
     /// The tab of `repository`, its history and status loaded.
     #[must_use]
     pub fn new(repository: Repository) -> Self {
+        Self::with_history_options(repository, HistoryOptions::default())
+    }
+
+    /// Loads the repository once, using the supplied history settings from the first refresh.
+    #[must_use]
+    pub fn with_history_options(repository: Repository, options: HistoryOptions) -> Self {
+        let prepared = PreparedRepository::load(&repository, options);
+        Self::from_prepared(repository, prepared)
+    }
+
+    /// Installs a snapshot read from this repository without repeating its disk reads.
+    #[must_use]
+    pub fn from_prepared(repository: Repository, prepared: PreparedRepository) -> Self {
+        let PreparedRepository {
+            options,
+            snapshot,
+            history,
+        } = prepared;
         let mut state = Self {
             repo: repository,
             parent: None,
@@ -602,11 +655,11 @@ impl RepoState {
             operation_state: OperationState::None,
             load_error: None,
             pinned_branch: None,
-            commit_limit: 2000,
+            commit_limit: options.max_commits,
             submodules_head: None,
-            hidden_refs: HashSet::new(),
-            solo_ref: None,
-            smart_branch_visibility: false,
+            hidden_refs: options.hidden_refs,
+            solo_ref: options.solo_ref,
+            smart_branch_visibility: options.smart_visibility,
             selected: Vec::new(),
             focused: None,
             range_cursor: None,
@@ -678,7 +731,8 @@ impl RepoState {
             status_job_generation: 0,
             refs_signature: None,
         };
-        state.refresh();
+        state.status_generation += 1;
+        state.rebuild_from_history(snapshot, history);
         state
     }
 
@@ -783,6 +837,24 @@ impl RepoState {
     /// [`refresh`](Self::refresh) from a status already read (one that predates the history load, as
     /// `refresh`'s own does).
     fn rebuild(&mut self, snapshot: StatusSnapshot) {
+        let options = HistoryOptions {
+            max_commits: self.commit_limit,
+            hidden_refs: self.hidden_refs.clone(),
+            solo_ref: self.solo_ref.clone(),
+            smart_visibility: self.smart_branch_visibility,
+        };
+        let history = {
+            let _timing = crate::startup::span("repository.history");
+            self.repo.load_history(&options)
+        };
+        self.rebuild_from_history(snapshot, history);
+    }
+
+    fn rebuild_from_history(
+        &mut self,
+        snapshot: StatusSnapshot,
+        history: imgit_git::Result<History>,
+    ) {
         self.load_error = None;
         // The comparison against the working directory belongs to the rows as they were: the WIP row going
         // away and coming back must not bring the old file list back for the same commit.
@@ -791,13 +863,7 @@ impl RepoState {
         self.compare_error = None;
         let had_wip = self.history.row_by_sha.contains_key(WIP_SHA);
         self.refs_signature = snapshot.refs_signature;
-        let options = HistoryOptions {
-            max_commits: self.commit_limit,
-            hidden_refs: self.hidden_refs.clone(),
-            solo_ref: self.solo_ref.clone(),
-            smart_visibility: self.smart_branch_visibility,
-        };
-        match self.repo.load_history(&options) {
+        match history {
             Ok(history) => self.history = history,
             Err(error) => {
                 self.load_error = Some(error.to_string());
@@ -825,7 +891,10 @@ impl RepoState {
             (true, false) => row.checked_sub(1),
             _ => Some(row),
         });
-        self.rebuild_layout();
+        {
+            let _timing = crate::startup::span("repository.layout");
+            self.rebuild_layout();
+        }
 
         // Drop stale selection, keep the WIP row selected when it still exists.
         let rows = &self.history.row_by_sha;

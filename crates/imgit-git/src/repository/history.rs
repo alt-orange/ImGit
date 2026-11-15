@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::{
-    FNV_OFFSET, Repository, Result, author_of, fnv1a, git_available, is_missing, lossy, parse_oid,
-    read_commit, sha_of, stash_summary, unique_oids,
+    FNV_OFFSET, Repository, Result, author_of, fnv1a, is_missing, lossy, parse_oid, read_commit,
+    sha_of, stash_summary, unique_oids,
 };
 use crate::types::{
     Author, Blame, BlameHunk, Commit, FileHistory, FileHistoryEntry, FileStatus, History,
@@ -321,9 +321,8 @@ impl Repository {
         stashes: &[Ref],
         stash_internals: usize,
     ) -> Vec<Sha> {
-        if !git_available() {
-            return Vec::new();
-        }
+        // Run rev-list directly: a missing Git already falls back to the libgit2 walk.
+        // Probing with `git --version` first adds a process launch to the first history load.
         let mut tips: Vec<&Ref> = history.refs.iter().filter(|r| !r.hidden).collect();
         tips.sort_by(|a, b| a.full_name.cmp(&b.full_name));
         let mut input = String::new();
