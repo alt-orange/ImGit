@@ -41,6 +41,7 @@ pub mod merge_view;
 pub mod rebase_panel;
 pub mod repo_management;
 pub mod terminal_panel;
+mod view_toolbar;
 
 /// Every panel's state between frames.
 #[derive(Default)]

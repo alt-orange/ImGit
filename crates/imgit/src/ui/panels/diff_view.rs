@@ -17,13 +17,14 @@ use crate::fonts::Font;
 use crate::theme::{Color, FONT_SIZE_ROW, GRAPH_COLOR_COUNT, Ink};
 use crate::ui::draw::DrawList;
 use crate::ui::panels::file_editor::{navigate_from_editor, open_file_editor};
+pub(super) use crate::ui::panels::view_toolbar::TOOLBAR_H;
+use crate::ui::panels::view_toolbar::layout_toolbar;
 use crate::ui::widgets::file_name;
 use crate::ui::{Cx, Vec2, vec2};
 
 // The file view: a 36px header, a 53px toolbar row, then Monaco's diff editor with Consolas 12px on 16px lines
 // (by default: the Editor preferences, `code_style()`).
 pub(super) const HEADER_H: f32 = 36.0;
-pub(super) const TOOLBAR_H: f32 = 53.0;
 /// The file view's text, after the numbers.
 const FILE_TEXT_X: f32 = 43.0;
 /// The original editor's 33px line-number margin.
@@ -1766,17 +1767,42 @@ fn draw_contents(
         );
         return;
     }
+    let edit_label = if commit_diff {
+        "Edit in Working Directory"
+    } else {
+        "Edit This File"
+    };
+    let edit_width = cx.text_size(cx.fonts.regular, FONT_SIZE_ROW, edit_label).x + cx.px(29.0);
+    let side = if unstaging { "Staged" } else { "Unstaged" };
+    let mut view_widths = Vec::new();
+    if !commit_diff {
+        view_widths.push(toggle_width(cx, Some(side), None) + cx.px(10.0));
+    }
+    view_widths.push(toggle_width(cx, Some("File View"), None));
+    view_widths.push(toggle_width(cx, Some("Diff View"), None));
+    let tool_widths: Vec<f32> = TOOL_BUTTONS
+        .iter()
+        .map(|button| cx.px(button.gap) + toggle_width(cx, button.label, button.icon))
+        .collect();
+    let view_width: f32 = view_widths.iter().sum();
+    let tools_width: f32 = tool_widths.iter().sum();
+    let layout = layout_toolbar(
+        size.x,
+        cx.scale,
+        &[
+            (cx.px(10.0), &[edit_width]),
+            (((size.x - view_width) / 2.0).round(), &view_widths),
+            (size.x - cx.px(10.0) - tools_width, &tool_widths),
+        ],
+    );
+    let bar_origin = vec2(origin.x, bar_y);
     let (mut scroll_prev, mut scroll_next) = (false, false);
     {
         // .btn-xs.btn-primary with far:pencil: "Edit in Working Directory" for commits, "Edit This File" for
         // the working directory.
-        let label = if commit_diff {
-            "Edit in Working Directory"
-        } else {
-            "Edit This File"
-        };
-        let w = cx.text_size(cx.fonts.regular, FONT_SIZE_ROW, label).x + cx.px(29.0);
-        let bmin = vec2(origin.x + cx.px(10.0), bar_y + cx.px(1.5));
+        let label = edit_label;
+        let w = edit_width;
+        let bmin = bar_origin + layout.groups[0][0] + vec2(0.0, cx.px(1.5));
         let bmax = vec2(bmin.x + w, bmin.y + cx.px(20.0));
         cx.set_cursor(bmin);
         if ui.invisible_button("##edit_file", [w, cx.px(20.0)]) {
@@ -1809,27 +1835,25 @@ fn draw_contents(
             label,
         );
     }
-    // Centred: [Unstaged / Staged] (working directory) then File View | Diff View.
-    let side = if unstaging { "Staged" } else { "Unstaged" };
-    let sw = if commit_diff {
-        0.0
-    } else {
-        toggle_width(cx, Some(side), None) + cx.px(10.0)
-    };
-    let fw = toggle_width(cx, Some("File View"), None);
-    let dw = toggle_width(cx, Some("Diff View"), None);
-    let group = sw + fw + dw + if commit_diff { 0.0 } else { cx.px(10.0) };
-    let mut x = (origin.x + (size.x - group) / 2.0).round();
+    // Centred when there is room; otherwise these controls flow after the edit button.
+    let mut view_positions = layout.groups[1].iter().map(|&pos| bar_origin + pos);
     if !commit_diff {
-        toggle_button(cx, "##side", Some(side), None, vec2(x, bar_y), true, None);
-        x += sw;
+        toggle_button(
+            cx,
+            "##side",
+            Some(side),
+            None,
+            view_positions.next().unwrap(),
+            true,
+            None,
+        );
     }
     if toggle_button(
         cx,
         "##file_view",
         Some("File View"),
         None,
-        vec2(x, bar_y),
+        view_positions.next().unwrap(),
         state.file_view,
         None,
     ) {
@@ -1841,20 +1865,14 @@ fn draw_contents(
         "##diff_mode",
         Some("Diff View"),
         None,
-        vec2(x + fw, bar_y),
+        view_positions.next().unwrap(),
         !state.file_view,
         None,
     ) {
         state.file_view = false;
         state.reload_diff();
     }
-    let total: f32 = TOOL_BUTTONS
-        .iter()
-        .map(|button| cx.px(button.gap) + toggle_width(cx, button.label, button.icon))
-        .sum();
-    x = origin.x + size.x - cx.px(10.0) - total;
-    for button in &TOOL_BUTTONS {
-        x += cx.px(button.gap);
+    for (button, &pos) in TOOL_BUTTONS.iter().zip(&layout.groups[2]) {
         let checked = match button.tool {
             Tool::Hunk => state.diff_mode == DiffMode::Hunk,
             Tool::Inline => state.diff_mode == DiffMode::Inline,
@@ -1868,11 +1886,10 @@ fn draw_contents(
             button.id,
             button.label,
             button.icon,
-            vec2(x, bar_y),
+            bar_origin + pos + vec2(cx.px(button.gap), 0.0),
             checked,
             button.tip,
         );
-        x += toggle_width(cx, button.label, button.icon);
         if !clicked {
             continue;
         }
@@ -1918,7 +1935,7 @@ fn draw_contents(
     }
 
     // The editor
-    let editor_min = vec2(origin.x, origin.y + cx.px(HEADER_H + TOOLBAR_H));
+    let editor_min = vec2(origin.x, origin.y + cx.px(HEADER_H) + layout.height);
     let editor_max = vec2(origin.x + size.x - 1.0, origin.y + size.y);
     let mut hunk_clicked = None;
     let mut options = DiffEditorOptions {

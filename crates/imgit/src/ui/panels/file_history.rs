@@ -14,6 +14,7 @@ use crate::ui::panels::diff_view::{
     encoding_button, sha_color_index, style_item_spacing_x, view_toggle_button, view_toggle_width,
 };
 use crate::ui::panels::menus::{file_history_commit_menu, jump_to_commit};
+use crate::ui::panels::view_toolbar::layout_toolbar;
 use crate::ui::widgets::format_relative;
 use crate::ui::{Cx, Vec2, vec2};
 
@@ -447,10 +448,10 @@ fn draw_contents(
     let pane_w = origin.x + size.x - pane_x;
 
     let bar_y = body_top + cx.px(10.0);
-    draw_toolbar(cx, state, pane_x, pane_w, bar_y);
+    let toolbar_height = draw_toolbar(cx, state, pane_x, pane_w, bar_y);
 
     // The editor: the file as the selected commit left it (its blame in the gutter), or its diff.
-    let editor_min = vec2(pane_x, origin.y + cx.px(HEADER_H + TOOLBAR_H));
+    let editor_min = vec2(pane_x, body_top + toolbar_height);
     let editor_max = vec2(origin.x + size.x - 1.0, origin.y + size.y);
     let Some(view) = state.file_history.as_ref() else {
         return;
@@ -532,7 +533,7 @@ fn draw_contents(
             11.0,
             vec2(
                 editor_max.x - cx.px(40.0) - w,
-                css_text_y(cx, 11.0, bar_y + cx.px(29.0), false),
+                css_text_y(cx, 11.0, editor_min.y - cx.px(14.0), false),
             ),
             p.red,
             error,
@@ -541,45 +542,19 @@ fn draw_contents(
 }
 
 /// Toolbar: File View | Diff View centred; the diff modes and Blame on the right.
-fn draw_toolbar(cx: &mut Cx<'_>, state: &mut RepoState, pane_x: f32, pane_w: f32, bar_y: f32) {
+fn draw_toolbar(
+    cx: &mut Cx<'_>,
+    state: &mut RepoState,
+    pane_x: f32,
+    pane_w: f32,
+    bar_y: f32,
+) -> f32 {
     let Some(view) = state.file_history.as_ref() else {
-        return;
+        return cx.px(TOOLBAR_H);
     };
     let (file_view, blame) = (view.file_view, view.blame);
     let fw = view_toggle_width(cx, Some("File View"), None);
     let dw = view_toggle_width(cx, Some("Diff View"), None);
-    let mut x = (pane_x + (pane_w - fw - dw) / 2.0).round();
-    if view_toggle_button(
-        cx,
-        "##history_file_view",
-        Some("File View"),
-        None,
-        vec2(x, bar_y),
-        file_view,
-        None,
-    ) && !file_view
-    {
-        if let Some(view) = state.file_history.as_mut() {
-            view.file_view = true;
-        }
-        state.reload_file_history_diff();
-    }
-    if view_toggle_button(
-        cx,
-        "##history_diff_view",
-        Some("Diff View"),
-        None,
-        vec2(x + fw, bar_y),
-        !file_view,
-        None,
-    ) && file_view
-    {
-        if let Some(view) = state.file_history.as_mut() {
-            view.file_view = false;
-            view.blame = false;
-        }
-        state.reload_file_history_diff();
-    }
     const MODES: [(&str, &str, &str, DiffMode); 3] = [
         (
             "##history_hunk",
@@ -601,15 +576,57 @@ fn draw_toolbar(cx: &mut Cx<'_>, state: &mut RepoState, pane_x: f32, pane_w: f32
         ),
     ];
     let bw = view_toggle_width(cx, Some("Blame"), None);
-    let mut total = bw;
+    let mut tool_widths = Vec::new();
     if !file_view {
-        total += cx.px(10.0);
-        total += MODES
-            .iter()
-            .map(|(_, icon, _, _)| view_toggle_width(cx, None, Some(icon)))
-            .sum::<f32>();
+        tool_widths.extend(
+            MODES
+                .iter()
+                .map(|(_, icon, _, _)| view_toggle_width(cx, None, Some(icon))),
+        );
     }
-    x = pane_x + pane_w - cx.px(10.0) - total;
+    tool_widths.push(bw + if file_view { 0.0 } else { cx.px(10.0) });
+    let total: f32 = tool_widths.iter().sum();
+    let layout = layout_toolbar(
+        pane_w,
+        cx.scale,
+        &[
+            (((pane_w - fw - dw) / 2.0).round(), &[fw, dw]),
+            (pane_w - cx.px(10.0) - total, &tool_widths),
+        ],
+    );
+    let bar_origin = vec2(pane_x, bar_y);
+    if view_toggle_button(
+        cx,
+        "##history_file_view",
+        Some("File View"),
+        None,
+        bar_origin + layout.groups[0][0],
+        file_view,
+        None,
+    ) && !file_view
+    {
+        if let Some(view) = state.file_history.as_mut() {
+            view.file_view = true;
+        }
+        state.reload_file_history_diff();
+    }
+    if view_toggle_button(
+        cx,
+        "##history_diff_view",
+        Some("Diff View"),
+        None,
+        bar_origin + layout.groups[0][1],
+        !file_view,
+        None,
+    ) && file_view
+    {
+        if let Some(view) = state.file_history.as_mut() {
+            view.file_view = false;
+            view.blame = false;
+        }
+        state.reload_file_history_diff();
+    }
+    let mut tool_positions = layout.groups[1].iter().map(|&pos| bar_origin + pos);
     if !file_view {
         for (id, icon, tip, mode) in MODES {
             if view_toggle_button(
@@ -617,7 +634,7 @@ fn draw_toolbar(cx: &mut Cx<'_>, state: &mut RepoState, pane_x: f32, pane_w: f32
                 id,
                 None,
                 Some(icon),
-                vec2(x, bar_y),
+                tool_positions.next().unwrap(),
                 state.diff_mode == mode,
                 Some(tip),
             ) && state.diff_mode != mode
@@ -625,16 +642,14 @@ fn draw_toolbar(cx: &mut Cx<'_>, state: &mut RepoState, pane_x: f32, pane_w: f32
                 state.diff_mode = mode;
                 state.reload_file_history_diff();
             }
-            x += view_toggle_width(cx, None, Some(icon));
         }
-        x += cx.px(10.0);
     }
     if view_toggle_button(
         cx,
         "##history_blame",
         Some("Blame"),
         None,
-        vec2(x, bar_y),
+        tool_positions.next().unwrap() + vec2(if file_view { 0.0 } else { cx.px(10.0) }, 0.0),
         blame,
         Some("Who last changed each line"),
     ) {
@@ -649,6 +664,7 @@ fn draw_toolbar(cx: &mut Cx<'_>, state: &mut RepoState, pane_x: f32, pane_w: f32
             state.reload_file_history_diff();
         }
     }
+    layout.height
 }
 
 #[cfg(test)]
